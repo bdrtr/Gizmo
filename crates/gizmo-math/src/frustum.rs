@@ -1,5 +1,5 @@
 use crate::aabb::Aabb;
-use glam::{Mat4, Vec3A, Vec4};
+use glam::{DVec4, Mat4, Vec3A, Vec4};
 
 // ---------------------------------------------------------------------------
 // Intersection result
@@ -22,39 +22,75 @@ pub enum Intersection {
 
 /// A normalized half-space plane: `normal · X + distance = 0`.
 /// Points where `normal · X + distance > 0` are on the "positive" side.
+///
+/// One plane is not normalized: [`Plane::UNBOUNDED`], which bounds nothing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Plane {
-    /// Unit-length plane normal.
+    /// Unit-length plane normal — zero for [`Plane::UNBOUNDED`].
     pub normal: Vec3A,
     /// Signed distance from the origin along the normal.
     pub distance: f32,
 }
 
 impl Plane {
+    /// A plane that bounds nothing: every point is on its positive side (zero normal, distance
+    /// `+∞`). What a plane comes out as when its coefficients do not say where it is — see
+    /// [`from_coefficients`](Self::from_coefficients) and [`Frustum::from_matrix`].
+    ///
+    /// A culling test must never invent a boundary. The fallback used to be `+Z, d = 0` — a real
+    /// plane through the origin — so a frustum whose far plane came out degenerate culled every
+    /// object with `z < 0`, which is half of any world.
+    pub const UNBOUNDED: Self = Self { normal: Vec3A::ZERO, distance: f32::INFINITY };
+
     /// Constructs a plane from raw (possibly unnormalized) coefficients `(x, y, z, w)`.
     /// Normalizes so that `normal` is always unit-length.
-    /// Falls back to `+Z, d=0` if the normal is degenerate.
+    ///
+    /// A zero (or non-finite) normal names no plane, and gives [`Plane::UNBOUNDED`]. Only that:
+    /// a *short* normal is still a direction, and normalizing it in `f64` loses nothing. (This
+    /// used to treat any `|normal|² < 1e-10` as degenerate — an absolute threshold on a quantity
+    /// whose scale is the caller's. A view-projection's far plane has `|normal| = n / (f − n)`,
+    /// which for a 0.1 m near and a 20 km far is 5·10⁻⁶: under the threshold, so that frustum
+    /// lost its far plane to the fallback.)
     #[inline]
     pub fn from_coefficients(x: f32, y: f32, z: f32, w: f32) -> Self {
-        let len_sq = x * x + y * y + z * z;
-        if len_sq < 1e-10 {
-            return Self {
-                normal: Vec3A::Z,
-                distance: 0.0,
-            };
+        Self::from_dvec4(Vec4::new(x, y, z, w).as_dvec4())
+    }
+
+    fn from_dvec4(c: DVec4) -> Self {
+        let len = c.truncate().length();
+        if !len.is_finite() || len == 0.0 || !c.w.is_finite() {
+            return Self::UNBOUNDED;
         }
-        let inv_len = len_sq.sqrt().recip();
         Self {
-            normal: Vec3A::new(x * inv_len, y * inv_len, z * inv_len),
-            distance: w * inv_len,
+            normal: Vec3A::new((c.x / len) as f32, (c.y / len) as f32, (c.z / len) as f32),
+            distance: (c.w / len) as f32,
         }
     }
 
-    /// Constructs a plane directly from a `Vec4` row of a VP matrix.
-    #[inline]
-    fn from_vec4(v: Vec4) -> Self {
-        Self::from_coefficients(v.x, v.y, v.z, v.w)
+    /// The plane `a + sign·b` of two rows of an `f32` view-projection, or [`Plane::UNBOUNDED`]
+    /// when the rows do not determine it.
+    ///
+    /// The rows' entries carry `f32` rounding, up to `2⁻²⁴` of each. When `a` and `b` nearly
+    /// cancel, what is left of the normal can be mostly that rounding: a perspective's far plane
+    /// is `row3 − row2`, two rows equal to within `n / (f − n)`. So the normal is kept only when it
+    /// is [`RESOLVED`](Self::RESOLVED) times longer than the rounding it could hold — direction
+    /// known to 0.1 % — and otherwise the plane culls nothing. That is conservative by
+    /// construction (the GPU clips at that plane anyway); a plane known to a few percent is not:
+    /// tilted by a degree over a 20 km far plane, it cuts hundreds of metres into the frustum.
+    fn between(a: DVec4, b: DVec4, sign: f64) -> Self {
+        /// Unit roundoff of `f32`.
+        const ROUNDING: f64 = 1.0 / 16_777_216.0;
+        let c = a + b * sign;
+        let doubt = ROUNDING * (a.truncate().length() + b.truncate().length());
+        if c.truncate().length() <= Self::RESOLVED * doubt {
+            return Self::UNBOUNDED;
+        }
+        Self::from_dvec4(c)
     }
+
+    /// How many times longer than its possible rounding a plane's normal must be for
+    /// [`Frustum::from_matrix`] to use it. See [`between`](Self::between).
+    const RESOLVED: f64 = 1000.0;
 
     /// Signed distance from the plane to `pt`.
     /// Positive = in front of (positive side of) the plane.
@@ -112,15 +148,18 @@ impl Frustum {
         let r2 = vp.row(2); // Z column
         let r3 = vp.row(3); // W column (homogeneous)
 
+        // In `f64`, each from the rows it is a sum of: the far plane is a difference of two rows
+        // that can agree to within a few millionths, and `Plane::between` decides whether what
+        // is left of them is a plane at all.
+        let [r0, r1, r2, r3] = [r0, r1, r2, r3].map(Vec4::as_dvec4);
         Self {
             planes: [
-                Plane::from_vec4(r3 + r0), // Left:   w + x ≥ 0
-                Plane::from_vec4(r3 - r0), // Right:  w - x ≥ 0
-                Plane::from_vec4(r3 + r1), // Bottom: w + y ≥ 0
-                Plane::from_vec4(r3 - r1), // Top:    w - y ≥ 0
-                Plane::from_vec4(r2),      // Near:   z ≥ 0        (Z∈[0,1])
-                // Near (OpenGL Z∈[−1,1]): Plane::from_vec4(r3 + r2)
-                Plane::from_vec4(r3 - r2), // Far:    w - z ≥ 0
+                Plane::between(r3, r0, 1.0),  // Left:   w + x ≥ 0
+                Plane::between(r3, r0, -1.0), // Right:  w - x ≥ 0
+                Plane::between(r3, r1, 1.0),  // Bottom: w + y ≥ 0
+                Plane::between(r3, r1, -1.0), // Top:    w - y ≥ 0
+                Plane::between(DVec4::ZERO, r2, 1.0), // Near: z ≥ 0 (Z∈[0,1])
+                Plane::between(r3, r2, -1.0), // Far:    w - z ≥ 0
             ],
         }
     }
@@ -350,9 +389,58 @@ mod tests {
 
     #[test]
     fn plane_degenerate_normal() {
-        // Zero normal should not panic, falls back to Z
+        // A zero normal names no plane: it bounds nothing rather than falling back to a real one.
         let p = Plane::from_coefficients(0.0, 0.0, 0.0, 1.0);
-        assert!((p.normal - Vec3A::Z).length() < 1e-5);
+        assert_eq!(p, Plane::UNBOUNDED);
+        for at in [Vec3A::new(0.0, 0.0, -1.0e6), Vec3A::new(3.0, -2.0, 1.0e6), Vec3A::ZERO] {
+            assert!(p.signed_distance(at) >= 0.0);
+        }
+    }
+
+    #[test]
+    fn a_short_normal_is_still_a_plane() {
+        // The far plane of a 0.1 m / 20 km perspective has |normal| ≈ 5e-6. It used to be taken
+        // for degenerate (|n|² < 1e-10) and replaced by `+Z, d = 0`.
+        let p = Plane::from_coefficients(0.0, 0.0, -5.0e-6, 0.1);
+        assert!((p.normal - Vec3A::NEG_Z).length() < 1e-6, "{p:?}");
+        assert!((p.distance - 20_000.0).abs() < 1.0, "{p:?}");
+    }
+
+    /// A camera with a 0.1 m near plane and a 20 km far plane sees what is in front of it.
+    ///
+    /// Its far plane is `row3 − row2` of the view-projection, two rows equal to within
+    /// `n / (f − n) = 5·10⁻⁶`. That fell under the old absolute degeneracy threshold and became
+    /// `+Z, d = 0`, so the frustum culled every box with `z < 0`: in `gizmo`'s own frame, 14 611 of
+    /// a static city's 14 620 objects, all in plain view. Found measuring that city's frame cost
+    /// (`a_static_city_frame_full_cpu_cost`, 2026-11-18).
+    #[test]
+    fn a_wide_depth_range_keeps_what_is_in_front() {
+        let cam = Vec3::new(0.0, 60.0, 80.0);
+        let forward = Vec3::new(0.0, -0.12, -1.0).normalize();
+        for (near, far) in [(0.1, 20_000.0), (0.01, 100_000.0), (0.5, 20_000.0), (0.1, 2_000.0)] {
+            let vp = Mat4::perspective_rh(1.2, 16.0 / 9.0, near, far) * Mat4::look_to_rh(cam, forward, Vec3::Y);
+            let f = Frustum::from_matrix(&vp);
+            for ahead in [10.0f32, 100.0, 1_000.0, 0.9 * far] {
+                let at = cam + forward * ahead;
+                let b = Aabb::new(at - Vec3::splat(1.0), at + Vec3::splat(1.0));
+                assert!(f.intersects_aabb(b), "near {near}, far {far}: a box {ahead} m ahead was culled");
+            }
+            // And behind, beside and above it, still out.
+            for off in [cam - forward * 50.0, cam + Vec3::new(5_000.0, 0.0, -10.0), cam + Vec3::new(0.0, 5_000.0, -10.0)] {
+                let b = Aabb::new(off - Vec3::splat(1.0), off + Vec3::splat(1.0));
+                assert!(!f.intersects_aabb(b), "near {near}, far {far}: a box at {off} was kept");
+            }
+        }
+    }
+
+    /// Where the depth range is narrow enough for the far plane to be known, it still culls.
+    #[test]
+    fn a_narrow_depth_range_still_culls_past_the_far_plane() {
+        let vp = Mat4::perspective_rh(1.0, 1.0, 0.1, 100.0) * Mat4::look_to_rh(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
+        let f = Frustum::from_matrix(&vp);
+        assert_ne!(f.planes()[5], Plane::UNBOUNDED);
+        assert!(f.intersects_aabb(Aabb::new(Vec3::new(-1.0, -1.0, -91.0), Vec3::new(1.0, 1.0, -89.0))));
+        assert!(!f.intersects_aabb(Aabb::new(Vec3::new(-1.0, -1.0, -151.0), Vec3::new(1.0, 1.0, -149.0))));
     }
 
     // --- Visibility ---
@@ -461,3 +549,4 @@ mod tests {
         assert_eq!(unmasked, masked);
     }
 }
+

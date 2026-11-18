@@ -3772,6 +3772,150 @@ mod golden_render_tests {
         });
     }
 
+    /// The whole CPU side of a static city's frame, not only its collection: the draw recorded by
+    /// [`default_render_pass`], then wgpu's `CommandEncoder::finish` and `Queue::submit`. The last
+    /// two are where wgpu validates and tracks each recorded command, and in `nfsu2-gizmo` they
+    /// were as large as the recording itself (MOTOR-NOTLARI #29, 2026-11-18: 6 989 draws, the main
+    /// thread 47 % in the recording and 45 % in `finish`).
+    ///
+    /// Shaped like that city: 215 cells × 68 textures, every entity its own baked-lit mesh — a
+    /// triangle list, as the game builds them — and **68 different textures**, each its own bind
+    /// group (the measurement above uses `create_white_texture`, which hands every call the same
+    /// cached group, so it never switches one). The camera sees most of it. Median of 30 frames
+    /// after a warm-up; `GIZMO_CITY_FRAMES` for more, to sample a profiler against.
+    #[test]
+    #[ignore = "a measurement; run in release with --nocapture"]
+    fn a_static_city_frame_full_cpu_cost() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping: no GPU");
+            return;
+        }
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping: software adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(640, 360).await;
+            let mut asset_manager = AssetManager::new();
+            let mut world = World::new();
+            // A first frame before anything is spawned, as an app's world has had: what is spawned
+            // at tick 0 is older than a first frame's reference (`0 − 1` wraps), so the render
+            // world would never be handed it.
+            world.begin_change_frame(0);
+            let layout = renderer.scene.texture_bind_group_layout.clone();
+            let textures: Vec<_> = (0..68u8)
+                .map(|k| {
+                    let rgba: Vec<u8> = (0..16).flat_map(|_| [k.wrapping_mul(3), 128, 255 - k, 255]).collect();
+                    asset_manager
+                        .install_decoded_material_texture(&renderer.device, &renderer.queue, &layout, &format!("city_{k}"), &rgba, 4, 4)
+                        .expect("a 4×4 texture installs")
+                })
+                .collect();
+            // A cell's piece of one texture: four quads standing on a 20 m square, 8 triangles —
+            // the count does not matter here, the number of draws does.
+            let piece = |at: Vec3| -> Vec<crate::renderer::gpu_types::Vertex> {
+                let mut v = Vec::new();
+                for q in 0..4 {
+                    let o = at + Vec3::new((q % 2) as f32 * 10.0, 0.0, (q / 2) as f32 * -10.0);
+                    for p in [[0.0, 0.0], [8.0, 0.0], [8.0, 6.0], [0.0, 0.0], [8.0, 6.0], [0.0, 6.0]] {
+                        v.push(crate::renderer::gpu_types::Vertex {
+                            position: [o.x + p[0], o.y + p[1], o.z],
+                            normal: [0.0, 0.0, 1.0],
+                            tex_coords: [p[0] / 8.0, p[1] / 6.0],
+                            ..Default::default()
+                        });
+                    }
+                }
+                v
+            };
+            let (cells, per_cell) = (215usize, 68usize);
+            for cell in 0..cells {
+                let origin = Vec3::new((cell % 15) as f32 * 256.0 - 1900.0, 0.0, (cell / 15) as f32 * -256.0);
+                for (k, texture) in textures.iter().enumerate().take(per_cell) {
+                    let e = world.spawn();
+                    let at = origin + Vec3::new((k % 9) as f32 * 25.0, 0.0, (k / 9) as f32 * -25.0);
+                    world.add_component(e, Transform::new(Vec3::ZERO));
+                    world.add_component(e, GlobalTransform::default());
+                    world.add_component(e, crate::renderer::components::Mesh::from_vertices(&renderer.device, &piece(at), "city piece"));
+                    world.add_component(e, Material::new(texture.clone()).with_baked_lit(Vec4::ONE));
+                    world.add_component(
+                        e,
+                        MeshRenderer::new().with_shadows(crate::renderer::components::ShadowCasting::Off),
+                    );
+                }
+            }
+            let camera = world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 60.0, 80.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.12,
+                fov: 1.2,
+                far: 20_000.0,
+                primary: true,
+                ..Default::default()
+            });
+            // The bundle's `GlobalTransform` is the identity until a transform pass syncs it, and the
+            // frame reads that one: placed here, as the game's update would have.
+            let turn = crate::renderer::components::Camera::rotation_from(-std::f32::consts::FRAC_PI_2, -0.12);
+            world.add_component(
+                camera,
+                GlobalTransform { matrix: gizmo_math::Mat4::from_rotation_translation(turn, Vec3::new(0.0, 60.0, 80.0)) },
+            );
+            let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("city target"),
+                size: wgpu::Extent3d { width: 640, height: 360, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: renderer.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            super::batching::clear_render_cache();
+            crate::systems::render::ensure_global_transforms(&mut world);
+            let frames = std::env::var("GIZMO_CITY_FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(40);
+            let mut times = [Vec::new(), Vec::new(), Vec::new()];
+            for frame in 0..frames {
+                let reference = world.tick.wrapping_sub(1);
+                world.begin_change_frame(reference);
+                // The app's transform propagation, which a game's update runs before the draw.
+                crate::systems::render::ensure_global_transforms(&mut world);
+                let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+                let t0 = std::time::Instant::now();
+                default_render_pass(&mut world, &mut encoder, &view, &mut renderer);
+                let t1 = std::time::Instant::now();
+                let commands = encoder.finish();
+                let t2 = std::time::Instant::now();
+                renderer.queue.submit(Some(commands));
+                let t3 = std::time::Instant::now();
+                // Not timed: the GPU's half, waited out so frames do not pile up.
+                let _ = renderer.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if frame >= 10 {
+                    for (slot, d) in times.iter_mut().zip([t1 - t0, t2 - t1, t3 - t2]) {
+                        slot.push(d.as_secs_f64() * 1000.0);
+                    }
+                }
+            }
+            let median = |v: &mut Vec<f64>| {
+                v.sort_by(f64::total_cmp);
+                v[v.len() / 2]
+            };
+            let [mut a, mut b, mut c] = times;
+            let stats = renderer.render_stats.expect("a view was drawn");
+            eprintln!(
+                "static city, {} entities, {} draws, {} instances (median): record {:.2} ms, finish {:.2} ms, submit {:.2} ms",
+                cells * per_cell,
+                stats.draw_calls,
+                stats.instances,
+                median(&mut a),
+                median(&mut b),
+                median(&mut c),
+            );
+            super::batching::clear_render_cache();
+        });
+    }
+
     #[test]
     fn a_scene_past_the_instance_capacity_grows_the_buffer_instead_of_dropping_meshes() {
         let _gpu = crate::test_gpu::gpu_lock();

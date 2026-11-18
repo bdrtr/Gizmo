@@ -1324,6 +1324,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A camera with a wide depth range sees what is in front of it.** `Frustum::from_matrix` builds the far plane
+  as `row3 − row2` of the view-projection, two rows equal to within `n / (f − n)`; `Plane::from_coefficients`
+  took any normal shorter than `10⁻⁵` for degenerate and put `+Z, d = 0` in its place — a real plane through the
+  origin. A 0.1 m near plane and a 20 km far plane give a far normal of `5·10⁻⁶`, so that frustum culled every
+  object with `z < 0`: 14 611 of a static city's 14 620 objects, all in plain view. A degenerate plane is now
+  `Plane::UNBOUNDED`, which culls nothing, and only a zero normal is degenerate; `from_matrix` builds each plane
+  in `f64` and keeps it only when its normal is a thousand times longer than the `f32` rounding of the rows it
+  came from — a far plane known to a few percent is tilted enough to cut into the frustum, and the GPU clips
+  there anyway. `CameraBundle::fov` said degrees; it is radians.
+- **A test that measures a static city's whole CPU frame** (`a_static_city_frame_full_cpu_cost`, ignored, release):
+  the recording, `CommandEncoder::finish` and `Queue::submit`, with 68 textures that are really 68 bind groups.
+  11 685 draws: recording 7.6 ms, `finish` 13.0 ms, `submit` 0.6 ms (AMD 780M).
+
 - **A texture's mip levels show the texture.** `mipmap.wgsl` divided the pixel it was writing by the size of the level
   it was reading — twice the right size — so its coordinate stopped at 0.5 and each level was the top-left quarter of
   the one above, enlarged: level `n` showed the top-left `1/2ⁿ` of the image. Every texture whose mips the engine

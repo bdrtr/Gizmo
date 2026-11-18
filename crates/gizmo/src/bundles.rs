@@ -217,7 +217,8 @@ impl Bundle for SpotLightBundle {
 pub struct CameraBundle {
     /// Where the camera sits, in world space.
     pub position: Vec3,
-    /// Vertical field of view, in degrees.
+    /// Vertical field of view, in radians (this said degrees, and a `60.0` here is a 60-radian
+    /// field of view).
     pub fov: f32,
     /// Near clip plane, in metres. Small values buy close-up geometry and spend depth precision.
     pub near: f32,
