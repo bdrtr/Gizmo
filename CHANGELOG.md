@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`GIZMO_MONITOR=<name>` and `GIZMO_VSYNC=0`, two switches for measuring a windowed run.** `GIZMO_MONITOR` opens
+  the window borderless-fullscreen on the monitor whose name holds `<name>` (`DP-1`, `HDMI-A-1`): a measurement or a
+  screenshot that must not cover the screen being worked on, and under Wayland, where a client cannot place its own
+  window, fullscreen on an output is the only way to choose one. A name no monitor has opens no window and says
+  which names there are. `GIZMO_VSYNC=0` presents without waiting for the display: on a 60 Hz screen every frame
+  took 16.7 ms whatever it cost, and the frame times of an A/B were the screen's. The collection also sizes its
+  draw list once and keeps the transparent sort's scratch across batches.
+
 - **Meshes sharing buffers and a material are one batch, each instance with its own range.** A batch was keyed by
   its mesh — buffer and, since `MeshArena`, where in it the mesh starts — so a merged city was one batch per piece:
   14 620 batches for 68 materials, and every per-batch cost of the frame (idle bookkeeping, dealing cursors, a

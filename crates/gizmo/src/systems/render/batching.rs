@@ -1254,7 +1254,10 @@ pub(super) fn collect_draw_items(
         };
         renderer.scene_extent.absorb(drawn_extent.get());
 
-        let mut local_draw_items: Vec<DrawItem> = std::mem::take(&mut cache.draw_items);
+        // Sized once: grown push by push it was a chain of reallocations of ~200-byte items every
+        // frame — the list is handed to the caller, so it starts empty each time.
+        let mut local_draw_items: Vec<DrawItem> =
+            Vec::with_capacity(cache.batches.iter().filter(|b| b.camera.1 + b.shadow.1 > 0).count());
 
         // Two-region instance layout. Region A = EVERY batch's camera-visible instances;
         // region B (after A) = EVERY batch's shadow-only casters. The old layout
@@ -1271,6 +1274,8 @@ pub(super) fn collect_draw_items(
         // batch's instances have to be far-to-near too, not just the batches relative to each
         // other. Only the editor did this; the engine appended them in collection order, so two
         // overlapping panes of the SAME material composited by ECS iteration order.
+        // The scratch the reorder needs, made once for every batch rather than per batch.
+        let (mut order, mut scratch_instances, mut scratch_ranges) = (Vec::new(), Vec::new(), Vec::new());
         for batch in &cache.batches {
             if batch.is_transparent || batch.is_backdrop {
                 let range = run(batch.camera);
@@ -1279,13 +1284,14 @@ pub(super) fn collect_draw_items(
                 let depth = |i: &crate::renderer::gpu_types::InstanceRaw| {
                     cam_pos.distance_squared(Vec3::new(i.model[3][0], i.model[3][1], i.model[3][2]))
                 };
-                let mut order: Vec<u32> = (0..range.len() as u32).collect();
+                order.clear();
+                order.extend(0..range.len() as u32);
                 order.sort_by(|&a, &b| {
                     let (a, b) = (&cache.instances[range.start + a as usize], &cache.instances[range.start + b as usize]);
                     depth(b).partial_cmp(&depth(a)).unwrap_or(std::cmp::Ordering::Equal)
                 });
-                permute(&mut cache.instances, range.clone(), &order, &mut Vec::new());
-                permute(&mut cache.ranges, range.clone(), &order, &mut Vec::new());
+                permute(&mut cache.instances, range.clone(), &order, &mut scratch_instances);
+                permute(&mut cache.ranges, range.clone(), &order, &mut scratch_ranges);
                 // The sort reorders the instances but not their previous models. Neither layer is
                 // drawn into the G-buffer, so their velocity is never read — give them none rather
                 // than another instance's history.

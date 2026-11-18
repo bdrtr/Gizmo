@@ -150,7 +150,15 @@ impl<State: 'static> App<State> {
         &mut self,
         window: Arc<winit::window::Window>,
     ) -> Result<(), crate::AppError> {
-        let renderer = Renderer::new(window.clone()).await;
+        #[cfg_attr(target_os = "android", allow(unused_mut))]
+        let mut renderer = Renderer::new(window.clone()).await;
+        // `GIZMO_VSYNC=0`: present without waiting for the display, for measuring a frame. With it on —
+        // the default — a frame on a 60 Hz screen takes 16.7 ms whatever it cost, and one that misses a
+        // refresh takes 33.3: what a frame time says is then the screen's, not the frame's.
+        #[cfg(not(target_os = "android"))]
+        if std::env::var("GIZMO_VSYNC").as_deref() == Ok("0") {
+            renderer.set_present_mode(wgpu::PresentMode::AutoNoVsync);
+        }
         self.finish_initialize(window, renderer)
     }
 
@@ -352,6 +360,14 @@ impl<State: 'static> ApplicationHandler for App<State> {
                 return;
             }
         };
+        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        let attrs = match on_requested_monitor(event_loop, attrs) {
+            Some(attrs) => attrs,
+            None => {
+                event_loop.exit();
+                return;
+            }
+        };
         let window = match event_loop.create_window(attrs) {
             Ok(w) => {
                 tracing::debug!("[App] window created");
@@ -431,5 +447,31 @@ impl<State: 'static> ApplicationHandler for App<State> {
         event: DeviceEvent,
     ) {
         self.handle_event(Event::DeviceEvent { device_id, event }, event_loop);
+    }
+}
+
+/// `GIZMO_MONITOR=<name>`: the window opens borderless-fullscreen on the monitor whose name holds
+/// `<name>` — on Linux the output's own name, `DP-1`, `HDMI-A-1`. A development switch: a measurement
+/// or a screenshot run that must not cover the screen being worked on. Fullscreen because that is the
+/// one way to put a window on a given screen under Wayland, where a client cannot place its own; the
+/// frame is then the size of that screen, the same every run.
+///
+/// `None` — no window at all, and an error naming the monitors there are — when no monitor has that
+/// name: the switch exists to keep a window off a screen, and opening it wherever the compositor
+/// chose would put it exactly there.
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+fn on_requested_monitor(
+    event_loop: &winit::event_loop::ActiveEventLoop,
+    attrs: winit::window::WindowAttributes,
+) -> Option<winit::window::WindowAttributes> {
+    let Ok(wanted) = std::env::var("GIZMO_MONITOR") else { return Some(attrs) };
+    match event_loop.available_monitors().find(|m| m.name().is_some_and(|n| n.contains(&wanted))) {
+        Some(monitor) => Some(attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(Some(monitor))))),
+        None => {
+            let names: Vec<String> = event_loop.available_monitors().filter_map(|m| m.name()).collect();
+            tracing::error!("[App] GIZMO_MONITOR={wanted}: no monitor by that name (there are {names:?}); not opening a window");
+            eprintln!("GIZMO_MONITOR={wanted}: no monitor by that name (there are {names:?}); not opening a window");
+            None
+        }
     }
 }
