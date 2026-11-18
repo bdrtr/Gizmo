@@ -4976,6 +4976,7 @@ mod golden_render_tests {
     /// assertion) — and no more.
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no G-buffer.
     #[test]
+    #[ignore = "requires a GPU adapter"]
     fn a_baked_surface_in_the_gbuffer_draws_what_the_forward_pass_drew() {
         let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available())
@@ -5111,17 +5112,20 @@ mod golden_render_tests {
         });
     }
 
-    /// **A glossy baked floor shows what stands on it, and is never darkened for it.** With screen-space
-    /// reflections on, a baked-lit surface goes through the G-buffer (`baked_in_gbuffer`) and SSR reads it:
-    /// a smooth one reflects. The lighting pass gives a baked surface no environment — its baked light is
-    /// all it has — so what SSR finds is added whole; subtracting the environment it would have replaced
-    /// on a lit surface took the sky out of a floor that never had it, and darkened it where something
-    /// stood. A red box on a smooth grey baked floor, under a day sky, from low down: with reflections
-    /// the floor in front of the box turns red, and the frame is nowhere darker than without them but
-    /// on a few silhouette pixels.
+    /// **A glossy baked floor shows what stands on it and the sky around it, and is never darkened for
+    /// it.** With screen-space reflections on, a baked-lit surface goes through the G-buffer
+    /// (`baked_in_gbuffer`) and SSR reads it: a smooth one reflects. The lighting pass gives a baked
+    /// surface no environment — its baked light is all it has — so SSR gives it all of its reflection:
+    /// what it finds where it finds something, the environment where it does not. Subtracting the
+    /// environment it would have replaced on a lit surface took the sky out of a floor that never had
+    /// it, and darkened it where something stood. A red box on a smooth grey baked floor, under a day
+    /// sky, from low down: with reflections the floor in front of the box turns red, the rest of it
+    /// brightens with the sky, and the frame is nowhere darker than without them but on a few
+    /// silhouette pixels.
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no G-buffer.
     #[test]
-    fn screen_space_reflections_show_on_a_baked_floor_and_never_darken_it() {
+    #[ignore = "requires a GPU adapter"]
+    fn a_baked_floor_reflects_what_stands_on_it_and_the_sky_and_is_never_darkened() {
         let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available())
             || pollster::block_on(Renderer::headless_adapter_is_software())
@@ -5186,6 +5190,11 @@ mod golden_render_tests {
                 .count();
             let darkened = (0..128 * 128).filter(|&i| (0..3).any(|c| px(&without, i)[c] - px(&with, i)[c] > 4)).count();
             assert!(reddened > 60, "the floor shows the red box: {reddened} pixels reddened");
+            // Where the ray finds nothing, the floor shows the sky: it had no reflection of it from the
+            // lighting pass. 2132 pixels brighter by more than 4 in every channel when written; 305,
+            // the box's reflection alone, with the sky left out.
+            let brightened = (0..128 * 128).filter(|&i| (0..3).all(|c| px(&with, i)[c] - px(&without, i)[c] > 4)).count();
+            assert!(brightened > 1000, "the floor shows the sky where nothing stands: {brightened} pixels brightened");
             // Two when written, at the box's silhouette, where the frame with reflections draws the floor
             // through the G-buffer and the one without draws it forward (see
             // `a_baked_surface_in_the_gbuffer_draws_what_the_forward_pass_drew`). Subtracting the
@@ -5205,6 +5214,7 @@ mod golden_render_tests {
     /// frame from textures of their own to the byte, and draw from fewer batches: materials of one
     /// array over the arena's shared buffers are one.
     #[test]
+    #[ignore = "requires a GPU adapter"]
     fn pooled_textures_draw_as_their_own_and_share_a_batch() {
         let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available())
@@ -5953,8 +5963,8 @@ mod golden_render_tests {
                 p.roughness_cutoff = 0.5;
                 p.fade_start = 0.1;
                 p.fade_end = 0.5;
-                p.step_size = 1.0;
-                p.max_steps = 20.0;
+                p.max_distance = 500.0;
+                p.max_steps = 48.0;
                 p.thickness = 1.0;
                 p.start_offset = 0.1;
                 p.edge_fade = 0.1;
@@ -6096,6 +6106,75 @@ mod golden_render_tests {
             let gem = what_ssr_adds(|m| m.with_pbr(Vec4::new(0.1, 0.1, 0.1, 1.0), 0.05, 0.0).with_reflectance(0.5)).await;
             eprintln!("SSR adds {plain} at the default reflectance, {gem} at 0.5");
             assert!(plain > 0 && gem as f64 > plain as f64 * 1.5, "default {plain}, reflectance 0.5 {gem}");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR.
+    /// **A reflection reaches what stands far down the street.** The march walks the screen, not
+    /// equal steps of the world: a mirror floor shows a red tower 120 m away, whose reflection lies
+    /// 15 m from the camera and 105 m from the tower. Cut to the 20 m the world-space march reached
+    /// (`max_distance`), the same floor shows none of it — which is what a wet street showed until
+    /// 2026-11-19: the next car, and not one of the lights and signs down the road.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn screen_space_reflections_reach_what_stands_far_down_the_street() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // `reach`: None = no reflections, else the march's `max_distance`.
+        async fn frame(reach: Option<f32>) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            match reach {
+                Some(metres) => renderer.ssr.as_mut().expect("the deferred path has screen-space reflections").params.max_distance = metres,
+                None => renderer.ssr = None,
+            }
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            // `create_cube` is ±1: a scale is a half extent.
+            for (at, half, material) in [
+                (Vec3::new(140.0, -0.1, 0.0), Vec3::new(160.0, 0.1, 60.0), Material::new(white.clone()).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.02, 1.0)),
+                (Vec3::new(120.0, 10.0, 0.0), Vec3::new(2.0, 10.0, 15.0), Material::new(white.clone()).with_pbr(Vec4::new(1.0, 0.05, 0.02, 1.0), 1.0, 0.0)),
+            ] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, material);
+                world.add_component(e, MeshRenderer::new());
+            }
+            // Yaw 0 looks along +X, down the floor at the tower.
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 1.5, 0.0), yaw: 0.0, pitch: -0.05, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle { intensity: 3.0, ..Default::default() });
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            let none = frame(None).await;
+            let near = frame(Some(20.0)).await;
+            let far = frame(Some(gizmo_renderer::ssr::SsrParams::default().max_distance)).await;
+            // Pixels the reflection turned red: red minus green up by more than 15 of 255 on what the
+            // frame without reflections shows (the tower reads 32 there, the floor -4). Measured when
+            // written: 333 at the default reach, none past 5 at 20 m.
+            let reddened = |with: &[u8]| {
+                (0..128 * 128)
+                    .filter(|&i| {
+                        let (r, g) = (i32::from(with[i * 4]), i32::from(with[i * 4 + 1]));
+                        let (r0, g0) = (i32::from(none[i * 4]), i32::from(none[i * 4 + 1]));
+                        (r - g) - (r0 - g0) > 15
+                    })
+                    .count()
+            };
+            let (far, near) = (reddened(&far), reddened(&near));
+            assert!(far > 150, "the floor shows the tower 120 m off: {far} pixels reddened");
+            assert!(near == 0, "cut to 20 m the reflection is gone: {near} pixels reddened");
         });
     }
 
@@ -6649,13 +6728,12 @@ mod golden_render_tests {
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR.
-    /// Moving SSR's constants out of the shader has to be a move, not an edit.
+    /// `SsrParams::default()` is the march its documentation states, field for field.
     ///
-    /// Same reasoning as `the_defaults_are_the_shader_literals_they_replaced` does for volumetric:
-    /// `SsrParams::default()` claims to be the values that stood in `ssr.wgsl`, and if the claim
-    /// is wrong every reflective surface in every existing scene changed silently. Checked as an
-    /// identity — the default march must be pixel-identical to one whose parameters are typed out
-    /// by hand.
+    /// It began as the proof that moving SSR's constants out of the shader was a move, not an edit
+    /// (the defaults were the literals that stood in `ssr.wgsl`); since the march went to screen
+    /// space (2026-11-19) the values typed out are the documented defaults. Checked as an identity
+    /// — the default march must be pixel-identical to one whose parameters are typed out by hand.
     ///
     /// Plus one field proved to reach the shader, because an all-equal result would otherwise pass
     /// for the wrong reason: a params buffer nobody reads.

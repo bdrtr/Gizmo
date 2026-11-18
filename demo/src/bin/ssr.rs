@@ -11,17 +11,22 @@
 //! | kare kare açıp kapamak | **var** (2026-08-23, `SsrState::enabled`) |
 //! | yansımanın vazgeçeceği pürüz eşiği | **var** (2026-08-24, `SsrParams::roughness_cutoff`) |
 //! | yüzey kalınlığı varsayımı | **var** — `::thickness` |
-//! | doğrusal tarama adımı sayısı | **var** — `::max_steps` |
-//! | tarama adım boyu | **var** — `::step_size` |
+//! | ekranda en çok adım sayısı | **var** — `::max_steps` |
+//! | ışının erişimi (metre) | **var** — `::max_distance` (2026-11-19; önce `::step_size`) |
 //! | pürüz solma aralığı | **var** — `::fade_start` / `::fade_end` |
 //! | başlangıç ofseti, kenar solma | **var** — `::start_offset` / `::edge_fade` |
 //! | doğrusal tarama adımının üsteli | **yok** |
-//! | ikiye bölerek incelme adımı sayısı | **yok** — motorda hiç yazılmamış |
+//! | ikiye bölerek incelme | **var**, sabit 5 adım (2026-11-19) |
 //! | kesişimi sekantla arama | **yok** — motorda hiç yazılmamış |
 //!
-//! Sekiz sayı 32 baytlık tek bir uniform'da ve her kare yükleniyor. Varsayılanlar shader'da duran
-//! değerlerin ta kendisi — motorun `the_ssr_defaults_are_the_shader_literals` testi bunu piksel
-//! piksel kilitliyor.
+//! Sekiz sayı, karenin gürültü sırasıyla birlikte 48 baytlık tek bir uniform'da ve her kare
+//! yükleniyor (`SsrState::upload`).
+//!
+//! **2026-11-19: tarama ekran uzayında.** Önceden ışın dünya uzayında eşit adımlarla yürüyordu ve
+//! erişimi `step_size × max_steps` = 20 metreydi; ıslak bir sokakta yansıyan şeyler (sokağın
+//! aşağısındaki ışıklar, tabelalar) yüz metre ötede kaldığı için hiçbiri görünmüyordu. Şimdi ışın
+//! ekrana izdüşürülüp ekrandan çıkana kadar eşit piksel adımlarıyla yürüyor, sonra kesişim ikiye
+//! bölerek inceltiliyor. Aşağıdaki ölçüm tablosu eski taramayla alındı (2026-08-24).
 //!
 //! ### Ölçülen: beş düğmenin beşi de kareye ulaşıyor
 //!

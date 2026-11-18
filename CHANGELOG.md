@@ -50,6 +50,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Screen-space reflections march across the screen, and reach what stands far down a street.** The march
+  walked equal **world** steps, `step_size × max_steps` = 20 m by default, so a reflection of anything further was
+  never found — on a wet street, which shows the lights, signs and buildings a hundred metres down it, that was all
+  of them. The ray is now projected and walked across the screen in at most `max_steps` equal steps (one a pixel at
+  the finest), perspective-correct (`1/w` and `t/w` are what is linear on screen), until it leaves the screen or has
+  gone `max_distance`; a hit is the ray passing a surface's depth within one step — from in front of its back
+  (`thickness`) to behind its front — so a long step on a far stretch of road does not step over it; and five
+  bisections place the crossing. Where in its first step each pixel starts is interleaved gradient noise moved by
+  TAA's frame counter (`SsrState::upload`), so the steps' banding becomes grain TAA averages away; without TAA it
+  holds still. **`SsrParams::step_size` is replaced by `max_distance`** (default 500 m — past where almost every ray
+  has left the screen), and `max_steps` defaults to 48 (from 20). Test
+  `screen_space_reflections_reach_what_stands_far_down_the_street`: a mirror floor shows a red tower 120 m off —
+  333 pixels redden — and none of it with `max_distance` cut to the old 20 m.
+
 - **A baked-lit surface goes through the G-buffer when something reads it there.** Baked-lit (`MaterialType::BakedLit`)
   was drawn forward only, so nothing that works from the G-buffer saw a baked world: screen-space reflections had
   neither a surface to reflect on nor a building to reflect, and a decal had nothing to land on. On the deferred
@@ -66,10 +80,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   surface that receives none, the ambient and emissive knobs, a cut-out by vertex alpha and fog, drawn through the
   G-buffer and forward, agree to 2 steps of 255 but on a few silhouette pixels; the G-buffer holds them, and holds
   none with nothing reading them. Leaving out the shadow, the ambient, the fog or the cut-out's vertex alpha, or
-  routing them always or never, each turns it red. Screen-space reflections add what they find on a baked surface
-  whole: on a lit one they replace the environment the lighting pass put there, and subtracting that from a baked
-  surface, which was given none, darkened it where something stood (`screen_space_reflections_show_on_a_baked_floor_and_never_darken_it`:
-  a red box on a smooth baked floor reddens the floor and darkens 2 silhouette pixels, against 253 before).
+  routing them always or never, each turns it red. Screen-space reflections give a baked surface all of its
+  reflection: on a lit one they replace the environment the lighting pass put there, and a baked surface was given
+  none — so it gets what the ray finds whole, and the environment where it finds nothing. Subtracting the
+  environment instead darkened it where something stood (`a_baked_floor_reflects_what_stands_on_it_and_the_sky_and_is_never_darkened`:
+  a red box on a smooth baked floor reddens the floor, the sky brightens 2132 pixels of the rest — 305 without it —
+  and 2 silhouette pixels darken, against 253 before).
 
 - **Every mesh's vertices go to the GPU packed: 60 bytes a vertex from 104.** `Vertex` stays what the engine builds,
   imports and keeps on the CPU; its buffers hold `GpuVertex`, each attribute in the narrowest format that still

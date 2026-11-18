@@ -1,13 +1,17 @@
 use crate::deferred::DeferredState;
 
-/// The six numbers that shape the screen-space reflection march.
+/// The eight numbers that shape the screen-space reflection march.
 ///
 /// Every one of these was a literal in `ssr.wgsl`, which is why `CAPABILITY_GAPS.md` §B recorded
 /// "0 shaping knobs" against a pass that demonstrably works — the `ssr` demo measures the floor
 /// under each cube picking up that cube's colour, +37.6 R / +61.1 G / +38.7 B.
 ///
-/// The defaults are the shader's own values, so a state built and left alone renders exactly what
-/// it rendered before this struct existed — locked by `the_ssr_defaults_are_the_shader_literals`.
+/// The march is in screen space: the ray is projected and walked across the screen in at most
+/// [`max_steps`](Self::max_steps) equal steps (one a pixel at the finest) until it leaves it or has
+/// gone [`max_distance`](Self::max_distance), so how far it reaches is the screen's business, not
+/// a step size's. Until 2026-11-19 it walked equal **world** steps, `step_size × max_steps` = 20 m by
+/// default: a wet street, whose reflections are the lights and signs a hundred metres down it,
+/// showed none of them.
 ///
 /// Written to the GPU each frame from [`SsrState::params`]; changing a field is enough.
 #[repr(C)]
@@ -23,14 +27,18 @@ pub struct SsrParams {
     pub fade_start: f32,
     /// Where that fade reaches zero. Shader default **0.5**.
     pub fade_end: f32,
-    /// World-space distance per march step. Shader default **1.0**.
-    pub step_size: f32,
-    /// How many steps a ray takes before giving up. The cost knob. Shader default **20**.
+    /// How far a ray may go, in metres. Default **500** — past where almost every ray has left
+    /// the screen: the march's steps are spread over the part of the ray that is on screen and
+    /// nearer than this, so a shorter one buys finer steps over less of the world.
+    pub max_distance: f32,
+    /// The most steps a ray takes across the screen. The cost knob: a ray shorter on screen than
+    /// this many pixels takes one a pixel. Default **48**.
     pub max_steps: f32,
-    /// How thick a surface is assumed to be when deciding whether the ray hit it, in metres.
+    /// How thick a surface is assumed to be, in metres: the ray hits it when, in one step, it goes
+    /// from in front of the surface's back (this far behind its front) to behind its front.
     ///
     /// Too small and the ray passes through thin geometry; too large and it reports a hit on
-    /// something well behind the surface. Shader default **1.0**.
+    /// something it passed behind. Default **1.0**.
     pub thickness: f32,
     /// How far along the reflection vector the march starts, to avoid self-intersection at the
     /// origin. Shader default **0.1**.
@@ -45,8 +53,8 @@ impl Default for SsrParams {
             roughness_cutoff: 0.5,
             fade_start: 0.1,
             fade_end: 0.5,
-            step_size: 1.0,
-            max_steps: 20.0,
+            max_distance: 500.0,
+            max_steps: 48.0,
             thickness: 1.0,
             start_offset: 0.1,
             edge_fade: 0.1,
@@ -100,11 +108,28 @@ pub struct SsrState {
 
     /// The eight shaping numbers. Write to them directly; they reach the GPU on the next frame.
     pub params: SsrParams,
-    /// Their uniform buffer.
+    /// Their uniform buffer, with the frame's noise index after them ([`upload`](Self::upload)).
     pub params_buffer: wgpu::Buffer,
 }
 
+/// What the march's uniform holds: the knobs, and which frame's noise to start the steps with.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct SsrUniform {
+    params: SsrParams,
+    frame: u32,
+    _pad: [u32; 3],
+}
+
 impl SsrState {
+    /// Writes [`params`](Self::params) to the GPU with the frame's noise index: where in its first
+    /// step each pixel's ray starts is noise, so that the steps' banding becomes grain a temporal
+    /// filter averages away. `frame` is TAA's frame counter, or 0 without TAA, where a fixed grain
+    /// is better than one that flickers.
+    pub fn upload(&self, queue: &wgpu::Queue, frame: u32) {
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&SsrUniform { params: self.params, frame, _pad: [0; 3] }));
+    }
+
     /// Builds every SSR resource for a target of the given size.
     pub fn new(
         device: &wgpu::Device,
@@ -134,7 +159,7 @@ impl SsrState {
             device,
             &wgpu::util::BufferInitDescriptor {
                 label: Some("ssr_params"),
-                contents: bytemuck::bytes_of(&params),
+                contents: bytemuck::bytes_of(&SsrUniform { params, frame: 0, _pad: [0; 3] }),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             },
         );

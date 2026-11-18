@@ -16,10 +16,9 @@ pub fn record_surface_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Ren
 
     // ── SSR: Screen Space Reflections ───────────────────────────────────────────
     if let Some(ssr) = renderer.ssr.as_ref().filter(|s| s.enabled) {
-        // The shaping numbers go up every frame — 32 bytes, no rebuild.
-        renderer
-            .queue
-            .write_buffer(&ssr.params_buffer, 0, bytemuck::bytes_of(&ssr.params));
+        // The shaping numbers go up every frame — 48 bytes, no rebuild.
+        let frame = renderer.taa.as_ref().filter(|t| t.enabled).map_or(0, |t| t.frame_index);
+        ssr.upload(&renderer.queue, frame);
 
         // Pass 1: SSR Raymarch
         {
