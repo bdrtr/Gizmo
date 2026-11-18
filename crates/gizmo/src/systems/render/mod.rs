@@ -1997,6 +1997,7 @@ impl<'a> RenderContextExt for crate::renderer::RenderContext<'a> {
 
 mod batching;
 pub use batching::{clear_render_cache, draws_blended, DrawItem, RenderCache};
+mod kept;
 
 pub mod visibility_index;
 mod passes;
@@ -4171,6 +4172,213 @@ mod golden_render_tests {
                 let distinct = ranges.iter().collect::<std::collections::HashSet<_>>().len();
                 assert!(distinct == 6 || distinct == 1, "six shapes or six copies, got {distinct} ranges");
             }
+        });
+    }
+
+    /// **What the collection keeps of an object is what a collection from nothing works out.** The
+    /// collection keeps each object's view-independent part between collections (`kept`) and works
+    /// it out again only for an object whose components changed. The oracle is a collection from an
+    /// empty cache after each change a game makes: an object moved; a material recoloured and made
+    /// transparent; shadows turned off; a mirror given and taken away (the taking writes nothing
+    /// `Changed` sees); an entity despawned and another spawned on its id; pooled and back; hidden and
+    /// back; a `LodGroup` added and taken off; the camera across a detail level, turned away so that
+    /// only the shadow map sees the scene, and back; a frame of wireframes; another shading mode.
+    /// Every record — batch key, camera bit, instance bytes, last frame's model, box, range — must
+    /// match in walk order; and a collection after nothing changed must draw every record from its
+    /// kept entry, or the comparison proves nothing.
+    #[test]
+    fn kept_objects_draw_what_a_collection_from_nothing_draws() {
+        use crate::renderer::components::{LodGroup, LodLevel, PlanarReflection, ShadowCasting};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+
+        /// A collection with the thread's cache and one from an empty cache, compared record for
+        /// record. Returns how many the first drew from kept entries, and how many records it had.
+        fn compare(world: &World, renderer: &mut Renderer, eye: Vec3, target: Vec3, step: &str) -> (usize, usize) {
+            let view_proj = gizmo_math::Mat4::perspective_rh(1.0, 1.0, 0.1, 200.0) * gizmo_math::Mat4::look_at_rh(eye, target, Vec3::Y);
+            // A sun's map over the whole scene: what the camera turns away from still casts into it.
+            let cascade = gizmo_math::Mat4::orthographic_rh(-30.0, 30.0, -30.0, 30.0, -60.0, 60.0)
+                * gizmo_math::Mat4::look_at_rh(Vec3::new(0.0, 20.0, 0.0), Vec3::ZERO, Vec3::Z);
+            let _ = super::batching::collect_draw_items(world, renderer, view_proj, &[cascade; 4], eye, true);
+            let kept = super::batching::last_records();
+            let from_kept = super::batching::last_kept_draws();
+            super::batching::with_fresh_cache(|| {
+                let _ = super::batching::collect_draw_items(world, renderer, view_proj, &[cascade; 4], eye, true);
+            });
+            let fresh = super::batching::last_records();
+            assert_eq!(kept.len(), fresh.len(), "{step}: {} records kept, {} from nothing", kept.len(), fresh.len());
+            for (i, (k, f)) in kept.iter().zip(&fresh).enumerate() {
+                assert_eq!(k, f, "{step}: record {i} differs from a collection from nothing");
+            }
+            (from_kept, kept.len())
+        }
+
+        /// A flat grid of `n`×`n` quads over 4 m: enough corners for a second detail level.
+        fn grid_vertices(n: usize) -> Vec<crate::renderer::gpu_types::Vertex> {
+            let at = |i: usize, j: usize| [i as f32 / n as f32 * 4.0 - 2.0, ((i * 7 + j * 13) % 5) as f32 * 0.01, j as f32 / n as f32 * 4.0 - 2.0];
+            let mut out = Vec::with_capacity(n * n * 6);
+            for i in 0..n {
+                for j in 0..n {
+                    for (a, b) in [(0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)] {
+                        out.push(crate::renderer::gpu_types::Vertex {
+                            position: at(i + a, j + b),
+                            color: [1.0; 4],
+                            normal: [0.0, 1.0, 0.0],
+                            tex_coords: [(i + a) as f32 / n as f32, (j + b) as f32 / n as f32],
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+            out
+        }
+
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut assets = AssetManager::new();
+            let layout = renderer.scene.texture_bind_group_layout.clone();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &layout);
+            let rgba: Vec<u8> = (0..16).flat_map(|_| [200, 30, 30, 255]).collect();
+            let red = assets
+                .install_decoded_material_texture(&renderer.device, &renderer.queue, &layout, "kept_red", &rgba, 4, 4)
+                .expect("a 4×4 texture installs");
+            let grid = renderer.mesh_arena.indexed(&grid_vertices(64), Vec3::ZERO, "grid");
+            assert!(!grid.lod_vbufs.is_empty(), "the grid has a second detail level");
+            let cube = renderer.mesh_arena.triangle_list(&cube_vertices(), "cube");
+
+            let mut world = World::new();
+            let spawn = |world: &mut World, mesh: crate::renderer::components::Mesh, material: Material, renderer: MeshRenderer, at: Vec3| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, mesh);
+                world.add_component(e, material);
+                world.add_component(e, renderer);
+                e
+            };
+            let lit = |texture: &std::sync::Arc<wgpu::BindGroup>| Material::new(texture.clone()).with_baked_lit(Vec4::ONE);
+            let a = spawn(&mut world, cube.clone(), lit(&white), MeshRenderer::new(), Vec3::new(-6.0, 0.0, 0.0));
+            let b = spawn(&mut world, cube.clone(), lit(&red), MeshRenderer::new(), Vec3::new(-3.0, 0.0, 0.0));
+            let c = spawn(&mut world, grid.clone(), lit(&white), MeshRenderer::new(), Vec3::new(0.0, 0.0, 0.0));
+            let mut glass = lit(&white);
+            glass.albedo.w = 0.5;
+            glass.is_transparent = true;
+            let d = spawn(&mut world, cube.clone(), glass, MeshRenderer::new(), Vec3::new(3.0, 0.0, 0.0));
+            let e = spawn(&mut world, cube.clone(), lit(&red), MeshRenderer::new().with_shadows(ShadowCasting::Only), Vec3::new(6.0, 0.0, 0.0));
+            let f = spawn(&mut world, cube.clone(), lit(&white), MeshRenderer::new(), Vec3::new(0.0, 0.0, -8.0));
+            let g = spawn(&mut world, cube.clone(), lit(&red), MeshRenderer::new(), Vec3::new(0.0, 3.0, 0.0));
+            crate::systems::render::ensure_global_transforms(&mut world);
+
+            let near = Vec3::new(0.0, 2.0, 14.0);
+            let step = |world: &mut World, renderer: &mut Renderer, eye: Vec3, target: Vec3, what: &str, change: &mut dyn FnMut(&mut World, &mut Renderer)| {
+                world.increment_tick();
+                renderer.motion_history.begin_frame();
+                change(world, renderer);
+                compare(world, renderer, eye, target, what)
+            };
+            let nothing = &mut |_: &mut World, _: &mut Renderer| {};
+
+            let (from_kept, _) = step(&mut world, &mut renderer, near, Vec3::ZERO, "first collection", nothing);
+            assert_eq!(from_kept, 0, "nothing is kept before the first collection");
+            // Changes are news to the collection after the one that saw them too (`World::query_since`).
+            step(&mut world, &mut renderer, near, Vec3::ZERO, "settling", nothing);
+            let (from_kept, records) = step(&mut world, &mut renderer, near, Vec3::ZERO, "nothing changed", nothing);
+            assert!(records >= 6, "the scene draws: {records} records");
+            assert_eq!(from_kept, records, "after nothing changed every record comes from a kept entry");
+
+            let changes: Vec<(&str, Box<dyn FnMut(&mut World, &mut Renderer)>)> = vec![
+                ("moved", Box::new(move |w: &mut World, _: &mut Renderer| {
+                    w.query_mut::<&mut GlobalTransform>().get_mut(a).unwrap().matrix = gizmo_math::Mat4::from_translation(Vec3::new(-7.0, 1.0, 1.0));
+                })),
+                ("recoloured and made transparent", Box::new(move |w: &mut World, _: &mut Renderer| {
+                    let mut q = w.query_mut::<&mut Material>();
+                    let mut m = q.get_mut(b).unwrap();
+                    m.albedo = Vec4::new(0.2, 0.9, 0.2, 0.4);
+                    m.is_transparent = true;
+                })),
+                ("shadows off", Box::new(move |w: &mut World, _: &mut Renderer| {
+                    *w.query_mut::<&mut MeshRenderer>().get_mut(f).unwrap() = MeshRenderer::new().with_shadows(ShadowCasting::Off);
+                })),
+                ("a mirror given", Box::new(move |w: &mut World, _: &mut Renderer| w.add_component(g, PlanarReflection::new()))),
+                ("a mirror taken away", Box::new(move |w: &mut World, _: &mut Renderer| {
+                    w.remove_component::<PlanarReflection>(g);
+                })),
+                ("pooled", Box::new(move |w: &mut World, _: &mut Renderer| w.add_component(e, gizmo_core::pool::Pooled))),
+                ("back from the pool", Box::new(move |w: &mut World, _: &mut Renderer| {
+                    w.remove_component::<gizmo_core::pool::Pooled>(e);
+                })),
+                ("hidden", Box::new(move |w: &mut World, _: &mut Renderer| w.add_component(c, gizmo_core::component::IsHidden))),
+                ("shown", Box::new(move |w: &mut World, _: &mut Renderer| {
+                    w.remove_component::<gizmo_core::component::IsHidden>(c);
+                })),
+                ("a LodGroup added", {
+                    let (cube, grid) = (cube.clone(), grid.clone());
+                    Box::new(move |w: &mut World, _: &mut Renderer| {
+                        w.add_component(a, LodGroup::new(vec![LodLevel::new(cube.clone(), 10.0), LodLevel::new(grid.clone(), 100.0)]));
+                    })
+                }),
+                ("the LodGroup taken off", Box::new(move |w: &mut World, _: &mut Renderer| {
+                    w.remove_component::<LodGroup>(a);
+                })),
+                ("wireframes", Box::new(|w: &mut World, _: &mut Renderer| {
+                    w.insert_resource(super::WireframeConfig { global: true, ..Default::default() });
+                })),
+                ("no wireframes", Box::new(|w: &mut World, _: &mut Renderer| {
+                    w.insert_resource(super::WireframeConfig { global: false, ..Default::default() });
+                })),
+                ("another shading mode", Box::new(|_: &mut World, r: &mut Renderer| r.shading_mode ^= 1)),
+                ("the shading mode back", Box::new(|_: &mut World, r: &mut Renderer| r.shading_mode ^= 1)),
+            ];
+            for (what, mut change) in changes {
+                step(&mut world, &mut renderer, near, Vec3::ZERO, what, &mut *change);
+                step(&mut world, &mut renderer, near, Vec3::ZERO, &format!("{what}, then nothing"), nothing);
+            }
+
+            // Hidden for longer than a batch outlives its last instance (`IDLE_COLLECTIONS`, 8): the
+            // grid's batch, its own, is let go and the last batch moves into its slot. Its kept entry
+            // still names that slot, and must see that the batch there is another.
+            let slots_before = super::batching::render_cache_batch_count();
+            step(&mut world, &mut renderer, near, Vec3::ZERO, "hidden for long", &mut |w: &mut World, _: &mut Renderer| {
+                w.add_component(c, gizmo_core::component::IsHidden);
+            });
+            for _ in 0..12 {
+                step(&mut world, &mut renderer, near, Vec3::ZERO, "still hidden", nothing);
+            }
+            assert!(
+                super::batching::render_cache_batch_count() < slots_before,
+                "the hidden grid's batch was let go ({slots_before} batches before)"
+            );
+            step(&mut world, &mut renderer, near, Vec3::ZERO, "shown after its batch was let go", &mut |w: &mut World, _: &mut Renderer| {
+                w.remove_component::<gizmo_core::component::IsHidden>(c);
+            });
+            step(&mut world, &mut renderer, near, Vec3::ZERO, "shown, then nothing", nothing);
+
+            // An entity despawned and another spawned: on the same id, if the allocator gives it back.
+            world.despawn(d);
+            let reborn = spawn(&mut world, grid.clone(), lit(&red), MeshRenderer::new(), Vec3::new(3.0, 1.0, 0.0));
+            crate::systems::render::ensure_global_transforms(&mut world);
+            step(&mut world, &mut renderer, near, Vec3::ZERO, "despawned and another spawned", nothing);
+            assert_eq!(reborn.id(), d.id(), "the new entity took the despawned one's id — the case this step is for");
+
+            for (eye, target, what) in [
+                (Vec3::new(0.0, 2.0, 60.0), Vec3::ZERO, "far: the grid at its second level"),
+                (Vec3::new(0.0, 2.0, 60.0), Vec3::ZERO, "far, then nothing"),
+                (near, Vec3::ZERO, "near again"),
+                (near, Vec3::new(0.0, 2.0, 40.0), "turned away: only the shadow map sees them"),
+                (near, Vec3::new(0.0, 2.0, 40.0), "turned away, then nothing"),
+                (near, Vec3::ZERO, "turned back"),
+            ] {
+                step(&mut world, &mut renderer, eye, target, what, nothing);
+            }
+            step(&mut world, &mut renderer, near, Vec3::ZERO, "settling again", nothing);
+            let (from_kept, records) = step(&mut world, &mut renderer, near, Vec3::ZERO, "at rest", nothing);
+            assert_eq!(from_kept, records, "at rest, every record comes from a kept entry");
+            super::batching::clear_render_cache();
         });
     }
 

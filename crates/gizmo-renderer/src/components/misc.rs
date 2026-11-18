@@ -136,30 +136,43 @@ impl LodGroup {
         let Some(group) = group else {
             return [Some((own_mesh, None)), None];
         };
-        let bounds: Vec<f32> = group.levels.iter().map(|l| l.max_distance).collect();
-        Self::faded_levels(&bounds, group.crossfade, distance)
+        // The levels' distances are read where they are: copied into a list first, they were an
+        // allocation per object with a group, every collection.
+        let levels = &group.levels;
+        Self::faded_levels_by(levels.len(), |i| levels[i].max_distance, group.crossfade, distance)
             .map(|side| side.map(|(level, fade)| (&group.levels[level].mesh, fade)))
     }
 
     /// [`Self::pick_faded`] over bare bounds, testable without a GPU.
+    #[cfg(test)]
     fn faded_levels(bounds: &[f32], crossfade: f32, distance: f32) -> [Option<(usize, Option<LodFade>)>; 2] {
+        Self::faded_levels_by(bounds.len(), |i| bounds[i], crossfade, distance)
+    }
+
+    /// [`Self::pick_faded`] over `len` levels whose far bounds `bound` gives.
+    fn faded_levels_by(
+        len: usize,
+        bound: impl Fn(usize) -> f32,
+        crossfade: f32,
+        distance: f32,
+    ) -> [Option<(usize, Option<LodFade>)>; 2] {
         // A band stays between its neighbours: half of it reaches no further than halfway to either.
         let half_band = |i: usize| {
-            let below = if i == 0 { f32::INFINITY } else { bounds[i] - bounds[i - 1] };
-            let above = bounds.get(i + 1).map_or(f32::INFINITY, |next| next - bounds[i]);
+            let below = if i == 0 { f32::INFINITY } else { bound(i) - bound(i - 1) };
+            let above = if i + 1 < len { bound(i + 1) - bound(i) } else { f32::INFINITY };
             (crossfade * 0.5).min(below * 0.5).min(above * 0.5)
         };
-        let Some(level) = (0..bounds.len()).find(|&i| distance <= bounds[i] + half_band(i)) else {
+        let Some(level) = (0..len).find(|&i| distance <= bound(i) + half_band(i)) else {
             return [None, None];
         };
         let half = half_band(level);
-        if half <= 0.0 || distance <= bounds[level] - half {
+        if half <= 0.0 || distance <= bound(level) - half {
             return [Some((level, None)), None];
         }
         // Across the band the outgoing level's share falls from all of the pixels to none.
-        let through = (distance - (bounds[level] - half)) / (2.0 * half);
+        let through = (distance - (bound(level) - half)) / (2.0 * half);
         let edge = (1.0 - through).clamp(1.0 / 256.0, 255.0 / 256.0);
-        let next = (level + 1 < bounds.len()).then_some((level + 1, Some(LodFade { edge, below: false })));
+        let next = (level + 1 < len).then_some((level + 1, Some(LodFade { edge, below: false })));
         [Some((level, Some(LodFade { edge, below: true }))), next]
     }
 

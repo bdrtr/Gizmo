@@ -50,6 +50,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The draw collection keeps what an object draws between frames, and works it out again only when the object
+  changes.** `collect_draw_items` worked everything out about every object every collection — world matrix and box,
+  instance data, batch key and the batch it names — reading each object's `Mesh`, `Material`, `GlobalTransform` and
+  `MeshRenderer` to do it, a few hundred bytes each, apart from one another. In `nfsu2-gizmo`'s city (14 600 objects,
+  11 495 drawn) those reads were most of the collection, and on the integrated GPU, whose CPU shares its memory with
+  the frame being drawn, it took 11.4 ms against 3.5 ms beside a discrete one. What does not depend on the view is now
+  kept per entity (`systems::render::kept`) with the batch each detail level went to, and dropped for an entity whose
+  `Mesh`, `GlobalTransform`, `Material`, `MeshRenderer` or `PlanarReflection` was written since the last collection;
+  culling, the detail level, `IsHidden` and the views that skip mirrors or the sky are still decided every collection.
+  The walk's other lookups (`MeshRenderer`, skeleton, `LodGroup`, mirror, pool, editor-only, occluder) come from its
+  query instead of a lookup each. Not kept: skinned objects, crossfading `LodGroup` levels, backdrops, and anything
+  on a frame drawing wireframes. `LodGroup::pick_faded` no longer allocates a list of distances per object per
+  collection. City, highway spot, 1080p, paired runs: collection 11.5 → 4.0 ms and frame ~26 → ~20 ms on the
+  Radeon 780M; 3.5 → 2.4 ms on the RTX 3050. Test `kept_objects_draw_what_a_collection_from_nothing_draws`: after
+  each of twenty-odd changes (moved, recoloured, shadows off, mirror given and taken, pooled, hidden, a `LodGroup`
+  on and off, a batch let go while its object was hidden, an id despawned and spawned again, the camera across a
+  detail level and turned away, wireframes, another shading mode) every record matches a collection from an empty
+  cache, and at rest every record comes from a kept entry.
+
 - **`GIZMO_MONITOR=<name>` and `GIZMO_VSYNC=0`, two switches for measuring a windowed run.** `GIZMO_MONITOR` opens
   the window borderless-fullscreen on the monitor whose name holds `<name>` (`DP-1`, `HDMI-A-1`): a measurement or a
   screenshot that must not cover the screen being worked on, and under Wayland, where a client cannot place its own
