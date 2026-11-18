@@ -1324,6 +1324,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A texture's mip levels show the texture.** `mipmap.wgsl` divided the pixel it was writing by the size of the level
+  it was reading — twice the right size — so its coordinate stopped at 0.5 and each level was the top-left quarter of
+  the one above, enlarged: level `n` showed the top-left `1/2ⁿ` of the image. Every texture whose mips the engine
+  makes (the glTF loader, decoded and procedural textures, `Renderer::create_texture`) has been wrong past the
+  distance where its first mip is chosen — the material paths since they got mip chains on 2026-08-06 (`004554d6`). On a repeating texture it reads
+  as a coarser grain; on anything with a layout it is another picture: a road sign read "27 NORTH" at 8 m, carried a
+  ghost of its own shield at 15 m, was nothing but the shield at 30 m and a grey corner from 60 m on, and a car's
+  badges, lights and door lines did the same. Each level now samples the centre of its 2×2 block. The new GPU test
+  checks every level of a 32×16 texture against the 2×2 means worked on the CPU, texel by texel; it fails on the
+  old shader at the first texel of level 1.
+
 - **Every translation track of a clip is applied.** A translation reached a joint only if its name contained `Hips`
   (a rule left from an early Mixamo integration): KayKit's lower-case `hips` lost its bob and its crouch on landing,
   and Quaternius' deer and sheep their body's sway. A clip that carries the character is `RootMotion`'s to take out.
