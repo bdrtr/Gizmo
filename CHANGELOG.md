@@ -1324,6 +1324,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The opaque world is drawn grouped by material.** The depth buffer decides what an opaque draw shows, so its
+  order was left as the batches were built — ECS order, in a merged city a different texture every draw — and wgpu
+  validates and tracks every bind group set on a pass. Opaque items now come ordered by what the passes bind for
+  them (routing flags, registered material or surface, material bind group, skeleton, mesh buffer), by numbers
+  taken when a batch is made in the order things were first seen, so the order is the same run to run and sorting
+  costs no handle comparisons (sorting by wgpu's own handle order cost 3 ms a frame). Static city, 11 685 draws:
+  `CommandEncoder::finish` 7.6 → 4.0 ms, the CPU side 15.2 → 12.3 ms. New test `opaque_draws_come_grouped_by_material`.
 - **What nothing reads is not drawn: the forward surfaces' second pass.** Every surface drawn forward — unlit,
   baked-lit — was drawn a second time each frame, into the G-buffer's velocity (`record_forward_motion`), for TAA,
   the camera's motion blur and SSR. With none of them on it was drawn all the same, for a target nothing sampled:

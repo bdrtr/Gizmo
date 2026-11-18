@@ -3924,6 +3924,58 @@ mod golden_render_tests {
         });
     }
 
+    /// **The opaque world is drawn grouped by material.** Six objects, each its own mesh, two
+    /// materials taking turns — the shape of a merged city, where every cell holds a piece of every
+    /// texture. The draw list used to keep the order the batches were built in, so the material
+    /// changed on every draw, and wgpu validates and tracks each bind group set (`flush_bindings`,
+    /// the texture init actions): in the static city measurement that was half of
+    /// `CommandEncoder::finish`. Now the opaque items come grouped — one change, not five — and in
+    /// the order the materials were first seen, the same run to run.
+    #[test]
+    fn opaque_draws_come_grouped_by_material() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping: no GPU");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut assets = AssetManager::new();
+            let layout = renderer.scene.texture_bind_group_layout.clone();
+            let texture = |assets: &mut AssetManager, k: u8| {
+                let rgba: Vec<u8> = (0..16).flat_map(|_| [k, 0, 0, 255]).collect();
+                assets
+                    .install_decoded_material_texture(&renderer.device, &renderer.queue, &layout, &format!("grouped_{k}"), &rgba, 4, 4)
+                    .expect("a 4×4 texture installs")
+            };
+            let materials = [texture(&mut assets, 10), texture(&mut assets, 200)];
+            let mut world = World::new();
+            for i in 0..6 {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(i as f32 * 2.0 - 5.0, 0.0, 0.0)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(materials[i % 2].clone()).with_baked_lit(Vec4::ONE));
+                world.add_component(e, MeshRenderer::new());
+            }
+            crate::systems::render::ensure_global_transforms(&mut world);
+            let cam = Vec3::new(0.0, 2.0, 12.0);
+            let view_proj = gizmo_math::Mat4::perspective_rh(1.0, 1.0, 0.1, 100.0)
+                * gizmo_math::Mat4::look_at_rh(cam, Vec3::ZERO, Vec3::Y);
+            super::batching::clear_render_cache();
+            let (items, _) = super::batching::collect_draw_items(&world, &mut renderer, view_proj, &[view_proj; 4], cam);
+            super::batching::clear_render_cache();
+            let opaque: Vec<_> = items.iter().filter(|i| i.layer == super::batching::DrawLayer::Opaque).collect();
+            assert_eq!(opaque.len(), 6, "six objects, six batches");
+            let changes = opaque.windows(2).filter(|w| !std::sync::Arc::ptr_eq(&w[0].bind_group, &w[1].bind_group)).count();
+            assert_eq!(changes, 1, "the material changes {changes} times across six draws of two materials");
+            assert!(
+                std::sync::Arc::ptr_eq(&opaque[0].bind_group, &materials[0]),
+                "the material seen first is drawn first"
+            );
+        });
+    }
+
     #[test]
     fn a_scene_past_the_instance_capacity_grows_the_buffer_instead_of_dropping_meshes() {
         let _gpu = crate::test_gpu::gpu_lock();

@@ -49,6 +49,8 @@ pub struct RenderCache {
     pub instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
     /// One entry per batch: the geometry to bind and how many instances of it to draw.
     pub draw_items: Vec<DrawItem>,
+    /// The first-seen numbers `opaque_order` orders batches by.
+    ranks: Ranks,
 }
 
 thread_local! {
@@ -197,6 +199,89 @@ pub(crate) fn cmp_draw_order(a: (DrawLayer, f32), b: (DrawLayer, f32)) -> std::c
     }
 }
 
+/// First-seen numbers for the handles a batch is drawn with — its mesh buffer, its material's bind
+/// group, its skeleton's — so that the opaque world can be ordered by them (`BatchData::order`).
+///
+/// wgpu's handles order by their ids, and that comparison goes through wgpu's dispatch: sorting
+/// 11 685 draws by it every frame cost 3 ms, more than it saved. A number taken when the batch is
+/// made sorts for nothing, and first-seen numbers come in the order the scene was built, the same
+/// run to run, as the order of two coplanar opaque draws has to be. A handle's number is let go
+/// with the last batch that holds it.
+#[derive(Default)]
+struct Ranks {
+    of: rustc_hash::FxHashMap<usize, (u32, u32)>,
+    next: u32,
+}
+
+impl Ranks {
+    fn take(&mut self, handle: usize) -> u32 {
+        let next = &mut self.next;
+        let entry = self.of.entry(handle).or_insert_with(|| {
+            let rank = *next;
+            *next = next.wrapping_add(1);
+            (rank, 0)
+        });
+        entry.1 += 1;
+        entry.0
+    }
+
+    fn release(&mut self, handle: usize) {
+        if let Some(entry) = self.of.get_mut(&handle) {
+            entry.1 -= 1;
+            if entry.1 == 0 {
+                self.of.remove(&handle);
+            }
+        }
+    }
+}
+
+/// Where an opaque batch goes in the frame: by what the passes bind for it — the pipeline its flags
+/// route it to, a registered material or surface, its material's bind group, its skeleton's, its
+/// mesh's buffer — so that draws sharing them follow one another.
+///
+/// The depth buffer decides what an opaque draw shows, so this order used to be left as the batches
+/// were built: ECS order, in a city one cell after another and a different texture every draw. wgpu
+/// validates and tracks every bind group set on a pass (`flush_bindings`, each group's texture init
+/// actions) and skips one set again unchanged, so a run sharing a material binds it once: in the
+/// static city measurement, `CommandEncoder::finish` 7.6 → 4.3 ms. It is also what lets a run sharing
+/// a buffer become one draw.
+fn opaque_order(key: &BatchKey, ranks: &mut Ranks) -> u128 {
+    let route = [
+        key.is_skybox,
+        key.is_water,
+        key.is_grid,
+        key.mirror.is_some(),
+        key.baked_lit,
+        key.unlit,
+        key.discards,
+        key.is_double_sided,
+        key.lobes,
+        key.details,
+        key.wire.is_some(),
+    ]
+    .iter()
+    .fold(0u128, |bits, &flag| bits << 1 | u128::from(flag));
+    let id = |i: Option<u32>| u128::from(i.map_or(0, |i| i.saturating_add(1)) & 0xFFFF);
+    let material = u128::from(ranks.take(key.mat_id));
+    let skeleton = u128::from(key.skeleton_id.map_or(0, |s| ranks.take(s).saturating_add(1)) & 0xF_FFFF);
+    let mesh = u128::from(ranks.take(key.vbuf_id));
+    route << 116
+        | id(key.custom.map(|m| m.0)) << 100
+        | id(key.surface.map(|m| m.0)) << 84
+        | material << 52
+        | skeleton << 32
+        | mesh
+}
+
+/// Lets go of the numbers [`opaque_order`] took for `key`.
+fn release_order(key: &BatchKey, ranks: &mut Ranks) {
+    ranks.release(key.mat_id);
+    if let Some(skeleton) = key.skeleton_id {
+        ranks.release(skeleton);
+    }
+    ranks.release(key.vbuf_id);
+}
+
 #[derive(Debug, Clone)]
 /// One batched draw: the buffers to bind, and the instance range to draw them with.
 pub struct DrawItem {
@@ -294,6 +379,8 @@ pub struct DrawItem {
     /// distance. Measuring it from `cam_pos` would sort the sky by how far the player has
     /// driven from the middle of the map.
     pub(super) sort_depth: f32,
+    /// Where an opaque item goes among the others — [`opaque_order`].
+    pub(super) order: u128,
 }
 
 impl DrawItem {
@@ -431,6 +518,8 @@ pub(crate) struct BatchData {
     blend_mode: crate::renderer::components::BlendMode,
     /// The key this batch was made for — what a slot hint is checked against.
     key: BatchKey,
+    /// Where it goes among the opaque world — [`opaque_order`].
+    order: u128,
     /// This collection's camera-visible instances: a `(start, len)` run of the cache's
     /// `camera_*` arrays.
     camera: (u32, u32),
@@ -594,6 +683,7 @@ pub(super) fn collect_draw_items(
                 // The last batch takes this slot: its key now points here (hints to either fail
                 // their key check and fall back to the map).
                 let gone = cache.batches.swap_remove(i);
+                release_order(&gone.key, &mut cache.ranks);
                 cache.slots.remove(&gone.key);
                 if let Some(moved) = cache.batches.get(i) {
                     cache.slots.insert(moved.key.clone(), i as u32);
@@ -943,6 +1033,7 @@ pub(super) fn collect_draw_items(
                     is_transparent,
                     is_transmissive,
                     blend_mode,
+                                    order: opaque_order(&key, &mut cache.ranks),
                                     key: key.clone(),
                                     camera: (0, 0),
                                     shadow: (0, 0),
@@ -1216,6 +1307,7 @@ pub(super) fn collect_draw_items(
                     chunks
                 },
                 sort_depth,
+                order: batch.order,
             });
         }
 
@@ -1240,8 +1332,14 @@ pub(super) fn collect_draw_items(
         // pipelines both disable depth-write, so this order is the only thing that composites
         // them correctly (previously they were drawn in arbitrary HashMap order). Stable sort
         // keeps opaque batches in their build order.
-        local_draw_items
-            .sort_by(|a, b| cmp_draw_order((a.layer, a.sort_depth), (b.layer, b.sort_depth)));
+        //
+        // Within the opaque world the depth buffer decides what shows, so the order is free to serve
+        // the recording instead: see `opaque_order`.
+        local_draw_items.sort_by(|a, b| {
+            cmp_draw_order((a.layer, a.sort_depth), (b.layer, b.sort_depth)).then_with(|| {
+                if a.layer == DrawLayer::Opaque { a.order.cmp(&b.order) } else { std::cmp::Ordering::Equal }
+            })
+        });
 
         cache.instances = local_instances;
         cache.draw_items = local_draw_items;
