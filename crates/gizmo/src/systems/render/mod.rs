@@ -1701,6 +1701,11 @@ fn draw_camera_view_with(
         reproject: reproject.to_cols_array_2d(),
         ..post
     };
+    // Whether this frame reads the G-buffer's velocity at all: TAA reprojects by it, the camera's
+    // motion blur smears along it, SSR's temporal pass reprojects by it. Nothing else does, and
+    // without them the forward-drawn surfaces are not drawn a second time into it.
+    let velocity_read =
+        post.motion_blur > 0.0 || renderer.taa.as_ref().is_some_and(|t| t.enabled) || renderer.ssr.is_some();
     renderer.update_post_process(
         &renderer.queue,
         post.with_camera(&camera).with_underwater(underwater),
@@ -1923,7 +1928,7 @@ fn draw_camera_view_with(
     }
     passes::record_forward_and_fluid(
         encoder, renderer, world, &draw_items, uploaded_instances, simulations,
-        inv_view_proj, clear_color,
+        inv_view_proj, clear_color, velocity_read,
     );
     passes::record_screen_space_effects(encoder, renderer);
     // Advance SSGI temporal ping-pong / frame counter after its passes have run.
@@ -3797,6 +3802,9 @@ mod golden_render_tests {
         }
         pollster::block_on(async {
             let mut renderer = crate::test_gpu::headless_renderer(640, 360).await;
+            // As the city in `nfsu2-gizmo` is drawn: no TAA, no SSR.
+            renderer.taa = None;
+            renderer.ssr = None;
             let mut asset_manager = AssetManager::new();
             let mut world = World::new();
             // A first frame before anything is spawned, as an app's world has had: what is spawned
@@ -6785,8 +6793,65 @@ mod golden_render_tests {
         // The mean screen-UV motion across the middle of the frame, after the cube moved; `behind`
         // puts the cube behind the wall, where it must write nothing.
         async fn motion(kind: &str, behind: bool) -> [f32; 2] {
+            forward_motion(kind, behind, true).await
+        }
+        pollster::block_on(async {
+            let deferred = motion("deferred", false).await;
+            eprintln!("deferred cube: {deferred:?}");
+            assert!(deferred[0].abs() > 0.01, "the setup: a cube lit through the G-buffer writes its motion ({deferred:?})");
+            for kind in ["unlit", "baked-lit"] {
+                let forward = motion(kind, false).await;
+                let hidden = motion(kind, true).await;
+                eprintln!("{kind} cube: {forward:?}; behind the wall {hidden:?}");
+                assert_eq!(hidden, [0.0, 0.0], "a cube drawn {kind} behind the still wall wrote its motion over the wall");
+                assert!(
+                    (forward[0] - deferred[0]).abs() < 0.05 * deferred[0].abs() && (forward[1] - deferred[1]).abs() < 1e-3,
+                    "a cube drawn {kind} wrote {forward:?} where one drawn deferred writes {deferred:?}"
+                );
+            }
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no G-buffer to write motion to.
+    /// **What nothing reads is not drawn.** The forward-drawn surfaces — unlit, baked-lit — are drawn
+    /// a second time, into the G-buffer's velocity (`record_forward_motion`), for TAA, the camera's
+    /// motion blur and SSR. With none of the three on, that second draw was made all the same: in
+    /// `nfsu2-gizmo`'s city, where every surface is baked-lit and none of the three is on, every one
+    /// of thousands of draws was recorded and validated twice per frame for a target nothing
+    /// sampled (MOTOR-NOTLARI #29, 2026-11-18). Now the velocity of a forward-drawn cube stays zero
+    /// when nothing reads it — and, as the test above shows, is written when something does. The
+    /// deferred cube writes its motion either way: the G-buffer pass writes velocity as one of its
+    /// targets, at no extra draw.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn nothing_drawn_forward_writes_velocity_nothing_reads() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            for kind in ["unlit", "baked-lit"] {
+                let unread = forward_motion(kind, false, false).await;
+                assert_eq!(unread, [0.0, 0.0], "a cube drawn {kind} wrote its motion {unread:?} with nothing to read it");
+                let read = forward_motion(kind, false, true).await;
+                assert!(read[0].abs() > 0.01, "the setup: with motion blur on, the cube drawn {kind} writes its motion ({read:?})");
+            }
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))]
+    /// The mean screen-UV motion across the middle of the frame, after a cube drawn `kind` moved 30 cm
+    /// in front of a still wall; `behind` puts it behind the wall. TAA and SSR are off; `reader` gives
+    /// the camera motion blur, which reads the velocity.
+    async fn forward_motion(kind: &str, behind: bool, reader: bool) -> [f32; 2] {
+        {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            // None of the velocity's readers but the one `reader` asks for: TAA and SSR are off.
             renderer.taa = None;
+            renderer.ssr = None;
             let mut world = World::new();
             let mut assets = AssetManager::new();
             let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
@@ -6809,13 +6874,21 @@ mod golden_render_tests {
             world.add_component(cube, material);
             world.add_component(cube, MeshRenderer::new());
             world.spawn_bundle(DirectionalLightBundle::default());
-            world.spawn_bundle(CameraBundle {
+            let cam = world.spawn_bundle(CameraBundle {
                 position: Vec3::new(0.0, 0.0, -4.0),
                 yaw: std::f32::consts::FRAC_PI_2,
                 pitch: 0.0,
                 primary: true,
                 ..Default::default()
             });
+            // Something has to read the velocity for the forward surfaces to write it: the motion
+            // blur here (TAA is off, for a frame without jitter). See
+            // `nothing_drawn_forward_writes_velocity_nothing_reads`.
+            if reader {
+                let mut grade = crate::renderer::components::PostProcess::default();
+                grade.motion_blur = 0.5;
+                world.add_component(cam, grade);
+            }
             render_world(&mut renderer, &mut world).await;
             world.query_mut::<&mut Transform>().get_mut(cube).expect("the cube").position.x = 0.3;
             render_world(&mut renderer, &mut world).await;
@@ -6835,21 +6908,6 @@ mod golden_render_tests {
             }
             sum
         }
-        pollster::block_on(async {
-            let deferred = motion("deferred", false).await;
-            eprintln!("deferred cube: {deferred:?}");
-            assert!(deferred[0].abs() > 0.01, "the setup: a cube lit through the G-buffer writes its motion ({deferred:?})");
-            for kind in ["unlit", "baked-lit"] {
-                let forward = motion(kind, false).await;
-                let hidden = motion(kind, true).await;
-                eprintln!("{kind} cube: {forward:?}; behind the wall {hidden:?}");
-                assert_eq!(hidden, [0.0, 0.0], "a cube drawn {kind} behind the still wall wrote its motion over the wall");
-                assert!(
-                    (forward[0] - deferred[0]).abs() < 0.05 * deferred[0].abs() && (forward[1] - deferred[1]).abs() < 1e-3,
-                    "a cube drawn {kind} wrote {forward:?} where one drawn deferred writes {deferred:?}"
-                );
-            }
-        });
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.

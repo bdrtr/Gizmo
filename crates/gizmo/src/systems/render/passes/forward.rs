@@ -30,6 +30,9 @@ pub fn record_forward_and_fluid(
     // `Camera::clear_color`, or `DEFAULT_BACKGROUND`. Only the forward-only pipeline clears here; with
     // a G-buffer the lighting pass already wrote the background, and this pass loads it.
     clear_color: Option<[f32; 3]>,
+    // Whether anything reads the G-buffer's velocity this frame (TAA, motion blur, SSR). Without a
+    // reader the forward-drawn surfaces are not drawn into it a second time.
+    velocity_read: bool,
 ) {
     // ── Forward pass (unlit / skybox / GPU subsystems; PBR skipped if deferred) ──
     {
@@ -91,8 +94,12 @@ pub fn record_forward_and_fluid(
         }
     }
 
-    // How what was drawn forward and opaque moved, into the G-buffer's velocity, for TAA and motion blur.
-    record_forward_motion(encoder, renderer, draw_items, uploaded_instances);
+    // How what was drawn forward and opaque moved, into the G-buffer's velocity, for TAA and motion blur
+    // — when either, or SSR, reads it. It is every forward-drawn surface drawn again: in a baked-lit
+    // city, as many draws as the frame itself.
+    if velocity_read {
+        record_forward_motion(encoder, renderer, draw_items, uploaded_instances);
+    }
 
     // ── GPU particles (soft: a pass of their own, see `record_gpu_particles`) and the fluid's
     //    surface — both as many as the frame's step simulated. ──

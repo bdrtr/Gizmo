@@ -1324,6 +1324,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **What nothing reads is not drawn: the forward surfaces' second pass.** Every surface drawn forward — unlit,
+  baked-lit — was drawn a second time each frame, into the G-buffer's velocity (`record_forward_motion`), for TAA,
+  the camera's motion blur and SSR. With none of them on it was drawn all the same, for a target nothing sampled:
+  in a baked-lit city every draw was recorded and validated twice. The frame now asks whether anything reads the
+  velocity and skips the pass when nothing does. The static city measurement (11 685 draws, TAA and SSR off as
+  `nfsu2-gizmo` draws it): `CommandEncoder::finish` 13.0 → 7.6 ms, the whole CPU side 21.2 → 15.2 ms. New test
+  `nothing_drawn_forward_writes_velocity_nothing_reads`; `what_is_drawn_forward_writes_how_it_moved` now turns a
+  reader on (motion blur), as the motion it checks is written for one.
 - **A camera with a wide depth range sees what is in front of it.** `Frustum::from_matrix` builds the far plane
   as `row3 − row2` of the view-projection, two rows equal to within `n / (f − n)`; `Plane::from_coefficients`
   took any normal shorter than `10⁻⁵` for degenerate and put `+Z, d = 0` in its place — a real plane through the
