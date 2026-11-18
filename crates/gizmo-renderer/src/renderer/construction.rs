@@ -735,6 +735,7 @@ impl Renderer {
             scene_extent: Default::default(),
             fog: None,
             sky: None,
+            wetness: None,
             deband_dither: false,
             gpu_particles,
             gpu_physics,

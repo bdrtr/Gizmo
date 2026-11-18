@@ -117,3 +117,95 @@ fn surface_lobes(inst_pbr: vec4<f32>) -> vec3<f32> {
         floor(inst_pbr.w / 10000.0) / 100.0,
     );
 }
+
+// ── Rain (`Renderer::wetness`) ─────────────────────────────────────────────────────────────────────
+// What water does to a surface it lies on: darkens what it soaks into and smooths it, and where it
+// stands — a puddle — is a flat mirror over it. The scene's `wetness` (`SceneUniforms::wetness`: x =
+// level, y = how much of the flat ground is under water, z = 1 / a puddle's size in metres) is handed
+// in by the shader that reads it, as this module declares no bindings.
+
+// What a soaked surface's colour is multiplied by: water fills its pores and it reflects less light
+// back out (Lagarde, "Water drop 2b — Dynamic rain and its effects", 2013).
+const WET_DARKENING: f32 = 0.6;
+// The roughness a soaked surface goes to, if it was rougher: a film of water over it.
+const WET_ROUGHNESS: f32 = 0.2;
+// A puddle's: still water.
+const PUDDLE_ROUGHNESS: f32 = 0.03;
+
+// How wet a fragment is: x = soaked (0 dry … 1), y = under a puddle (0 … 1). Only what faces up takes
+// rain: `up` is the geometric normal's height, so a wall stays near dry and a normal map does not
+// speckle a road; puddles stand only on the flat.
+fn rain_on(wetness: vec4<f32>, world_position: vec3<f32>, up: f32) -> vec2<f32> {
+    let level = clamp(wetness.x, 0.0, 1.0);
+    if (level <= 0.0) {
+        return vec2<f32>(0.0);
+    }
+    let soaked = level * smoothstep(0.2, 0.8, up);
+    var puddle = 0.0;
+    let coverage = clamp(wetness.y, 0.0, 1.0);
+    if (coverage > 0.0) {
+        // The noise's value at which `coverage` of the ground lies above it (fitted to the noise's
+        // distribution: within 0.005, about 1 % of coverage).
+        let x = 1.0 - 2.0 * coverage;
+        let threshold = 0.5 + 0.2025 * x + 0.1026 * x * x * x;
+        let n = puddle_noise(world_position.xz * wetness.z);
+        // The shore is a band either side of the threshold, so that half-way into the water is where
+        // the share asked for ends.
+        puddle = smoothstep(threshold - 0.02, threshold + 0.02, n) * smoothstep(0.9, 0.98, up) * level;
+    }
+    return vec2<f32>(soaked, puddle);
+}
+
+// The surface as rain leaves it (`rain` from `rain_on`).
+fn wet_surface(s: Surface, rain: vec2<f32>) -> Surface {
+    var out = s;
+    let water = max(rain.x, rain.y);
+    if (water <= 0.0) {
+        return out;
+    }
+    let darkening = wet_darkening(rain);
+    out.albedo = s.albedo * darkening;
+    out.base_color = s.base_color * darkening;
+    out.roughness = wet_roughness(s.roughness, rain);
+    out.N = normalize(mix(s.N, vec3<f32>(0.0, 1.0, 0.0), rain.y));
+    return out;
+}
+
+// What rain multiplies a surface's colour by.
+fn wet_darkening(rain: vec2<f32>) -> f32 {
+    return mix(1.0, WET_DARKENING, max(rain.x, rain.y));
+}
+
+// A roughness as rain leaves it: no rougher than it was.
+fn wet_roughness(roughness: f32, rain: vec2<f32>) -> f32 {
+    let soaked = min(roughness, mix(roughness, WET_ROUGHNESS, rain.x));
+    return mix(soaked, min(soaked, PUDDLE_ROUGHNESS), rain.y);
+}
+
+// Two octaves of value noise over the ground, in [0, 1].
+fn puddle_noise(p: vec2<f32>) -> f32 {
+    return 0.65 * value_noise(p) + 0.35 * value_noise(p * 2.7 + vec2<f32>(17.3, 5.1));
+}
+
+fn value_noise(p: vec2<f32>) -> f32 {
+    let i = vec2<i32>(floor(p));
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = lattice(i);
+    let b = lattice(i + vec2<i32>(1, 0));
+    let c = lattice(i + vec2<i32>(0, 1));
+    let d = lattice(i + vec2<i32>(1, 1));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// A uniform number for a lattice point (PCG).
+fn lattice(i: vec2<i32>) -> f32 {
+    var v = bitcast<vec2<u32>>(i) * 1664525u + vec2<u32>(1013904223u);
+    v.x += v.y * 1664525u;
+    v.y += v.x * 1664525u;
+    v = v ^ (v >> vec2<u32>(16u));
+    v.x += v.y * 1664525u;
+    v.y += v.x * 1664525u;
+    v = v ^ (v >> vec2<u32>(16u));
+    return f32(v.x) * (1.0 / 4294967296.0);
+}

@@ -233,7 +233,7 @@ pub use backdrop::{
     BACKDROP_NDC_DEPTH,
 };
 pub use frame_uniforms::{
-    CameraFrame, EnvironmentFrame, Fog, SceneFrame, ShadowFrame, Sky, SunFrame, UnderwaterFog, MAX_LIGHTS,
+    CameraFrame, EnvironmentFrame, Fog, SceneFrame, ShadowFrame, Sky, SunFrame, UnderwaterFog, Wetness, MAX_LIGHTS,
 };
 pub use frustum_cull::{
     classify_visibility, classify_visibility_world, unseen_visibility, visible_in_frustum, Frustum, Visibility,

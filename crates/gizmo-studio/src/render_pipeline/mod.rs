@@ -122,6 +122,7 @@ fn draw_studio_frame(
                 // What a scene sets by hand is the scene, and this viewport shows it.
                 fog: renderer.fog,
                 sky: renderer.sky,
+                wetness: renderer.wetness,
                 ..Default::default()
             },
             // The viewport draws shadow maps, as the game does.
@@ -881,6 +882,7 @@ fn record_game_view(
                 clear_color,
                 fog: renderer.fog,
                 sky: renderer.sky,
+                wetness: renderer.wetness,
                 ..Default::default()
             },
             sun_shadow_maps: true,

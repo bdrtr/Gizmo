@@ -1749,6 +1749,7 @@ fn draw_camera_view_with(
                 wireframe_color: world.get_resource::<WireframeConfig>().and_then(|w| w.color),
                 fog: renderer.fog,
                 sky: renderer.sky,
+                wetness: renderer.wetness,
             },
             // The forward-only path draws the sun's cascade and the local lights' layers unless a game
             // says not to (`ShadowSettings::forward_only`).
@@ -5006,16 +5007,26 @@ mod golden_render_tests {
                 .collect()
         };
         // `deferred`: the G-buffer path, or the forward one; `reader`: screen-space reflections on, the
-        // reader that sends the baked surfaces through the G-buffer (`baked_in_gbuffer`).
-        async fn frame(deferred: bool, reader: bool, shaded: &dyn Fn(Vec3, Vec3, bool, f32) -> Vec<Vertex>) -> (Vec<u8>, usize) {
+        // reader that sends the baked surfaces through the G-buffer (`baked_in_gbuffer`); `wet`: rain,
+        // with puddles (`Renderer::wetness`).
+        async fn frame(deferred: bool, reader: bool, wet: bool, shaded: &dyn Fn(Vec3, Vec3, bool, f32) -> Vec<Vertex>) -> (Vec<u8>, usize) {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
             renderer.fog = Some(crate::renderer::Fog::new([0.2, 0.25, 0.35], 0.02));
+            if wet {
+                renderer.wetness = Some(crate::renderer::Wetness::new(1.0).with_puddles(0.4).with_puddle_size(1.0));
+            }
             // The screen-space passes read the G-buffer, which the forward frame has none of; off, but
             // for the reflections that make the baked surfaces' reader — over matte surfaces (below),
             // where they add nothing.
             if reader {
-                renderer.ssr.as_mut().expect("the deferred path has screen-space reflections").enabled = true;
+                let ssr = renderer.ssr.as_mut().expect("the deferred path has screen-space reflections");
+                ssr.enabled = true;
+                // In the rain the surfaces are smooth, and reflect: what the forward route has nothing
+                // of. Still the reader, reflecting nothing.
+                if wet {
+                    ssr.params.roughness_cutoff = 0.0;
+                }
             } else {
                 renderer.ssr = None;
             }
@@ -5088,10 +5099,10 @@ mod golden_render_tests {
             (pixels, baked)
         }
         pollster::block_on(async {
-            let (forward, _) = frame(false, false, &shaded).await;
-            let (deferred, baked_texels) = frame(true, true, &shaded).await;
+            let (forward, _) = frame(false, false, false, &shaded).await;
+            let (deferred, baked_texels) = frame(true, true, false, &shaded).await;
             // With no reader the deferred path draws them forward, for less.
-            let (_, unread) = frame(true, false, &shaded).await;
+            let (_, unread) = frame(true, false, false, &shaded).await;
             assert_eq!(unread, 0, "with nothing reading them, the baked surfaces stay out of the G-buffer");
             // 1 458 of the 16 384 when written: the five boxes, the rest is fogged background.
             assert!(baked_texels > 1000, "the deferred frame's baked surfaces are in the G-buffer: {baked_texels} texels");
@@ -5108,6 +5119,24 @@ mod golden_render_tests {
             assert!(
                 off * 400 <= forward.len() && mean < 0.2,
                 "the deferred frame is not the forward one: {off} bytes more than 2 apart, {mean:.3} apart on average"
+            );
+
+            // In the rain, too: both routes darken what it soaks alike, puddles and all (the
+            // reflections over matte surfaces add nothing here either).
+            let (wet_forward, _) = frame(false, false, true, &shaded).await;
+            let (wet_deferred, _) = frame(true, true, true, &shaded).await;
+            let brightness = |f: &[u8]| f.iter().map(|&b| f64::from(b)).sum::<f64>();
+            assert!(
+                brightness(&wet_forward) < 0.95 * brightness(&forward),
+                "the rain darkens the baked scene: {:.0} of {:.0}",
+                brightness(&wet_forward),
+                brightness(&forward)
+            );
+            let off = wet_forward.iter().zip(&wet_deferred).filter(|(a, b)| a.abs_diff(**b) > 2).count();
+            let mean = wet_forward.iter().zip(&wet_deferred).map(|(a, b)| f64::from(a.abs_diff(*b))).sum::<f64>() / wet_forward.len() as f64;
+            assert!(
+                off * 400 <= wet_forward.len() && mean < 0.2,
+                "in the rain the deferred frame is not the forward one: {off} bytes more than 2 apart, {mean:.3} apart on average"
             );
         });
     }
@@ -5200,6 +5229,130 @@ mod golden_render_tests {
             // `a_baked_surface_in_the_gbuffer_draws_what_the_forward_pass_drew`). Subtracting the
             // environment from the baked floor darkened 253.
             assert!(darkened <= 8, "{darkened} pixels darker with reflections than without");
+        });
+    }
+
+    /// **Rain darkens what faces up and leaves a wall dry; no rain changes nothing.** A grey floor and
+    /// a red wall standing on it, under the sun: with `Renderer::wetness` at 1 the floor's pixels lose
+    /// a good share of their light (soaked, a surface's colour is 0.6 of what it was) and the wall's
+    /// keep theirs, since rain lies on what faces up. A wetness of 0 is the dry frame to the byte. On
+    /// both paths: the forward shader takes the rain as the G-buffer does.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn rain_darkens_what_faces_up_and_leaves_a_wall_dry() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(wetness: Option<crate::renderer::Wetness>) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.ssr = None;
+            renderer.wetness = wetness;
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            // `create_cube` is ±1: a scale is a half extent.
+            for (at, half, colour) in [
+                (Vec3::new(10.0, -0.1, 0.0), Vec3::new(20.0, 0.1, 20.0), Vec4::new(0.6, 0.6, 0.6, 1.0)),
+                (Vec3::new(9.0, 2.0, 0.0), Vec3::new(0.2, 2.0, 3.0), Vec4::new(0.8, 0.2, 0.15, 1.0)),
+            ] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(white.clone()).with_pbr(colour, 0.8, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            }
+            // Low, looking along +X at the wall's face, the floor between.
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 1.5, 0.0), yaw: 0.0, pitch: -0.2, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle { intensity: 3.0, ..Default::default() });
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            let dry = frame(None).await;
+            assert_eq!(frame(Some(crate::renderer::Wetness::new(0.0))).await, dry, "a wetness of 0 is dry");
+            let wet = frame(Some(crate::renderer::Wetness::new(1.0))).await;
+            // Which pixel is which, from the dry frame: the wall is red, the floor grey.
+            let px = |f: &[u8], i: usize| [f[i * 4], f[i * 4 + 1], f[i * 4 + 2]].map(f64::from);
+            let (mut floor, mut wall) = ((0.0, 0.0, 0usize), (0.0, 0.0, 0usize));
+            for i in 0..128 * 128 {
+                let (d, w) = (px(&dry, i), px(&wet, i));
+                let (sum_d, sum_w) = (d.iter().sum::<f64>(), w.iter().sum::<f64>());
+                if d[0] > d[1] + 40.0 {
+                    wall = (wall.0 + sum_d, wall.1 + sum_w, wall.2 + 1);
+                } else if (d[0] - d[1]).abs() < 6.0 && i / 128 > 80 && sum_d > 60.0 {
+                    floor = (floor.0 + sum_d, floor.1 + sum_w, floor.2 + 1);
+                }
+            }
+            assert!(floor.2 > 1000 && wall.2 > 300, "the setup: floor {} and wall {} pixels", floor.2, wall.2);
+            // 0.843 when written: the colour is 0.6 of the dry, and the smoother floor reflects more of
+            // the sky at this grazing angle.
+            assert!(floor.1 < 0.9 * floor.0, "the wet floor is darker: {:.3} of its dry light", floor.1 / floor.0);
+            assert!((wall.1 / wall.0 - 1.0).abs() < 0.02, "the wall stays dry: {:.3} of its dry light", wall.1 / wall.0);
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // Read off the G-buffer's roughness.
+    /// **Puddles cover the share of the ground they are asked to.** A wide grey floor seen from above in
+    /// the rain, with `puddles` at 0.2 and at 0.5 (a metre across, so the frame holds over a thousand):
+    /// the share of the floor's G-buffer texels as smooth as still water (`PUDDLE_ROUGHNESS`, 0.03)
+    /// is that share, within 0.05. None at 0, and none on dry ground whatever `puddles` says.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn puddles_cover_the_share_of_the_ground_they_are_asked_to() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn under_water(level: f32, puddles: f32) -> f64 {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.ssr = None;
+            renderer.wetness = Some(crate::renderer::Wetness::new(level).with_puddles(puddles).with_puddle_size(1.0));
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(100.0, 0.1, 100.0)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(white.clone()).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.8, 0.0));
+            world.add_component(e, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 30.0, 0.0), yaw: 0.0, pitch: -1.5, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await;
+            let def = renderer.deferred.as_ref().expect("the deferred path");
+            let normals = read_target(&renderer, &def.normal_roughness_tex, 128).await;
+            let texel = normals.len() / (128 * 128);
+            let roughness: Vec<f32> =
+                normals.chunks_exact(texel).map(|t| f16_bits_to_f32(u16::from_le_bytes([t[6], t[7]])).abs()).collect();
+            assert!(roughness.iter().all(|r| *r > 0.0), "the setup: the floor fills the frame");
+            // Half-way into the water: between soaked (0.2) and still (0.03).
+            roughness.iter().filter(|r| **r < 0.115).count() as f64 / roughness.len() as f64
+        }
+        pollster::block_on(async {
+            let none = under_water(1.0, 0.0).await;
+            let dry = under_water(0.0, 0.5).await;
+            let fifth = under_water(1.0, 0.2).await;
+            let half = under_water(1.0, 0.5).await;
+            assert_eq!(none, 0.0, "no puddles asked for, none");
+            assert_eq!(dry, 0.0, "no puddles on dry ground");
+            // 0.190 and 0.472 when written.
+            assert!((fifth - 0.2).abs() < 0.05, "puddles at 0.2 cover {fifth:.3} of the floor");
+            assert!((half - 0.5).abs() < 0.05, "puddles at 0.5 cover {half:.3} of the floor");
         });
     }
 

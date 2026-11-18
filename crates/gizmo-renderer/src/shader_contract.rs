@@ -142,6 +142,7 @@ fn scene_layout() -> Vec<(&'static str, u32)> {
         ("sky_zenith", offset_of!(SceneUniforms, sky_zenith) as u32),
         ("sky_horizon", offset_of!(SceneUniforms, sky_horizon) as u32),
         ("sky_ground", offset_of!(SceneUniforms, sky_ground) as u32),
+        ("wetness", offset_of!(SceneUniforms, wetness) as u32),
         ("local_shadow_layers", offset_of!(SceneUniforms, local_shadow_layers) as u32),
         ("light_shadows", offset_of!(SceneUniforms, light_shadows) as u32),
     ]
@@ -247,8 +248,10 @@ fn every_scene_uniform_declaration_matches_the_bytes_rust_uploads() {
         checked.contains(&"common.wgsl".to_string()),
         "the source of truth was not among the shaders checked — the walk found {checked:?}"
     );
+    // Five: `common.wgsl` and four copies (debug lines, three fluid passes). `gbuffer.wgsl` held a sixth,
+    // cut at `num_lights`, until it imported the whole block (2026-11-19, for `wetness`).
     assert!(
-        checked.len() >= 6,
+        checked.len() >= 5,
         "only {} shaders declare a scene block; the copies were expected too: {checked:?}",
         checked.len()
     );

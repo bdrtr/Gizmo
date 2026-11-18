@@ -6,8 +6,10 @@
 // `CUSTOM_SURFACE`, from a game's `material_surface` (`custom_material::SurfaceMaterial`): the same
 // shader around it, so a game's surface is written to the G-buffer exactly as the engine's own is.
 
-#import gizmo::common::{instance_keeps, dielectric_f0, BAKED_SURFACE}
-#import gizmo::surface::{Surface, tangent_frame, surface_lobes}
+// The scene block is the one `common.wgsl` declares, all of it: a partial copy here stopped at
+// `num_lights`, and the scene's rain (`wetness`) lies past it.
+#import gizmo::common::{SceneUniforms, instance_keeps, dielectric_f0, BAKED_SURFACE}
+#import gizmo::surface::{Surface, tangent_frame, surface_lobes, rain_on, wet_surface, wet_darkening, wet_roughness}
 #ifdef CUSTOM_SURFACE
 #import gizmo::surface::{SurfaceInput}
 #import gizmo::custom_surface::{material_surface}
@@ -22,20 +24,6 @@ fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
     let inv_det = 1.0 / dot(m[2], cross01);
     return mat3x3<f32>(cross12 * inv_det, cross20 * inv_det, cross01 * inv_det);
 }
-
-struct SceneUniforms {
-    view_proj:      mat4x4<f32>,
-    camera_pos:     vec4<f32>,
-    sun_direction:  vec4<f32>,
-    sun_color:      vec4<f32>,
-    lights:         array<vec4<f32>, 1024>, // MAX_LIGHTS(256) * LightData (4 vec4 each) — not used in G-pass
-    light_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits:  vec4<f32>,
-    camera_forward:  vec4<f32>,
-    cascade_params:  vec4<f32>,
-    num_lights: u32,
-    _pad: vec3<u32>,
-};
 
 struct SkeletonData {
     joints: array<mat4x4<f32>, 128>,
@@ -283,20 +271,22 @@ fn fs_baked(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut 
     if (!instance_keeps(in.inst_coat_keep.y, final_alpha, in.clip_position.xy)) {
         discard;
     }
-    let base = in.inst_albedo.rgb * tex.rgb;
+    // The scene's rain (`Renderer::wetness`): darker, smoother, and flat in a puddle.
+    let rain = rain_on(scene.wetness, in.world_position, normalize(in.normal).y);
+    let base = in.inst_albedo.rgb * tex.rgb * wet_darkening(rain);
     var baked = in.color;
     let lightmap = baked_light(in.tex_coords.zw);
     if (lightmap.w > 0.5) {
         baked = baked * lightmap.rgb;
     }
-    let N = normalize(select(-in.normal, in.normal, front));
+    let N = normalize(mix(normalize(select(-in.normal, in.normal, front)), vec3<f32>(0.0, 1.0, 0.0), rain.y));
     let now_ndc    = in.motion_now.xy / in.motion_now.w;
     let before_ndc = in.motion_before.xy / in.motion_before.w;
     let f0 = dielectric_f0(in.inst_emissive.w);
 
     var out: GBufferOut;
     out.albedo_metallic  = vec4<f32>(base, 0.0);
-    out.normal_roughness = vec4<f32>(N, in.inst_pbr.x);
+    out.normal_roughness = vec4<f32>(N, wet_roughness(in.inst_pbr.x, rain));
     out.world_position   = vec4<f32>(in.world_position - scene.camera_pos.xyz, BAKED_SURFACE);
     out.world_tangent    = vec4<f32>(baked, 0.0);
     out.velocity         = vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 0.0, 0.0);
@@ -310,7 +300,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     // Skip unlit / skybox objects — they are drawn in a forward pass
     if (in.inst_pbr.z > 0.5) { discard; }
 
-    let surface = fragment_surface(in, front);
+    // The scene's rain (`Renderer::wetness`), on the engine's surface and on a game's alike.
+    let surface = wet_surface(fragment_surface(in, front), rain_on(scene.wetness, in.world_position, normalize(in.normal).y));
     // glTF AlphaMode::Mask cutout: hard per-texel discard at alphaCutoff.
     // cutoff == 0 → no cutout (Opaque / Blend materials), so this is a no-op for them.
     if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }

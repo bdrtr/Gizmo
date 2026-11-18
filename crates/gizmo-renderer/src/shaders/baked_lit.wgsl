@@ -11,6 +11,7 @@
 // its own. On the web schema that group does not exist (the 4-bind-group limit), and there the
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
 #import gizmo::common::{SceneUniforms, height_fog, instance_keeps, BAKED_SUN_SHARE}
+#import gizmo::surface::{rain_on, wet_darkening}
 #ifdef SUN_SHADOWS
 #ifdef SUN_SHADOW_PER_VERTEX
 #import gizmo::common::{sun_shadow_coord, sun_shadow_lean, sun_shadow_tap, shadow_distance_fade}
@@ -221,7 +222,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    let base = in.inst_albedo.rgb * tex.rgb;
+    // The scene's rain (`Renderer::wetness`) darkens what it soaks; its smoothness shows only in what
+    // reflects it, which on this path is nothing — the G-buffer's route (`fs_baked`) has the reflections.
+    let base = in.inst_albedo.rgb * tex.rgb * wet_darkening(rain_on(scene.wetness, in.world_pos, normalize(in.world_normal).y));
 
     // The vertex colour is taken at face value. It used to be second-guessed here — a
     // near-zero length was rewritten to white, so that an importer which never set the

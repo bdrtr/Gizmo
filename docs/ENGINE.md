@@ -1246,14 +1246,15 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   **Since 2026-11-03 it is 656 B fixed (17 040 B)**: `sky_zenith`, `sky_horizon` and `sky_ground`
   (for `Renderer::sky`). **Since 2026-11-11 it is 3 216 B fixed and 68 B a light (20 624 B)**: the
   local lights' 32 shadow layers (`local_shadow_layers`, 80 B each) and each light's entry in them
-  (`light_shadows`, 4 B a light), and the ceiling below is 916 lights.
+  (`light_shadows`, 4 B a light), and the ceiling below is 916 lights. **Since 2026-11-19 it is
+  3 232 B fixed (20 640 B)**: `wetness` (for `Renderer::wetness`), and the ceiling is still 916.
 
   **Clustered culling landed the same day, and the cap is now 256.** `MAX_LIGHTS` was never a
   hardware limit — it was the per-fragment loop over *every* light in the frame wearing a constant's
   clothing. `gizmo-renderer::clustered` cuts the view volume into 16×9×24 clusters, assigns each
   light to the clusters its sphere touches, and both lighting loops (deferred and forward) now walk
   their own fragment's list, bounded by `MAX_LIGHTS_PER_CLUSTER` = 32 whatever the scene holds. The
-  hard ceiling left is the uniform block: `(65536 − 3216) / 68` = 916 lights (1015 at the 560 B
+  hard ceiling left is the uniform block: `(65536 − 3232) / 68` = 916 lights (1015 at the 560 B
   fixed part this was written against, 1013 at 656 B), and the honest move
   past a few hundred is to put the light array in a storage buffer rather than inch toward that
   cliff.
@@ -1261,7 +1262,7 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   **That ceiling is computed now, not argued.**
   `the_scene_block_fits_the_uniform_binding_floor_every_webgpu_target_guarantees` asserts the block
   is inside the 64 KiB `maxUniformBufferBindingSize` every WebGPU target guarantees, and that the
-  3 216 / 916 figures quoted here are this layout's (it said 560 / 1015 until the fog and bias fields, 608 / 1014 until the sky, and 656 / 1013 until the local shadow layers). Before it, raising `MAX_LIGHTS` past the cliff
+  3 232 / 916 figures quoted here are this layout's (it said 560 / 1015 until the fog and bias fields, 608 / 1014 until the sky, 656 / 1013 until the local shadow layers, and 3 216 / 916 until the wetness). Before it, raising `MAX_LIGHTS` past the cliff
   would have compiled, passed every test, and failed at **run time** on the first machine that
   enforces the floor — as a bind-group validation error, which is the least informative place to
   learn about arithmetic done in a header. Verified red at `MAX_LIGHTS` = 1200: 77 360 B, with the

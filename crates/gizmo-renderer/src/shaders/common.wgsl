@@ -81,6 +81,9 @@ struct SceneUniforms {
     sky_zenith: vec4<f32>,
     sky_horizon: vec4<f32>,
     sky_ground: vec4<f32>,
+    // `Renderer::wetness`: x = level, y = puddles, z = 1 / puddle size (m); zeros = dry. Read through
+    // `gizmo::surface::rain_on`.
+    wetness: vec4<f32>,
     // The local lights' shadow layers, and each light slot's entry in them, four to a row:
     // `local_shadow_layer` reads an entry. See `gizmo_renderer::local_shadows`.
     local_shadow_layers: array<LocalShadowLayer, 32>,

@@ -49,7 +49,7 @@
 #ifdef LOBES
 #import gizmo::pbr_ext::{compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 #endif
-#import gizmo::surface::{Surface, tangent_frame}
+#import gizmo::surface::{Surface, tangent_frame, rain_on, wet_surface}
 #ifdef CUSTOM_SURFACE
 #import gizmo::surface::{SurfaceInput}
 #import gizmo::custom_surface::{material_surface}
@@ -361,6 +361,16 @@ fn behind_distance(pixel: vec2<f32>, world_position: vec3<f32>) -> f32 {
 #endif
 
 // What the material is at this fragment: the engine's own, or the game's `material_surface`.
+// The scene's rain on this fragment (`Renderer::wetness`); none on glass, which water runs off.
+fn rain_here(in: VertexOutput) -> vec2<f32> {
+#ifdef TRANSMISSION
+    if (in.inst_glass.x > 0.0) {
+        return vec2<f32>(0.0);
+    }
+#endif
+    return rain_on(scene.wetness, in.world_position, normalize(in.normal).y);
+}
+
 fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
 #ifdef CUSTOM_SURFACE
     var input: SurfaceInput;
@@ -441,11 +451,11 @@ fn shade(in: VertexOutput) -> vec4<f32> {
 #endif
 #endif
 #ifdef DETAILS
-    let surface = fragment_surface(in, front);
+    let surface = wet_surface(fragment_surface(in, front), rain_here(in));
 #else
     // The plain tier draws front faces only. A game's surface is never built on it: only its own code
     // knows whether it cuts (`SurfaceMaterial`).
-    let surface = fragment_surface(in, true);
+    let surface = wet_surface(fragment_surface(in, true), rain_here(in));
 #endif
 #ifdef WIREFRAME
     // `WireframeConfig::color`: one flat colour for every line, readable on any material. Alpha 0

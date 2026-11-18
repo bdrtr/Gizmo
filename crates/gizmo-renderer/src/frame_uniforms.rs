@@ -67,12 +67,12 @@ use gizmo_math::{Mat4, Vec3};
 /// list, bounded by
 /// [`MAX_LIGHTS_PER_CLUSTER`](crate::clustered::MAX_LIGHTS_PER_CLUSTER) = 32 whatever the scene
 /// holds, so what this constant limits is only how many lights a *frame* may carry, and the costs
-/// are linear and small: 17 KiB of the scene block (20 624 bytes total, against a 64 KiB
+/// are linear and small: 17 KiB of the scene block (20 640 bytes total, against a 64 KiB
 /// uniform-binding floor everywhere WebGPU runs) and 0.1–0.8 ms of CPU assignment depending on how
 /// many lights are actually in view.
 ///
 /// Why not more: the light array lives in the *uniform* block, 64 bytes a light and 4 more for its
-/// shadow's entry, so the hard ceiling is `(65536 - 3216) / 68` = 916 lights, and past a few hundred
+/// shadow's entry, so the hard ceiling is `(65536 - 3232) / 68` = 916 lights, and past a few hundred
 /// the honest move is to put the array in a storage buffer rather than to inch this number toward a
 /// cliff. 256 is a round number well inside the limit that no hand-lit scene is going to reach.
 pub const MAX_LIGHTS: usize = 256;
@@ -199,6 +199,8 @@ pub struct EnvironmentFrame {
     pub fog: Option<Fog>,
     /// The sky that lights the scene (`Renderer::sky`); `None` keeps the environment preset's.
     pub sky: Option<Sky>,
+    /// Rain on the scene (`Renderer::wetness`); `None` is dry.
+    pub wetness: Option<Wetness>,
 }
 
 /// How a [`Fog`] thickens with distance.
@@ -363,6 +365,53 @@ impl Sky {
     }
 }
 
+/// Rain on the scene: how wet its surfaces are — `Renderer::wetness`.
+///
+/// Water darkens what it soaks into and smooths it, and where it stands it is a flat mirror. Only what
+/// faces up takes it — a road, a roof, the bonnet of a car — so a wall stays near dry; puddles stand
+/// only on the flat. Glass and water surfaces are left alone, and so are unlit ones. Read by every lit
+/// and baked-lit draw on both paths (`gizmo::surface::rain_on`); the reflections are screen-space
+/// reflections' (`SsrState`), so on the forward-only path a puddle reflects the sky and the probes.
+///
+/// One for the whole scene: a bridge's underside and a tunnel are as wet as the road outside it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct Wetness {
+    /// 0 dry … 1 soaked: how dark and smooth an up-facing surface is. Soaked, its colour is 0.6 of
+    /// what it was dry and its roughness at most 0.2.
+    pub level: f32,
+    /// 0 … 1: how much of the flat ground stands under water, as a fraction of it (to about 1 %).
+    /// A puddle is mirror-smooth (roughness 0.03), flat whatever the normal map says, and as dark as
+    /// soaked ground. Puddles grow with [`level`](Self::level) too: none on dry ground.
+    pub puddles: f32,
+    /// A puddle's size, in metres across. 4 by default.
+    pub puddle_size: f32,
+}
+
+impl Wetness {
+    /// Surfaces this wet (`level`, 0 … 1), with no puddles.
+    pub fn new(level: f32) -> Self {
+        Self { level: level.clamp(0.0, 1.0), puddles: 0.0, puddle_size: 4.0 }
+    }
+
+    /// The same, with this much of the flat ground under water (0 … 1).
+    pub fn with_puddles(mut self, puddles: f32) -> Self {
+        self.puddles = puddles.clamp(0.0, 1.0);
+        self
+    }
+
+    /// The same, with puddles this size, in metres across.
+    pub fn with_puddle_size(mut self, metres: f32) -> Self {
+        self.puddle_size = metres.max(0.01);
+        self
+    }
+
+    /// As the scene uniform holds it: x = level, y = puddles, z = 1 / puddle size, w unused.
+    pub(crate) fn uniform(self) -> [f32; 4] {
+        [self.level.clamp(0.0, 1.0), self.puddles.clamp(0.0, 1.0), 1.0 / self.puddle_size.max(0.01), 0.0]
+    }
+}
+
 /// One frame's worth of scene state, in the terms the caller has it.
 ///
 /// Build it with `..Default::default()` and fill what you actually know: a caller that has no sun,
@@ -449,6 +498,7 @@ impl SceneUniforms {
             sky_zenith: environment.sky.map_or([0.0, 0.0, 0.0, -1.0], |s| [s.zenith[0], s.zenith[1], s.zenith[2], s.intensity.max(0.0)]),
             sky_horizon: environment.sky.map_or([0.0; 4], |s| [s.horizon[0], s.horizon[1], s.horizon[2], 0.0]),
             sky_ground: environment.sky.map_or([0.0; 4], |s| [s.ground[0], s.ground[1], s.ground[2], 0.0]),
+            wetness: environment.wetness.map_or([0.0; 4], Wetness::uniform),
             // Read by nothing today — the post composite owns exposure and `deferred_lighting.wgsl`
             // says as much next to the field it no longer reads. Fed from the camera in both paths
             // regardless, so a shader that starts reading it does not find two different answers.
@@ -683,7 +733,7 @@ mod tests {
         const LIGHT_BYTES: usize = std::mem::size_of::<LightData>(); // 4 × vec4 = 64
         assert_eq!(LIGHT_BYTES, 64);
         // And 4 bytes a light of `light_shadows`.
-        assert_eq!(std::mem::size_of::<SceneUniforms>(), 3216 + MAX_LIGHTS * (LIGHT_BYTES + 4));
+        assert_eq!(std::mem::size_of::<SceneUniforms>(), 3232 + MAX_LIGHTS * (LIGHT_BYTES + 4));
         assert_eq!(
             std::mem::offset_of!(SceneUniforms, inv_view_proj),
             464 + MAX_LIGHTS * LIGHT_BYTES
@@ -695,7 +745,7 @@ mod tests {
     ///
     /// `maxUniformBufferBindingSize` is **64 KiB** everywhere WebGPU runs — that is the
     /// guaranteed floor, and the number `MAX_LIGHTS` has always been argued against. The argument
-    /// lived in prose: docs/ENGINE.md works out `(65536 − 3216) / 68 = 916` lights as the hard
+    /// lived in prose: docs/ENGINE.md works out `(65536 − 3232) / 68 = 916` lights as the hard
     /// ceiling. Nothing computed it, so raising `MAX_LIGHTS` past it would have compiled, passed
     /// every test, and then failed at **run time** on the first machine that enforces the floor —
     /// as a bind-group validation error, which is the least informative place to learn about an
@@ -724,9 +774,9 @@ mod tests {
         // …and the ceiling the documentation argues from is the one this layout actually has.
         let fixed = block - MAX_LIGHTS * per_light;
         assert_eq!(
-            fixed, 3216,
+            fixed, 3232,
             "the block's fixed part (560 before the fog override, 592 before the shadow bias, 608 \
-             before the sky, 656 before the local shadow layers)"
+             before the sky, 656 before the local shadow layers, 3216 before the wetness)"
         );
         assert_eq!((UNIFORM_FLOOR - fixed) / per_light, 916, "the light ceiling docs/ENGINE.md quotes");
     }

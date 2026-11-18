@@ -50,6 +50,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rain: `Renderer::wetness`.** A scene can be wet: `Wetness::new(level).with_puddles(share)`. What faces up —
+  a road, a roof, a car's bonnet, by the geometric normal, so a wall stays near dry and a normal map does not
+  speckle a road — darkens (soaked, its colour is 0.6 of the dry) and smooths (roughness at most 0.2), and puddles
+  stand on the flat: mirror-still (0.03), flat whatever the normal map says, as dark as soaked ground, a metre
+  to `puddle_size` across, covering the share of the ground asked for (the noise's threshold is fitted to its
+  distribution: 0.2 and 0.5 cover 0.19 and 0.47 of a floor). One function does it for every lit and baked-lit
+  draw on both paths (`gizmo::surface::rain_on` / `wet_surface`, for the engine's surface and a game's alike);
+  glass and unlit surfaces are left alone. The reflections are screen-space reflections', which a wet baked city
+  now has a reader for; on the forward-only path a puddle reflects the sky and the probes. One `wetness` row was
+  added to the scene uniform (3 232 B fixed; the light ceiling is still 916), and the G-buffer shader now
+  imports the whole scene block instead of a copy cut at `num_lights`. Tests:
+  `rain_darkens_what_faces_up_and_leaves_a_wall_dry` (both paths: a wet floor keeps 0.84 of its light, a wall
+  0.999, and a wetness of 0 is the dry frame to the byte), `puddles_cover_the_share_of_the_ground_they_are_asked_to`,
+  and the baked forward/G-buffer parity test, now also in the rain. Leaving out the darkening, the facing-up test
+  or the coverage fit turns them red. One for the whole scene: a bridge's underside is as wet as the road beside
+  it — keeping what is under cover dry is a rain-occlusion map's work, not yet written.
+
 - **Screen-space reflections are glossy: a rough surface spreads what it reflects over its lobe, streaked
   towards the viewer.** The march found one mirror-direction hit per pixel, and roughness only faded it
   (`fade_start`/`fade_end`): a glossy floor showed a sharp, fainter copy of the scene — on wet asphalt, glass. A
