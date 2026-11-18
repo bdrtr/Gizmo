@@ -1347,6 +1347,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A visible object's data is copied once less, and its last-frame model only when something reads it.** The
+  collection dealt each object's instance, last-frame model and box into per-region arrays and then copied them on into
+  the instance array; it now deals them straight into the final layout (region A, then region B), kept between frames.
+  And an instance's last-frame model — looked up in the motion history, carried through every copy and uploaded — is
+  only of use to the G-buffer's velocity, which nothing reads without TAA, motion blur or SSR: without a reader none is
+  looked up or uploaded, and `gbuffer.wgsl` takes the current model in its place (a flag in the motion uniform), so the
+  velocity is the camera's motion alone — not the projection of a zero matrix. Static city, 11 685 draws: collection
+  3.9–4.2 → 3.2 ms. `nothing_drawn_forward_writes_velocity_nothing_reads` covers a cube drawn through the G-buffer too.
 - **The draw list is sorted by its keys, not by moving its items.** A `DrawItem` is some 200 bytes and a sort moves
   what it sorts O(n log n) times: sorting 11 685 of them was a sixth of the collection, most of it `memmove`. The
   (layer, depth, order, index) keys are sorted and the items then move once along the permutation's cycles

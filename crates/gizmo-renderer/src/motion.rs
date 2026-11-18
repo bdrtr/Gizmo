@@ -91,6 +91,8 @@ impl MotionHistory {
 struct MotionUniform {
     view_proj: Cols,
     prev_view_proj: Cols,
+    /// x = 1 when the previous models were uploaded this frame — see `set_view_projs`.
+    objects: [f32; 4],
 }
 
 /// Group 5 of the G-buffer pass: the view-projections and the previous model per instance.
@@ -141,7 +143,7 @@ impl MotionGpu {
         let identity = gizmo_math::Mat4::IDENTITY.to_cols_array_2d();
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("motion_view_projs"),
-            contents: bytemuck::bytes_of(&MotionUniform { view_proj: identity, prev_view_proj: identity }),
+            contents: bytemuck::bytes_of(&MotionUniform { view_proj: identity, prev_view_proj: identity, objects: [0.0; 4] }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let capacity = capacity.max(1);
@@ -171,8 +173,13 @@ impl MotionGpu {
     }
 
     /// Uploads this frame's and last frame's **unjittered** view-projections.
-    pub fn set_view_projs(&self, queue: &wgpu::Queue, view_proj: Cols, prev_view_proj: Cols) {
-        queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&MotionUniform { view_proj, prev_view_proj }));
+    ///
+    /// `objects`: whether this frame's previous models are uploaded ([`upload_previous`](Self::upload_previous)).
+    /// A frame that reads no velocity does not keep them; the shader then takes each instance's
+    /// current model as its previous one, and the velocity is the camera's motion alone.
+    pub fn set_view_projs(&self, queue: &wgpu::Queue, view_proj: Cols, prev_view_proj: Cols, objects: bool) {
+        let objects = [f32::from(u8::from(objects)), 0.0, 0.0, 0.0];
+        queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&MotionUniform { view_proj, prev_view_proj, objects }));
     }
 
     /// Uploads the previous model of every instance, in instance-buffer order. Grows the buffer

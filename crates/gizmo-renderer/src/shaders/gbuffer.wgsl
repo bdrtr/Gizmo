@@ -101,6 +101,11 @@ struct VertexOutput {
 struct Motion {
     view_proj: mat4x4<f32>,
     prev_view_proj: mat4x4<f32>,
+    // x = 1 when `previous_models` holds this frame's instances' last models. 0 when nothing reads
+    // the velocity and they were neither kept nor uploaded: the object half is then the current
+    // model, and the velocity is the camera's motion alone — still a number, never the projection
+    // of a zero matrix.
+    objects: vec4<f32>,
 };
 @group(5) @binding(0) var<uniform> motion: Motion;
 @group(5) @binding(1) var<storage, read> previous_models: array<mat4x4<f32>>;
@@ -163,7 +168,12 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_tint = vec3<f32>(1.0) - inst.optics.xyz;
     out.clip_position = scene.view_proj * world_pos;
     out.motion_now    = motion.view_proj * world_pos;
-    out.motion_before = motion.prev_view_proj * (previous_models[instance_idx] * vec4<f32>(skinned_pos.xyz, 1.0));
+    // `select` takes no matrices.
+    var before_model = model;
+    if (motion.objects.x > 0.5) {
+        before_model = previous_models[instance_idx];
+    }
+    out.motion_before = motion.prev_view_proj * (before_model * vec4<f32>(skinned_pos.xyz, 1.0));
     return out;
 }
 

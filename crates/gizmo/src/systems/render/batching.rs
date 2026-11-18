@@ -34,19 +34,20 @@ pub struct RenderCache {
     /// batch's own six vectors: in a scene where every object is its own batch (merged, unique
     /// meshes), that was a handful of scattered heap buffers touched per object, every frame.
     records: Vec<Record>,
-    /// The camera-visible instances of every batch, batch after batch (`BatchData::camera` is a
-    /// batch's run), with last frame's model and the world box of each, index for index.
-    camera_instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
-    camera_previous: Vec<[[f32; 4]; 4]>,
-    camera_bounds: Vec<crate::math::Aabb>,
-    /// The same for the off-screen shadow casters (`BatchData::shadow`).
-    shadow_instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
-    shadow_previous: Vec<[[f32; 4]; 4]>,
-    shadow_bounds: Vec<crate::math::Aabb>,
     /// Scratch: per slot, the two counts, then the two write cursors.
     cursors: Vec<[u32; 2]>,
-    /// Per-instance data for every batch, in the order the draw items index it.
+    /// Per-instance data for every batch, in the order the draw items index it and the GPU
+    /// buffer holds it: region A — every batch's camera-visible instances, batch after batch
+    /// (`BatchData::camera` is a batch's run) — then region B, every batch's off-screen shadow
+    /// casters (`BatchData::shadow`, counted from the end of region A). The records are dealt
+    /// straight into place: until 2026-11-18 they went into per-region arrays first and were copied
+    /// on into this one, a second copy of every visible object every frame.
     pub instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
+    /// Last frame's model of each instance, index for index — the object half of its velocity.
+    /// Filled only when something reads the velocity (`collect_draw_items`'s `velocity_read`).
+    previous: Vec<[[f32; 4]; 4]>,
+    /// The world box of each instance, index for index: what the shadow passes' runs are cut by.
+    bounds: Vec<crate::math::Aabb>,
     /// One entry per batch: the geometry to bind and how many instances of it to draw.
     pub draw_items: Vec<DrawItem>,
     /// The first-seen numbers `opaque_order` orders batches by.
@@ -652,6 +653,9 @@ pub(super) fn collect_draw_items(
     unjittered_view_proj: Mat4,
     shadow_vp: &[Mat4],
     cam_pos: Vec3,
+    // Whether anything reads the G-buffer's velocity this frame (TAA, motion blur, SSR). Without a
+    // reader there is no last-frame model to look up, keep or upload for any instance.
+    velocity_read: bool,
 ) -> (Vec<DrawItem>, u32) {
     let renderers = world.query::<&MeshRenderer>();
     // **`IsHidden` is honoured here, not only in `gizmo-studio`** — the same shape as `LodGroup`
@@ -710,9 +714,9 @@ pub(super) fn collect_draw_items(
         let mut cache = rc.borrow_mut();
         
         // Clear instances but keep allocations.
-        // `shadow_instances` MUST be cleared too: it is appended to every frame for
-        // off-screen shadow casters (line ~444) but the batches HashMap persists across
-        // frames, so leaving it uncleared made it grow without bound. Once the total
+        // Every per-instance array MUST start empty each collection: an earlier layout appended
+        // the off-screen shadow casters to a per-batch list that persisted across frames, and
+        // leaving it uncleared made it grow without bound. Once the total
         // instance count crossed `instance_capacity` (8192) the buffer upload truncated
         // the tail, so batches past the cap silently stopped drawing — meshes vanished
         // one by one as more frames accumulated ("araç giderek kayboluyor"). Which mesh
@@ -955,7 +959,11 @@ pub(super) fn collect_draw_items(
                 .with_shadow_receiving(mesh_renderer.receives_shadows);
                 // Where this entity was drawn last frame — the object half of its velocity.
                 let generation = $e.generation();
-                let previous_model = renderer.motion_history.previous($e.id(), generation, upload_model.to_cols_array_2d());
+                let previous_model = if velocity_read {
+                    renderer.motion_history.previous($e.id(), generation, upload_model.to_cols_array_2d())
+                } else {
+                    [[0.0; 4]; 4]
+                };
                 let skel_bg = $skeleton.map(|s: &crate::renderer::components::Skeleton| &s.bind_group);
 
                 // Compute the pass-routing flags up front so they can be part of the
@@ -1200,7 +1208,8 @@ pub(super) fn collect_draw_items(
 
         // Deal the records out into each batch's runs: count, place the runs batch after batch,
         // then copy every record to its batch's next index — walk order kept within a batch.
-        {
+        // `region_b`: where the off-screen casters start, after every camera-visible instance.
+        let region_b: usize = {
             let n = cache.batches.len();
             cache.cursors.clear();
             cache.cursors.resize(n, [0, 0]);
@@ -1215,39 +1224,38 @@ pub(super) fn collect_draw_items(
                 camera_at += batch.camera.1;
                 shadow_at += batch.shadow.1;
             }
+            // Straight into the final layout: region A, then region B after it.
             let zero = <crate::renderer::gpu_types::InstanceRaw as bytemuck::Zeroable>::zeroed();
-            let (camera_n, shadow_n) = (camera_at as usize, shadow_at as usize);
-            cache.camera_instances.resize(camera_n, zero);
-            cache.camera_previous.resize(camera_n, [[0.0; 4]; 4]);
-            cache.camera_bounds.resize(camera_n, crate::math::Aabb::empty());
-            cache.shadow_instances.resize(shadow_n, zero);
-            cache.shadow_previous.resize(shadow_n, [[0.0; 4]; 4]);
-            cache.shadow_bounds.resize(shadow_n, crate::math::Aabb::empty());
+            let (camera_n, total) = (camera_at as usize, (camera_at + shadow_at) as usize);
+            cache.instances.resize(total, zero);
+            cache.bounds.resize(total, crate::math::Aabb::empty());
+            cache.previous.clear();
+            if velocity_read {
+                cache.previous.resize(total, [[0.0; 4]; 4]);
+            }
             for record in &cache.records {
                 let cursor = &mut cache.cursors[record.slot as usize];
-                if record.camera {
-                    let at = cursor[0] as usize;
+                let at = if record.camera {
                     cursor[0] += 1;
-                    cache.camera_instances[at] = record.instance;
-                    cache.camera_previous[at] = record.previous;
-                    cache.camera_bounds[at] = record.bounds;
+                    cursor[0] as usize - 1
                 } else {
-                    let at = cursor[1] as usize;
                     cursor[1] += 1;
-                    cache.shadow_instances[at] = record.instance;
-                    cache.shadow_previous[at] = record.previous;
-                    cache.shadow_bounds[at] = record.bounds;
+                    camera_n + cursor[1] as usize - 1
+                };
+                cache.instances[at] = record.instance;
+                cache.bounds[at] = record.bounds;
+                if velocity_read {
+                    cache.previous[at] = record.previous;
                 }
             }
-        }
+            camera_n
+        };
         renderer.scene_extent.absorb(drawn_extent.get());
 
-        let mut local_instances: Vec<crate::renderer::gpu_types::InstanceRaw> = std::mem::take(&mut cache.instances);
         let mut local_draw_items: Vec<DrawItem> = std::mem::take(&mut cache.draw_items);
-        let mut local_previous: Vec<[[f32; 4]; 4]> = Vec::new();
 
         // Two-region instance layout. Region A = EVERY batch's camera-visible instances;
-        // region B (appended after A) = EVERY batch's shadow-only casters. The old layout
+        // region B (after A) = EVERY batch's shadow-only casters. The old layout
         // packed each batch as [camera][shadow] contiguously, so when the total exceeded
         // `instance_capacity` (8192) the tail truncation could drop a LATER batch's
         // camera-visible geometry because an EARLIER batch's shadow-only casters had already
@@ -1256,6 +1264,7 @@ pub(super) fn collect_draw_items(
         // never starves on-screen geometry. The two ranges are non-contiguous, so DrawItem
         // carries its camera range (first_instance/camera_count) and chunks over both regions,
         // which the shadow passes draw.
+        let shadow_run = |(start, len): (u32, u32)| region_b + start as usize..region_b + (start + len) as usize;
         // Blending is paint order — the transparent pipeline writes no depth — so a transparent
         // batch's instances have to be far-to-near too, not just the batches relative to each
         // other. Only the editor did this; the engine appended them in collection order, so two
@@ -1263,12 +1272,14 @@ pub(super) fn collect_draw_items(
         for batch in &cache.batches {
             if batch.is_transparent || batch.is_backdrop {
                 let range = run(batch.camera);
-                crate::renderer::sort_back_to_front(&mut cache.camera_instances[range.clone()], cam_pos);
+                crate::renderer::sort_back_to_front(&mut cache.instances[range.clone()], cam_pos);
                 // The sort reorders the instances but not their previous models. Neither layer is
                 // drawn into the G-buffer, so their velocity is never read — give them none rather
                 // than another instance's history.
-                for i in range {
-                    cache.camera_previous[i] = cache.camera_instances[i].model;
+                if velocity_read {
+                    for i in range {
+                        cache.previous[i] = cache.instances[i].model;
+                    }
                 }
             }
         }
@@ -1289,18 +1300,16 @@ pub(super) fn collect_draw_items(
                 if !shadows_drawn || !batch.casts_shadows || batch.is_transparent || batch.is_backdrop {
                     continue;
                 }
-                for (which, (instances, previous, bounds)) in [
-                    (batch.camera, (&mut cache.camera_instances, &mut cache.camera_previous, &mut cache.camera_bounds)),
-                    (batch.shadow, (&mut cache.shadow_instances, &mut cache.shadow_previous, &mut cache.shadow_bounds)),
-                ] {
-                    let range = run(which);
-                    let order = gizmo_renderer::shadow_culling::spatial_order(&bounds[range.clone()]);
+                for range in [run(batch.camera), shadow_run(batch.shadow)] {
+                    let order = gizmo_renderer::shadow_culling::spatial_order(&cache.bounds[range.clone()]);
                     if identity(&order) {
                         continue;
                     }
-                    permute(instances, range.clone(), &order, &mut scratch_instances);
-                    permute(previous, range.clone(), &order, &mut scratch_models);
-                    permute(bounds, range, &order, &mut scratch_bounds);
+                    permute(&mut cache.instances, range.clone(), &order, &mut scratch_instances);
+                    if velocity_read {
+                        permute(&mut cache.previous, range.clone(), &order, &mut scratch_models);
+                    }
+                    permute(&mut cache.bounds, range, &order, &mut scratch_bounds);
                 }
             }
         }
@@ -1310,9 +1319,9 @@ pub(super) fn collect_draw_items(
         // Region A — all camera-visible instances. One DrawItem per batch (shadow fields
         // filled in the region-B pass below; the batch list order is stable between passes).
         for batch in &batches {
-            let first_instance = local_instances.len() as u32;
+            let first_instance = batch.camera.0;
             let camera_count = batch.camera.1;
-            let camera_instances = &cache.camera_instances[run(batch.camera)];
+            let camera_instances = &cache.instances[run(batch.camera)];
             // Depth key matters for the two layers the depth buffer cannot sort: transparent
             // (no depth write) and backdrop (no depth write AND every vertex pinned to the
             // same depth). A backdrop's instances are camera-RELATIVE offsets, so their
@@ -1324,8 +1333,6 @@ pub(super) fn collect_draw_items(
             } else {
                 0.0
             };
-            local_instances.extend_from_slice(camera_instances);
-            local_previous.extend_from_slice(&cache.camera_previous[run(batch.camera)]);
             local_draw_items.push(DrawItem {
                 vbuf: batch.vbuf.clone(),
                 first_vertex: batch.first_vertex,
@@ -1362,7 +1369,7 @@ pub(super) fn collect_draw_items(
                 shadow_chunks: {
                     let mut chunks = Vec::new();
                     if shadows_drawn && batch.casts_shadows {
-                        gizmo_renderer::shadow_culling::chunk(&cache.camera_bounds[run(batch.camera)], first_instance, &mut chunks);
+                        gizmo_renderer::shadow_culling::chunk(&cache.bounds[run(batch.camera)], first_instance, &mut chunks);
                     }
                     chunks
                 },
@@ -1375,12 +1382,10 @@ pub(super) fn collect_draw_items(
         // DrawItem's shadow range (draw items were pushed in the same batch order above).
         let draw_item_base = local_draw_items.len() - batches.len();
         for (i, batch) in batches.iter().enumerate() {
-            let shadow_first_instance = local_instances.len() as u32;
-            local_instances.extend_from_slice(&cache.shadow_instances[run(batch.shadow)]);
-            local_previous.extend_from_slice(&cache.shadow_previous[run(batch.shadow)]);
+            let shadow_first_instance = (region_b + batch.shadow.0 as usize) as u32;
             let item = &mut local_draw_items[draw_item_base + i];
             if shadows_drawn && batch.casts_shadows {
-                gizmo_renderer::shadow_culling::chunk(&cache.shadow_bounds[run(batch.shadow)], shadow_first_instance, &mut item.shadow_chunks);
+                gizmo_renderer::shadow_culling::chunk(&cache.bounds[shadow_run(batch.shadow)], shadow_first_instance, &mut item.shadow_chunks);
             }
         }
 
@@ -1408,7 +1413,6 @@ pub(super) fn collect_draw_items(
         });
         permute_into_order(&mut local_draw_items, keys.iter().map(|k| k.3 as usize));
 
-        cache.instances = local_instances;
         cache.draw_items = local_draw_items;
 
         // Grow the buffer to what this frame actually needs — the same call the editor has always
@@ -1440,10 +1444,11 @@ pub(super) fn collect_draw_items(
                 bytemuck::cast_slice(instances_slice),
             );
         }
-        // Last frame's models, in the same order and cut at the same length as the instances.
-        if let Some(def) = renderer.deferred.as_mut() {
-            let n = instances_slice.len().min(local_previous.len());
-            def.motion.upload_previous(&renderer.device, &renderer.queue, &local_previous[..n]);
+        // Last frame's models, in the same order and cut at the same length as the instances — when
+        // anything reads the velocity they make.
+        if let Some(def) = renderer.deferred.as_mut().filter(|_| velocity_read) {
+            let n = instances_slice.len().min(cache.previous.len());
+            def.motion.upload_previous(&renderer.device, &renderer.queue, &cache.previous[..n]);
         }
         
         // The draw list is handed over, not copied: nothing reads the cache's copy after this, and

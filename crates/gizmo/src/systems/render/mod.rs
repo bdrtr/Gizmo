@@ -1691,21 +1691,23 @@ fn draw_camera_view_with(
         Some(previous) => Mat4::from_cols_array_2d(&previous) * unjittered_view_proj.inverse(),
         None => Mat4::IDENTITY,
     };
-    // The G-buffer's velocity needs the same pair, before the history moves on.
+    // Whether this frame reads the G-buffer's velocity at all: TAA reprojects by it, the camera's
+    // motion blur smears along it, SSR's temporal pass reprojects by it. Nothing else does, and
+    // without them the forward-drawn surfaces are not drawn a second time into it, and no
+    // instance's last-frame model is looked up, kept or uploaded (`collect_draw_items`).
+    let velocity_read =
+        post.motion_blur > 0.0 || renderer.taa.as_ref().is_some_and(|t| t.enabled) || renderer.ssr.is_some();
+    // The G-buffer's velocity needs the same pair, before the history moves on — and whether the
+    // instances' last models come with it.
     if let Some(def) = renderer.deferred.as_ref() {
         let now = unjittered_view_proj.to_cols_array_2d();
-        def.motion.set_view_projs(&renderer.queue, now, renderer.previous_view_proj.unwrap_or(now));
+        def.motion.set_view_projs(&renderer.queue, now, renderer.previous_view_proj.unwrap_or(now), velocity_read);
     }
     renderer.previous_view_proj = Some(unjittered_view_proj.to_cols_array_2d());
     let post = crate::renderer::PostProcessUniforms {
         reproject: reproject.to_cols_array_2d(),
         ..post
     };
-    // Whether this frame reads the G-buffer's velocity at all: TAA reprojects by it, the camera's
-    // motion blur smears along it, SSR's temporal pass reprojects by it. Nothing else does, and
-    // without them the forward-drawn surfaces are not drawn a second time into it.
-    let velocity_read =
-        post.motion_blur > 0.0 || renderer.taa.as_ref().is_some_and(|t| t.enabled) || renderer.ssr.is_some();
     renderer.update_post_process(
         &renderer.queue,
         post.with_camera(&camera).with_underwater(underwater),
@@ -1833,7 +1835,7 @@ fn draw_camera_view_with(
     // every local light's layers.
     laps.draw_lap(renderer, "view.setup");
     let (draw_items, uploaded_instances) =
-        batching::collect_draw_items(world, renderer, unjittered_view_proj, &setup.shadow_view_projs(), cam_pos);
+        batching::collect_draw_items(world, renderer, unjittered_view_proj, &setup.shadow_view_projs(), cam_pos, velocity_read);
     record_render_stats(renderer, &draw_items, elapsed_time);
     laps.draw_lap(renderer, "view.batch");
 
@@ -3863,7 +3865,7 @@ mod golden_render_tests {
                 crate::renderer::material_sync::sync_material_descriptions(&mut world);
                 let t2 = std::time::Instant::now();
                 let (items, uploaded) =
-                    super::batching::collect_draw_items(&world, &mut renderer, view_proj, &[view_proj; 4], cam);
+                    super::batching::collect_draw_items(&world, &mut renderer, view_proj, &[view_proj; 4], cam, true);
                 let t3 = std::time::Instant::now();
                 drawn = uploaded;
                 std::hint::black_box(items);
@@ -3976,7 +3978,7 @@ mod golden_render_tests {
             }
             let camera = world.spawn_bundle(CameraBundle {
                 position: Vec3::new(0.0, 60.0, 80.0),
-                yaw: -std::f32::consts::FRAC_PI_2,
+                yaw: std::env::var("GIZMO_CITY_YAW").ok().and_then(|y| y.parse().ok()).unwrap_or(-std::f32::consts::FRAC_PI_2),
                 pitch: -0.12,
                 fov: 1.2,
                 far: 20_000.0,
@@ -3985,7 +3987,10 @@ mod golden_render_tests {
             });
             // The bundle's `GlobalTransform` is the identity until a transform pass syncs it, and the
             // frame reads that one: placed here, as the game's update would have.
-            let turn = crate::renderer::components::Camera::rotation_from(-std::f32::consts::FRAC_PI_2, -0.12);
+            let turn = crate::renderer::components::Camera::rotation_from(
+                std::env::var("GIZMO_CITY_YAW").ok().and_then(|y| y.parse().ok()).unwrap_or(-std::f32::consts::FRAC_PI_2),
+                -0.12,
+            );
             world.add_component(
                 camera,
                 GlobalTransform { matrix: gizmo_math::Mat4::from_rotation_translation(turn, Vec3::new(0.0, 60.0, 80.0)) },
@@ -4095,7 +4100,7 @@ mod golden_render_tests {
             let view_proj = gizmo_math::Mat4::perspective_rh(1.0, 1.0, 0.1, 100.0)
                 * gizmo_math::Mat4::look_at_rh(cam, Vec3::ZERO, Vec3::Y);
             super::batching::clear_render_cache();
-            let (items, _) = super::batching::collect_draw_items(&world, &mut renderer, view_proj, &[view_proj; 4], cam);
+            let (items, _) = super::batching::collect_draw_items(&world, &mut renderer, view_proj, &[view_proj; 4], cam, true);
             super::batching::clear_render_cache();
             let opaque: Vec<_> = items.iter().filter(|i| i.layer == super::batching::DrawLayer::Opaque).collect();
             assert_eq!(opaque.len(), 6, "six objects, six batches");
@@ -4173,6 +4178,7 @@ mod golden_render_tests {
                 view_proj,
                 &[gizmo_math::Mat4::IDENTITY; 4],
                 Vec3::new(0.0, 0.0, 40.0),
+                true,
             );
 
             assert!(
@@ -7165,8 +7171,9 @@ mod golden_render_tests {
     /// of thousands of draws was recorded and validated twice per frame for a target nothing
     /// sampled (MOTOR-NOTLARI #29, 2026-11-18). Now the velocity of a forward-drawn cube stays zero
     /// when nothing reads it — and, as the test above shows, is written when something does. The
-    /// deferred cube writes its motion either way: the G-buffer pass writes velocity as one of its
-    /// targets, at no extra draw.
+    /// same goes for every instance's last-frame model, which the G-buffer's velocity is made from:
+    /// without a reader none is looked up, kept or uploaded, and a cube drawn through the G-buffer
+    /// shows the camera's motion alone.
     #[test]
     #[ignore = "needs a GPU adapter"]
     fn nothing_drawn_forward_writes_velocity_nothing_reads() {
@@ -7178,7 +7185,11 @@ mod golden_render_tests {
             return;
         }
         pollster::block_on(async {
-            for kind in ["unlit", "baked-lit"] {
+            // Drawn through the G-buffer too: there the velocity is one of the pass's targets and is
+            // written either way, but the cube's last-frame model is neither looked up, kept nor
+            // uploaded without a reader — so it holds the still camera's motion, none, rather than
+            // the cube's (or, as it briefly did, the projection of a zero matrix: −∞).
+            for kind in ["unlit", "baked-lit", "deferred"] {
                 let unread = forward_motion(kind, false, false).await;
                 assert_eq!(unread, [0.0, 0.0], "a cube drawn {kind} wrote its motion {unread:?} with nothing to read it");
                 let read = forward_motion(kind, false, true).await;
@@ -11369,10 +11380,10 @@ mod golden_render_tests {
             let view_proj = gizmo_math::Mat4::perspective_rh(1.0, 1.0, 0.1, 100.0)
                 * gizmo_math::Mat4::look_at_rh(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
             let cascade = gizmo_math::Mat4::orthographic_rh(-50.0, 50.0, -50.0, 50.0, -50.0, 50.0);
-            let (_, casting) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, &[cascade; 4], Vec3::ZERO);
+            let (_, casting) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, &[cascade; 4], Vec3::ZERO, true);
             assert_eq!(casting, 1, "the setup: as a caster it goes to the shadow maps");
             world.query_mut::<&mut MeshRenderer>().get_mut(e).expect("renderer").shadows = ShadowCasting::Off;
-            let (_, silent) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, &[cascade; 4], Vec3::ZERO);
+            let (_, silent) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, &[cascade; 4], Vec3::ZERO, true);
             assert_eq!(silent, 0, "unseen and casting nothing, and still uploaded");
         });
     }
