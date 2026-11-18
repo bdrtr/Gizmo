@@ -143,6 +143,11 @@ pub struct Material {
     /// The texture bind group — albedo, normal, metallic-roughness, occlusion, emissive and the
     /// per-material parameter buffer.
     pub bind_group: Arc<wgpu::BindGroup>,
+    /// The layer of a [`TexturePool`](crate::texture_pool::TexturePool) array the base colour is,
+    /// for a material made with [`Material::from_pool`]; `None` for one whose base colour is its own
+    /// texture (binding 0). Held: the layer stays this picture's while a clone of the material lives.
+    /// Runtime state, like the bind group, and not described ([`MaterialDesc`]).
+    pub pool: Option<crate::texture_pool::PoolSlot>,
     /// Base colour tint (linear), multiplied into the albedo texture. `w` is alpha.
     pub albedo: gizmo_math::Vec4,
     /// Perceptual roughness, 0 = mirror, 1 = fully diffuse.
@@ -617,6 +622,7 @@ impl From<&Material> for MaterialDesc {
     fn from(m: &Material) -> Self {
         let Material {
             bind_group: _,
+            pool: _,
             bound_maps: _,
             albedo,
             roughness,
@@ -674,6 +680,7 @@ impl MaterialDesc {
     pub fn into_material(self, bind_group: std::sync::Arc<wgpu::BindGroup>) -> Material {
         Material {
             bind_group,
+            pool: None,
             albedo: self.albedo,
             roughness: self.roughness,
             metallic: self.metallic,
@@ -999,6 +1006,17 @@ impl Material {
     /// and every extra knob at zero — [`MaterialDesc::default`] over `bind_group`.
     pub fn new(bind_group: Arc<wgpu::BindGroup>) -> Self {
         MaterialDesc::default().into_material(bind_group)
+    }
+
+    /// A neutral PBR material whose base colour is a picture in a
+    /// [`TexturePool`](crate::texture_pool::TexturePool): [`Material::new`] over the pool array's
+    /// bind group, with the picture's layer. Every material from one array has the same bind group,
+    /// so objects drawn with them batch together where their meshes share buffers.
+    #[must_use]
+    pub fn from_pool(texture: &crate::texture_pool::PooledTexture) -> Self {
+        let mut material = Self::new(texture.bind_group().clone());
+        material.pool = Some(texture.slot().clone());
+        material
     }
 
     /// Says that [`bind_group`](Self::bind_group) was built from [`maps`](Self::maps) as they are

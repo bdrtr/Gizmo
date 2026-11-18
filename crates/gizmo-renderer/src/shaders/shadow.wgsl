@@ -44,6 +44,9 @@ struct InstanceData {
     ambient: vec4<f32>,
     emissive: vec4<f32>,
     optics: vec4<f32>,
+    // `InstanceRaw::texture`: x = 0, the material's own base colour, or one more than its layer
+    // in the texture pool's array (`texture_pool`).
+    texture: vec4<f32>,
 };
 @group(3) @binding(0) var<storage, read> instances: array<InstanceData>;
 
@@ -73,6 +76,8 @@ struct VertexOutput {
     @location(8) inst_emissive: vec3<f32>,
     // The instance's cut-out threshold and LOD crossfade, `instance_keeps`.
     @location(9) inst_keep: f32,
+    // Where the base colour is (`InstanceRaw::texture.x`, `gizmo::material::base_colour`).
+    @location(10) @interpolate(flat) base_layer: u32,
 #endif
 };
 
@@ -127,6 +132,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_pbr = inst.pbr;
     out.inst_emissive = inst.emissive.xyz;
     out.inst_keep = inst.ambient.w;
+    out.base_layer = u32(inst.texture.x);
 #endif
     return out;
 }
@@ -148,6 +154,7 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
     input.metallic = in.inst_pbr.y;
     input.emissive = in.inst_emissive;
     input.front_facing = front;
+    input.base_layer = in.base_layer;
     input.frag_coord = in.clip_position;
     input.time = shadow_vs.params.x;
     input.camera_position = shadow_vs.camera_position.xyz;
@@ -155,7 +162,7 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
     return material_surface(input);
 #else
     return evaluate_surface(
-        in.tex_coords, in.normal, in.tangent, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive,
+        in.tex_coords, in.base_layer, in.normal, in.tangent, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive,
     );
 #endif
 }

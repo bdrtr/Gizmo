@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn the_shader_samples_the_mesh_texture_and_vertex_colour() {
         assert!(
-            SRC.contains("textureSample(t_diffuse, s_diffuse, in.tex_coords)"),
+            SRC.contains("base_colour(in.tex_coords, in.base_layer)"),
             "a backdrop that does not sample its texture is just the skybox again"
         );
         assert!(

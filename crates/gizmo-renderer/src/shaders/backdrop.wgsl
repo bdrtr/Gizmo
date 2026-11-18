@@ -26,6 +26,19 @@ var<uniform> scene: SceneUniforms;
 var t_diffuse: texture_2d<f32>;
 @group(1) @binding(1)
 var s_diffuse: sampler;
+// The texture pool's array (`texture_pool`): a pooled material's base colour is one of its layers.
+@group(1) @binding(8)
+var t_pool: texture_2d_array<f32>;
+
+// The base colour at `uv`: the material's own texture, or, for `layer` above zero, layer `layer - 1`
+// of its texture pool's array (`InstanceRaw::texture`) — `gizmo::material::base_colour`, for a shader
+// that declares group 1 itself. Both sampled, one chosen: a branch on a per-instance value would put
+// the sample in non-uniform control flow, and the one not wanted is a 1×1 placeholder.
+fn base_colour(uv: vec2<f32>, layer: u32) -> vec4<f32> {
+    let own = textureSample(t_diffuse, s_diffuse, uv);
+    let pooled = textureSample(t_pool, s_diffuse, uv, i32(max(layer, 1u) - 1u));
+    return select(own, pooled, layer > 0u);
+}
 
 // The shadow group (native slot 2) and the skeleton group are part of the shared forward
 // pipeline layout but are deliberately NOT declared here: a backdrop receives no shadow and is
@@ -44,6 +57,9 @@ struct InstanceRaw {
     emissive: vec4<f32>,
     // `InstanceRaw::optics`: xyz = 1 − specular tint, w = 0xFFFFFF − a glass's volume (8 bits a channel).
     optics: vec4<f32>,
+    // `InstanceRaw::texture`: x = 0, the material's own base colour, or one more than its layer
+    // in the texture pool's array (`texture_pool`).
+    texture: vec4<f32>,
 };
 
 @group(#{INSTANCE_GROUP}) @binding(0)
@@ -68,6 +84,8 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     @location(1) tex_coords: vec2<f32>,
     @location(2) inst_albedo: vec4<f32>,
+    // Where the base colour is (`InstanceRaw::texture.x`, `base_colour`).
+    @location(3) @interpolate(flat) base_layer: u32,
 };
 
 @vertex
@@ -104,6 +122,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.color = input.color;
     out.tex_coords = input.tex_coords;
     out.inst_albedo = inst.albedo_color;
+    out.base_layer = u32(inst.texture.x);
     return out;
 }
 
@@ -117,7 +136,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // a pixel value, and this layout always has it (a source with no colours is normalised to
     // opaque white at import — `gpu_types::Vertex::default`). Under such a test a panel the
     // author painted black would come out white.
-    let tex = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    let tex = base_colour(in.tex_coords, in.base_layer);
     let rgb = in.color.rgb * in.inst_albedo.rgb * tex.rgb;
     let alpha = in.color.a * in.inst_albedo.a * tex.a;
     return vec4<f32>(rgb, alpha);

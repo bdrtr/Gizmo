@@ -52,6 +52,9 @@ struct SurfaceInput {
     // Whether the front face is the one drawn. The engine turns the normal round for a back face
     // after `material_surface` returns, so a surface describes its front.
     front_facing: bool,
+    // Where the material's base colour is: 0 its own texture, otherwise one more than its layer in
+    // the texture pool's array (`InstanceRaw::texture.x`). `gizmo::material::standard_surface` reads it.
+    base_layer: u32,
     // `@builtin(position)`: the fragment's pixel centre and depth.
     frag_coord: vec4<f32>,
     // Seconds since the renderer started: the clock `SceneUniforms` carries.

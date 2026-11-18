@@ -55,6 +55,9 @@ struct InstanceData {
     emissive: vec4<f32>,
     // `InstanceRaw::optics`: xyz = 1 − specular tint, w = 0xFFFFFF − a glass's volume (8 bits a channel).
     optics: vec4<f32>,
+    // `InstanceRaw::texture`: x = 0, the material's own base colour, or one more than its layer
+    // in the texture pool's array (`texture_pool`).
+    texture: vec4<f32>,
 };
 
 struct VertexInput {
@@ -89,6 +92,8 @@ struct VertexOutput {
     @location(12) inst_keep: f32,
     // `Material::specular_tint`, from `1 − optics.xyz`.
     @location(13) inst_tint: vec3<f32>,
+    // Where the base colour is (`InstanceRaw::texture.x`, `gizmo::material::base_colour`).
+    @location(14) @interpolate(flat) base_layer: u32,
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
@@ -166,6 +171,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_coat_roughness = inst.ambient.z;
     out.inst_keep = inst.ambient.w;
     out.inst_tint = vec3<f32>(1.0) - inst.optics.xyz;
+    out.base_layer = u32(inst.texture.x);
     out.clip_position = scene.view_proj * world_pos;
     out.motion_now    = motion.view_proj * world_pos;
     // `select` takes no matrices.
@@ -214,6 +220,7 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
     input.metallic = in.inst_pbr.y;
     input.emissive = in.inst_emissive.xyz;
     input.front_facing = front;
+    input.base_layer = in.base_layer;
     input.frag_coord = in.clip_position;
     input.time = scene.cascade_params.z;
     input.camera_position = scene.camera_pos.xyz;
@@ -221,7 +228,7 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
     return material_surface(input);
 #else
     return evaluate_surface(
-        in.tex_coords.xy, in.normal, in.world_tangent.xyz, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
+        in.tex_coords.xy, in.base_layer, in.normal, in.world_tangent.xyz, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
     );
 #endif
 }

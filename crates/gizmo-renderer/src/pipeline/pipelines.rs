@@ -909,6 +909,59 @@ mod tests {
         assert_eq!(o.cull, Some(wgpu::Face::Back), "opaque baked-lit must stay backface-culled");
     }
 
+    /// **The forward-only path's room, measured by wgpu** — the browser's and the phone's, where
+    /// WebGPU's 16 sampled textures a stage is the limit the device has, not a margin. Its layout is
+    /// four groups (global, material, skeleton, instance), and group 0 carries the probe cubes, the
+    /// sun's cascades and the local lights' maps that the desktop keeps in groups of its own. As
+    /// [`the_forward_lit_layout_has_room_for_material_maps`]: the skeleton group, which has no
+    /// texture, is swapped for one of `n` fragment textures, and the largest `n` that validates is
+    /// the room left. Nothing measured it until 2026-11-18, when the texture pool's array took a
+    /// slot of the material group on every path.
+    #[cfg(gizmo_forward_only)]
+    #[test]
+    fn the_forward_only_layout_fits_webgpu() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::NOOP,
+            backend_options: wgpu::BackendOptions {
+                noop: wgpu::NoopBackendOptions { enable: true, ..Default::default() },
+                ..Default::default()
+            },
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("the noop adapter");
+        let limits = wgpu::Limits { max_bind_groups: 4, max_sampled_textures_per_shader_stage: 16, ..wgpu::Limits::default() };
+        let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_limits: limits, ..Default::default() }))
+            .expect("a noop device");
+        let layouts = crate::pipeline::layouts::build_layouts(&device);
+        let room = (0..=16u32)
+            .take_while(|&n| {
+                let entries: Vec<wgpu::BindGroupLayoutEntry> = (0..n)
+                    .map(|binding| wgpu::BindGroupLayoutEntry {
+                        binding,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    })
+                    .collect();
+                let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+                let probe = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("room"), entries: &entries });
+                let _layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("forward-only, skeleton swapped"),
+                    bind_group_layouts: &[Some(&layouts.global), Some(&layouts.texture), Some(&probe), Some(&layouts.instance)],
+                    immediate_size: 0,
+                });
+                pollster::block_on(scope.pop()).is_none()
+            })
+            .last()
+            .unwrap_or(0);
+        eprintln!("the forward-only layout has room for {room} more sampled textures");
+        assert!(room >= 1, "the forward-only layout has room for {room} more sampled textures of 16");
+    }
+
     /// **Room for another material map, measured by wgpu.** WebGPU allows 16 sampled textures a
     /// stage, and a pipeline layout counts every one its groups offer whether a shader reads it or
     /// not. On the desktop the forward lit layout held 15 — two of them on group 0 for the
@@ -966,7 +1019,9 @@ mod tests {
             })
             .last()
             .unwrap_or(0);
-        assert!(room >= 3, "the forward lit layout has room for {room} more sampled textures of 16");
+        // 3 until 2026-11-18, when the texture pool's array (material binding 8) took one; the
+        // forward-only layout has the same two left (`the_forward_only_layout_fits_webgpu`).
+        assert!(room >= 2, "the forward lit layout has room for {room} more sampled textures of 16");
         eprintln!("the forward lit layout has room for {room} more sampled textures");
     }
 }

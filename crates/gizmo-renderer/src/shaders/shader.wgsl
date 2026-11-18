@@ -170,6 +170,9 @@ struct InstanceData {
     emissive: vec4<f32>,
     // `InstanceRaw::optics`: xyz = 1 − specular tint, w = 0xFFFFFF − a glass's volume (8 bits a channel).
     optics: vec4<f32>,
+    // `InstanceRaw::texture`: x = 0, the material's own base colour, or one more than its layer
+    // in the texture pool's array (`texture_pool`).
+    texture: vec4<f32>,
 };
 
 @group(#{INSTANCE_GROUP}) @binding(0)
@@ -209,10 +212,12 @@ struct VertexOutput {
     @location(9) bitangent: vec3<f32>,
 #ifdef TRANSMISSION
     @location(10) inst_glass: vec2<f32>,  // Material::transmission, Material::thickness
-    // `Material::volume_transmittance`, packed in `optics.w`: flat, because an interpolated float that
-    // large would not hold its low bits.
-    @location(12) @interpolate(flat) inst_volume: u32,
 #endif
+    // Flat, for integers an interpolated float would not hold: x = `Material::volume_transmittance`,
+    // packed in `optics.w` (read by the glass tier alone, zero elsewhere); y = where the base colour
+    // is (`InstanceRaw::texture.x`, `gizmo::material::base_colour`). One location for both — the
+    // glass tier uses every other one there is, and WebGL2 allows fifteen.
+    @location(12) @interpolate(flat) inst_flat: vec2<u32>,
 #ifdef LOBES
     @location(11) inst_coat_roughness: f32,  // Material::clear_coat_roughness
 #endif
@@ -291,7 +296,9 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_emissive = inst.emissive;
 #ifdef TRANSMISSION
     out.inst_glass = inst.ambient.xy;
-    out.inst_volume = 0xFFFFFFu - u32(inst.optics.w);
+    out.inst_flat = vec2<u32>(0xFFFFFFu - u32(inst.optics.w), u32(inst.texture.x));
+#else
+    out.inst_flat = vec2<u32>(0u, u32(inst.texture.x));
 #endif
 #ifdef LOBES
     out.inst_coat_roughness = inst.ambient.z;
@@ -368,6 +375,7 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
     input.metallic = in.inst_pbr.y;
     input.emissive = in.inst_emissive.xyz;
     input.front_facing = front;
+    input.base_layer = in.inst_flat.y;
     input.frag_coord = in.clip_position;
     input.time = scene.cascade_params.z;
     input.camera_position = scene.camera_pos.xyz;
@@ -379,7 +387,7 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
     return material_surface(input);
 #else
     return evaluate_surface(
-        in.tex_coords.xy, in.normal, in.tangent, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
+        in.tex_coords.xy, in.inst_flat.y, in.normal, in.tangent, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
     );
 #endif
 }
@@ -847,7 +855,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
 #ifdef TRANSMISSION
     // After the fog: the frame behind has its own up to that surface.
     let tint = select(surface.albedo, through, volume);
-    final_color += transmitted_light(in.world_position, N, view_dir, NdV, tint, f0, surface.roughness, dielectric_f0(in.inst_emissive.w), in.inst_glass.y) * glass * volume_transmittance(in.inst_volume);
+    final_color += transmitted_light(in.world_position, N, view_dir, NdV, tint, f0, surface.roughness, dielectric_f0(in.inst_emissive.w), in.inst_glass.y) * glass * volume_transmittance(in.inst_flat.x);
 #endif
 
 #ifdef DETAILS

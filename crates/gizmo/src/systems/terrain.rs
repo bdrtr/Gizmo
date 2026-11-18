@@ -143,7 +143,7 @@ pub fn terrain_mesh_system(world: &mut crate::core::World, renderer: &Renderer) 
             let white = renderer.create_texture(&[255, 255, 255, 255], 1, 1);
             world.add_component(
                 entity,
-                crate::prelude::Material::new(std::sync::Arc::new(white)),
+                crate::prelude::Material::new(white),
             );
         }
         if !world.query::<&MeshRenderer>().contains(id) {

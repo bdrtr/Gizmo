@@ -4955,6 +4955,126 @@ mod golden_render_tests {
         });
     }
 
+    /// **A material from the texture pool draws as the same material made with its own texture, and
+    /// shares a batch.** `TexturePool` puts pictures of one size in layers of a shared array with one
+    /// bind group; the instance says which layer (`InstanceRaw::texture`) and every shader that reads
+    /// the base colour reads it there (`base_colour`). Seven objects: three textures of one size
+    /// (layers 0, 1 and 2 of one array — a wrong layer is another colour), one of another size, two
+    /// objects sharing a texture, through every route that samples the base colour — baked-lit and
+    /// unlit forward, lit through the G-buffer and the sun's shadow map, and a cut-out, whose depth
+    /// prepass and shadow caster discard by the texture's alpha. The frame from the pool must equal the
+    /// frame from textures of their own to the byte, and draw from fewer batches: materials of one
+    /// array over the arena's shared buffers are one.
+    #[test]
+    fn pooled_textures_draw_as_their_own_and_share_a_batch() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        type Vertex = crate::renderer::gpu_types::Vertex;
+        let placed = |by: Vec3, scale: f32| -> Vec<Vertex> {
+            cube_vertices()
+                .into_iter()
+                .map(|mut v| {
+                    v.position = (Vec3::from(v.position) * scale + by).to_array();
+                    v
+                })
+                .collect()
+        };
+        // A picture with a pattern, so that a wrong mip or a wrong layer is a wrong colour; `hole` cuts
+        // a transparent quarter for the cut-out.
+        let picture = |size: u32, tint: [u8; 3], hole: bool| -> Vec<u8> {
+            (0..size * size)
+                .flat_map(|i| {
+                    let (x, y) = (i % size, i / size);
+                    let check = ((x / 2 + y / 2) % 2) as u8;
+                    let alpha = if hole && x < size / 2 && y < size / 2 { 0 } else { 255 };
+                    [tint[0] / (1 + check), tint[1] / (1 + check), tint[2] / (1 + check), alpha]
+                })
+                .collect()
+        };
+        let textures = [
+            (8, picture(8, [230, 60, 40], false)),
+            (8, picture(8, [40, 220, 60], false)),
+            (8, picture(8, [50, 70, 240], true)),
+            (16, picture(16, [240, 220, 40], false)),
+        ];
+        // (texture, route, where)
+        let pieces: [(usize, &str, Vec3); 7] = [
+            (0, "baked", Vec3::new(0.0, 0.0, -3.0)),
+            (1, "baked", Vec3::new(0.0, 0.0, -1.0)),
+            (1, "baked", Vec3::new(0.0, 1.6, -2.0)),
+            (2, "cutout", Vec3::new(0.0, 0.0, 1.0)),
+            (3, "lit", Vec3::new(0.0, 0.0, 3.0)),
+            (0, "unlit", Vec3::new(0.0, -1.6, 2.0)),
+            (3, "baked", Vec3::new(0.0, 1.6, 2.0)),
+        ];
+        async fn frame(pooled: bool, textures: &[(u32, Vec<u8>)], pieces: &[(usize, &str, Vec3)], placed: &dyn Fn(Vec3, f32) -> Vec<Vertex>) -> (Vec<u8>, usize) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut assets = AssetManager::new();
+            let layout = renderer.scene.texture_bind_group_layout.clone();
+            let made: Vec<Material> = textures
+                .iter()
+                .enumerate()
+                .map(|(i, (size, rgba))| {
+                    let key = format!("pooled_or_not_{i}");
+                    if pooled {
+                        let texture = renderer.texture_pool.colour(rgba, *size, *size, &key).expect("the picture pools");
+                        Material::from_pool(&texture)
+                    } else {
+                        let bind_group = assets
+                            .install_decoded_material_texture(&renderer.device, &renderer.queue, &layout, &key, rgba, *size, *size)
+                            .expect("the picture installs");
+                        Material::new(bind_group)
+                    }
+                })
+                .collect();
+            let mut world = World::new();
+            for (texture, route, at) in pieces {
+                let base = made[*texture].clone();
+                let material = match *route {
+                    "baked" => base.with_baked_lit(Vec4::ONE),
+                    "unlit" => base.with_unlit(Vec4::ONE),
+                    "cutout" => base.with_pbr(Vec4::ONE, 0.6, 0.0).with_alpha_cutoff(0.5),
+                    _ => base.with_pbr(Vec4::ONE, 0.6, 0.0),
+                };
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::ZERO));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, renderer.mesh_arena.triangle_list(&placed(*at, 0.7), "piece"));
+                world.add_component(e, material);
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(-9.0, 0.5, 0.0), yaw: 0.0, pitch: -0.05, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            super::batching::clear_render_cache();
+            let pixels = render_world(&mut renderer, &mut world).await;
+            let batches = super::batching::render_cache_batch_count();
+            if pooled {
+                let stats = renderer.texture_pool.stats();
+                assert_eq!((stats.arrays, stats.used), (2, 4), "the setup: two sizes, four pictures ({stats:?})");
+            }
+            super::batching::clear_render_cache();
+            (pixels, batches)
+        }
+        pollster::block_on(async {
+            let (own, own_batches) = frame(false, &textures, &pieces, &placed).await;
+            let (pooled, pooled_batches) = frame(true, &textures, &pieces, &placed).await;
+            let coloured = own.as_chunks::<4>().0.iter().filter(|p| p[0].max(p[1]).max(p[2]) > 40).count();
+            assert!(coloured > 800, "the setup: the objects are in the frame ({coloured} coloured pixels)");
+            let differing = own.iter().zip(&pooled).filter(|(a, b)| a != b).count();
+            assert_eq!(differing, 0, "{differing} bytes differ between textures of their own and pooled ones");
+            assert!(
+                pooled_batches < own_batches,
+                "pooled materials of one array share a batch: {pooled_batches} batches against {own_batches}"
+            );
+        });
+    }
+
     /// **A run of draws merged into one multi-draw draws what the draws did, to the byte.** Every pass
     /// that draws meshes records through a `PassPlan`, which draws a run sharing a pipeline, a
     /// material and a buffer as one `multi_draw_indirect` when the device has
@@ -15122,6 +15242,7 @@ struct InstanceRaw {
     albedo_color: vec4<f32>, pbr: vec4<f32>, ambient: vec4<f32>, emissive: vec4<f32>,
     // `InstanceRaw::optics`: xyz = 1 − specular tint, w = 0xFFFFFF − a glass's volume (8 bits a channel).
     optics: vec4<f32>,
+    texture: vec4<f32>,
 };
 @group(#{INSTANCE_GROUP}) @binding(0) var<storage, read> instances: array<InstanceRaw>;
 struct VIn {

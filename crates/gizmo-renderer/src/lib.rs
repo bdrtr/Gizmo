@@ -119,6 +119,7 @@ pub mod material_sync;
 pub mod property_animation;
 pub mod mesh_sync;
 pub mod mesh_arena;
+pub mod texture_pool;
 pub mod text_sync;
 pub mod sprite_sync;
 /// Clustered light culling — which lights can reach which part of the frame.

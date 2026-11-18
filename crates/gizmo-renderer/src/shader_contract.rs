@@ -163,6 +163,7 @@ fn instance_layout() -> Vec<(&'static str, u32)> {
         ("ambient", offset_of!(InstanceRaw, ambient) as u32),
         ("emissive", offset_of!(InstanceRaw, emissive) as u32),
         ("optics", offset_of!(InstanceRaw, optics) as u32),
+        ("texture", offset_of!(InstanceRaw, texture) as u32),
     ]
 }
 

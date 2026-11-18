@@ -15,6 +15,19 @@ var<uniform> scene: SceneUniforms;
 var t_diffuse: texture_2d<f32>;
 @group(1) @binding(1)
 var s_diffuse: sampler;
+// The texture pool's array (`texture_pool`): a pooled material's base colour is one of its layers.
+@group(1) @binding(8)
+var t_pool: texture_2d_array<f32>;
+
+// The base colour at `uv`: the material's own texture, or, for `layer` above zero, layer `layer - 1`
+// of its texture pool's array (`InstanceRaw::texture`) — `gizmo::material::base_colour`, for a shader
+// that declares group 1 itself. Both sampled, one chosen: a branch on a per-instance value would put
+// the sample in non-uniform control flow, and the one not wanted is a 1×1 placeholder.
+fn base_colour(uv: vec2<f32>, layer: u32) -> vec4<f32> {
+    let own = textureSample(t_diffuse, s_diffuse, uv);
+    let pooled = textureSample(t_pool, s_diffuse, uv, i32(max(layer, 1u) - 1u));
+    return select(own, pooled, layer > 0u);
+}
 
 struct SkeletonData {
     joints: array<mat4x4<f32>, 128>, // Maksimum 64 kemik destegi
@@ -35,6 +48,9 @@ struct InstanceRaw {
     emissive: vec4<f32>,
     // `InstanceRaw::optics`: xyz = 1 − specular tint, w = 0xFFFFFF − a glass's volume (8 bits a channel).
     optics: vec4<f32>,
+    // `InstanceRaw::texture`: x = 0, the material's own base colour, or one more than its layer
+    // in the texture pool's array (`texture_pool`).
+    texture: vec4<f32>,
 };
 
 @group(#{INSTANCE_GROUP}) @binding(0)
@@ -54,6 +70,8 @@ struct VertexOutput {
     @location(0) color: vec3<f32>,
     @location(1) tex_coords: vec2<f32>,
     @location(2) inst_albedo: vec4<f32>,
+    // Where the base colour is (`InstanceRaw::texture.x`, `base_colour`).
+    @location(4) @interpolate(flat) base_layer: u32,
 #ifdef KEEPS
     @location(3) inst_keep: f32,
 #endif
@@ -92,6 +110,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     let world_pos = model * vec4<f32>(skinned_pos.xyz, 1.0);
     
     out.inst_albedo = inst.albedo_color;
+    out.base_layer = u32(inst.texture.x);
     out.clip_position = scene.view_proj * world_pos;
 #ifdef KEEPS
     out.inst_keep = inst.ambient.w;
@@ -102,7 +121,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    let tex_color = base_colour(in.tex_coords, in.base_layer);
 #ifdef KEEPS
     if (!instance_keeps(in.inst_keep, tex_color.a * in.inst_albedo.a, in.clip_position.xy)) {
         discard;

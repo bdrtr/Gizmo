@@ -438,9 +438,7 @@ pub fn render_studio(
                                     let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);
                                     world.add_component(
                                         ent,
-                                        gizmo::prelude::Material::new(std::sync::Arc::new(
-                                            dummy_bg,
-                                        )),
+                                        gizmo::prelude::Material::new(dummy_bg),
                                     );
                                 }
 

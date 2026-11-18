@@ -120,6 +120,7 @@ pub(super) fn prepare(
     .with_alpha_cutoff(mat.alpha_cutoff)
     .with_reflectance(mat.reflectance)
     .with_lit_extras_of(mat)
+    .with_texture_of(mat)
     .with_shadow_receiving(mesh_renderer.receives_shadows);
     // How much a mirror reflects, for its shader alone: no other pipeline draws this batch while it
     // has a capture, and the plain one ignores `ambient`.

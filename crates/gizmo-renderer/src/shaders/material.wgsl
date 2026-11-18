@@ -26,6 +26,19 @@ struct MaterialParams {
 @group(1) @binding(5) var t_ao:       texture_2d<f32>;  // r=occlusion
 @group(1) @binding(6) var<uniform> material: MaterialParams;
 @group(1) @binding(7) var t_lightmap: texture_2d<f32>; // baked light, linear, at the second UV set
+// The texture pool's array (`texture_pool`): a pooled material's base colour is one of its layers.
+@group(1) @binding(8) var t_pool: texture_2d_array<f32>;
+
+// The base colour at `uv`: the material's own texture, or, for `layer` above zero, layer `layer - 1`
+// of its texture pool's array (`InstanceRaw::texture`). Both are sampled and one chosen: a branch on
+// a per-instance value would put the sample in non-uniform control flow, where implicit derivatives
+// are not allowed, and the one not wanted is a 1×1 placeholder — the material's own slot holds one
+// in a pooled material, the pool's in any other.
+fn base_colour(uv: vec2<f32>, layer: u32) -> vec4<f32> {
+    let own = textureSample(t_diffuse, s_diffuse, uv);
+    let pooled = textureSample(t_pool, s_diffuse, uv, i32(max(layer, 1u) - 1u));
+    return select(own, pooled, layer > 0u);
+}
 
 // The material's baked light where its lightmap puts `lightmap_uv` (the vertex's second UV set,
 // untransformed): rgb the light, times the material's strength, and `w` 1 when the material has a
@@ -57,6 +70,8 @@ fn surface_uv(uv: vec2<f32>) -> vec2<f32> {
 // interpolated.
 fn evaluate_surface(
     uv: vec2<f32>,
+    // `InstanceRaw::texture.x`: where the base colour is (`base_colour`).
+    base_layer: u32,
     N: vec3<f32>,
     T: vec3<f32>,
     B: vec3<f32>,
@@ -65,7 +80,7 @@ fn evaluate_surface(
     inst_pbr: vec4<f32>,
     inst_emissive: vec3<f32>,
 ) -> Surface {
-    let tex_color = textureSample(t_diffuse, s_diffuse, uv);
+    let tex_color = base_colour(uv, base_layer);
 
     // ── Normal map (tangent-space → world) ────────────────────────────────
     // Flat-default map (0.5,0.5,1.0) → (0,0,1) → geometric normal unchanged.
@@ -109,6 +124,7 @@ fn evaluate_surface(
 fn standard_surface(input: SurfaceInput) -> Surface {
     return evaluate_surface(
         surface_uv(input.uv),
+        input.base_layer,
         input.N,
         input.T,
         input.B,

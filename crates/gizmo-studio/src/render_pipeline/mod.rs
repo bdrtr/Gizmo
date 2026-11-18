@@ -344,6 +344,7 @@ fn draw_studio_frame(
                 .with_lod_fade(lod_fade)
                 .with_reflectance(mat.reflectance)
                 .with_lit_extras_of(mat)
+                .with_texture_of(mat)
                 .with_shadow_receiving(renderers.get(e).map(|r| r.receives_shadows).unwrap_or(true));
 
                 // --- SKELETON (KEMİK) ARAMASI ---

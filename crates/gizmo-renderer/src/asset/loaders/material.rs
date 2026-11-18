@@ -310,6 +310,7 @@ pub(super) fn build_gltf_materials(
                     ao_view,
                     &defaults.white_view,
                     &params_buffer,
+                    &defaults.pool_placeholder_view,
                     &format!("gltf_material_{}", material.index().unwrap_or(usize::MAX)),
                 )
             };

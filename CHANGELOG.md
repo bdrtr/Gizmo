@@ -50,6 +50,38 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`TexturePool`: many textures of one size in a few shared arrays, materials from one array in one batch.** A
+  batch is the buffers and the material's bind group, so objects with different textures never shared a draw: in
+  `nfsu2-gizmo`'s city, 3 872 draws at the measured spot, and a third of the main thread was wgpu tracking every
+  texture of every bind group set (`set_bind_group`, `merge_bind_group`). `renderer.texture_pool.colour(rgba, w, h,
+  label)` puts a picture into a layer of a 2D array with others of its size — uploaded and mipmapped as
+  `install_decoded_material_texture` does, then copied level by level — and `Material::from_pool` makes a material
+  over the array's one bind group, its layer held for as long as a clone of the material lives
+  (`Material::pool`). The instance carries the layer (`InstanceRaw::texture`, a tenth `vec4`: 160 bytes) and every
+  shader that reads the base colour reads it through `base_colour(uv, layer)` from the material group's new binding
+  8 (`texture_2d_array`; two white layers in a material that is not pooled, because a one-layer array is a plain
+  2D texture to WebGL2). The forward lit shader carries the layer in the flat slot its glass volume had, now a
+  `vec2<u32>`: its glass tier uses every location WebGL2 allows. City, highway spot, 1080p, paired runs: 3 872 →
+  440 draws, frame ~18.2 → ~11.8 ms on the Radeon 780M and ~11.4 → ~5.9 ms on the RTX 3050 — the Bevy port of
+  the same city draws there in 8.6–9.4 and 5.6–6.1 ms. Test `pooled_textures_draw_as_their_own_and_share_a_batch`
+  (seven objects, three textures in one array and one of another size, through baked-lit, unlit, the G-buffer,
+  the shadow map and a cut-out's prepass: the pooled frame equals the frame with textures of their own to the
+  byte, from fewer batches); `the_forward_only_layout_fits_webgpu` measures the browser path's texture room against
+  WebGPU's 16, which nothing did.
+
+### Changed
+
+- **A custom shader that declares the instance struct declares `texture: vec4<f32>` after `optics`**, and one that
+  builds a `SurfaceInput` sets `base_layer`; `CustomMaterial::from_wgsl` names both sizes when the struct is
+  short. A shader-graph `Texture` node reads the base colour through `base_colour`, so it follows a pooled
+  material's layer.
+
+### Fixed
+
+- **`Renderer::create_texture` built a material bind group with seven entries for an eight-entry layout** — the
+  terrain's and the editor's stand-in white material. It goes through `assemble_single_texture_bind_group` like
+  every other single-texture material, and returns an `Arc<wgpu::BindGroup>`.
+
 - **The draw collection keeps what an object draws between frames, and works it out again only when the object
   changes.** `collect_draw_items` worked everything out about every object every collection — world matrix and box,
   instance data, batch key and the batch it names — reading each object's `Mesh`, `Material`, `GlobalTransform` and

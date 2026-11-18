@@ -221,10 +221,121 @@ pub(crate) struct MaterialDefaults {
     // Keep the GPU textures alive for as long as any bind group references their views.
     _flat_normal_tex: wgpu::Texture,
     _white_tex: wgpu::Texture,
+    _pool_placeholder_tex: wgpu::Texture,
     pub flat_normal_view: wgpu::TextureView,
     pub white_view: wgpu::TextureView,
+    /// What binding 8, the texture pool's array, holds in a material that is not from a pool: two
+    /// 1×1 white layers. Two, not one: an array of one layer is a plain 2D texture to WebGL2, which
+    /// cannot then be bound where an array is declared.
+    pub pool_placeholder_view: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
     pub params_buffer: wgpu::Buffer,
+}
+
+impl MaterialDefaults {
+    /// The neutral maps, sampler and parameters every material's unset slots take — made once per
+    /// asset manager (`AssetManager::ensure_material_defaults`) and once per texture pool.
+    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let mk_linear_1x1 = |label: &str, pixel: [u8; 4]| -> (wgpu::Texture, wgpu::TextureView) {
+            let size = wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            };
+            let tex = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                // Linear (NOT sRGB) — normal / MR / AO carry data, not colour.
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &pixel,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4),
+                    rows_per_image: Some(1),
+                },
+                size,
+            );
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            (tex, view)
+        };
+
+        // Flat tangent-space normal (0.5, 0.5, 1.0) and neutral-white multiplier.
+        let (flat_normal_tex, flat_normal_view) =
+            mk_linear_1x1("__default_flat_normal__", [128, 128, 255, 255]);
+        let (white_tex, white_view) = mk_linear_1x1("__default_white_map__", [255, 255, 255, 255]);
+
+        // Tiled, blended and mipmapped: what a texture loaded by path is read through
+        // (`install_decoded_material_texture`) and what glTF says a texture with no sampler gets.
+        // It was nearest everywhere, so a texture handed to the builder with no sampler of its own —
+        // every material built from `MaterialMaps`, and a reopened glTF model — read as hard texels
+        // and shimmered at a distance, unlike the same texture loaded any other way.
+        let sampler = crate::texture_quality::material_sampler(
+            device,
+            "material_default_sampler",
+            wgpu::AddressMode::Repeat,
+            wgpu::AddressMode::Repeat,
+            wgpu::FilterMode::Linear,
+            wgpu::FilterMode::Linear,
+            true,
+        );
+
+        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("__default_material_params__"),
+            contents: bytemuck::cast_slice(&[crate::gpu_types::MaterialParams::default()]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        // Two white layers for binding 8 of a material that is not from a texture pool.
+        let pool_placeholder_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("__texture_pool_placeholder__"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 2 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &pool_placeholder_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255u8; 8],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 2 },
+        );
+        let pool_placeholder_view = pool_placeholder_tex.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+
+        Self {
+            _flat_normal_tex: flat_normal_tex,
+            _white_tex: white_tex,
+            _pool_placeholder_tex: pool_placeholder_tex,
+            flat_normal_view,
+            white_view,
+            pool_placeholder_view,
+            sampler,
+            params_buffer,
+        }
+    }
 }
 
 /// The renderer's asset cache: what has been loaded, under which key, and how a UUID maps to a
@@ -340,77 +451,7 @@ impl AssetManager {
         if self.material_defaults.is_some() {
             return;
         }
-
-        let mk_linear_1x1 = |label: &str, pixel: [u8; 4]| -> (wgpu::Texture, wgpu::TextureView) {
-            let size = wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            };
-            let tex = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                // Linear (NOT sRGB) — normal / MR / AO carry data, not colour.
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &tex,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &pixel,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4),
-                    rows_per_image: Some(1),
-                },
-                size,
-            );
-            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            (tex, view)
-        };
-
-        // Flat tangent-space normal (0.5, 0.5, 1.0) and neutral-white multiplier.
-        let (flat_normal_tex, flat_normal_view) =
-            mk_linear_1x1("__default_flat_normal__", [128, 128, 255, 255]);
-        let (white_tex, white_view) = mk_linear_1x1("__default_white_map__", [255, 255, 255, 255]);
-
-        // Tiled, blended and mipmapped: what a texture loaded by path is read through
-        // (`install_decoded_material_texture`) and what glTF says a texture with no sampler gets.
-        // It was nearest everywhere, so a texture handed to the builder with no sampler of its own —
-        // every material built from `MaterialMaps`, and a reopened glTF model — read as hard texels
-        // and shimmered at a distance, unlike the same texture loaded any other way.
-        let sampler = crate::texture_quality::material_sampler(
-            device,
-            "material_default_sampler",
-            wgpu::AddressMode::Repeat,
-            wgpu::AddressMode::Repeat,
-            wgpu::FilterMode::Linear,
-            wgpu::FilterMode::Linear,
-            true,
-        );
-
-        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("__default_material_params__"),
-            contents: bytemuck::cast_slice(&[crate::gpu_types::MaterialParams::default()]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-
-        self.material_defaults = Some(MaterialDefaults {
-            _flat_normal_tex: flat_normal_tex,
-            _white_tex: white_tex,
-            flat_normal_view,
-            white_view,
-            sampler,
-            params_buffer,
-        });
+        self.material_defaults = Some(MaterialDefaults::new(device, queue));
     }
 
     /// Assemble a full 7-entry textured-PBR material bind group from explicit
@@ -429,6 +470,7 @@ impl AssetManager {
         ao_view: &wgpu::TextureView,
         lightmap_view: &wgpu::TextureView,
         params_buffer: &wgpu::Buffer,
+        pool_view: &wgpu::TextureView,
         label: &str,
     ) -> Arc<wgpu::BindGroup> {
         Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -466,6 +508,10 @@ impl AssetManager {
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: wgpu::BindingResource::TextureView(lightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(pool_view),
                 },
             ],
         }))
@@ -525,6 +571,7 @@ impl AssetManager {
             &d.white_view,
             &d.white_view,
             &d.params_buffer,
+            &d.pool_placeholder_view,
             label,
         )
     }
@@ -1616,6 +1663,7 @@ impl<'a> MaterialBuilder<'a> {
             self.occlusion.unwrap_or(&d.white_view),
             self.lightmap.unwrap_or(&d.white_view),
             self.params.unwrap_or(&d.params_buffer),
+            &d.pool_placeholder_view,
             self.label.unwrap_or("material"),
         )
     }

@@ -26,6 +26,19 @@ var<uniform> scene: SceneUniforms;
 var t_diffuse: texture_2d<f32>;
 @group(1) @binding(1)
 var s_diffuse: sampler;
+// The texture pool's array (`texture_pool`): a pooled material's base colour is one of its layers.
+@group(1) @binding(8)
+var t_pool: texture_2d_array<f32>;
+
+// The base colour at `uv`: the material's own texture, or, for `layer` above zero, layer `layer - 1`
+// of its texture pool's array (`InstanceRaw::texture`) — `gizmo::material::base_colour`, for a shader
+// that declares group 1 itself. Both sampled, one chosen: a branch on a per-instance value would put
+// the sample in non-uniform control flow, and the one not wanted is a 1×1 placeholder.
+fn base_colour(uv: vec2<f32>, layer: u32) -> vec4<f32> {
+    let own = textureSample(t_diffuse, s_diffuse, uv);
+    let pooled = textureSample(t_pool, s_diffuse, uv, i32(max(layer, 1u) - 1u));
+    return select(own, pooled, layer > 0u);
+}
 // The material's constants (`gpu_types::MaterialParams`; only the lightmap's strength, `uv_scale.w`,
 // is read here) and its lightmap: a baked-lit surface whose light is a picture rather than its
 // vertex colours.
@@ -66,6 +79,9 @@ struct InstanceRaw {
     emissive: vec4<f32>,
     // `InstanceRaw::optics`: xyz = 1 − specular tint, w = 0xFFFFFF − a glass's volume (8 bits a channel).
     optics: vec4<f32>,
+    // `InstanceRaw::texture`: x = 0, the material's own base colour, or one more than its layer
+    // in the texture pool's array (`texture_pool`).
+    texture: vec4<f32>,
 };
 
 @group(#{INSTANCE_GROUP}) @binding(0)
@@ -94,6 +110,8 @@ struct VertexOutput {
     @location(5) inst_ambient: vec3<f32>,
     @location(6) inst_emissive: vec4<f32>,  // w < 0: receives no shadows
     @location(7) inst_cutoff: f32,
+    // Where the base colour is (`InstanceRaw::texture.x`, `base_colour`).
+    @location(9) @interpolate(flat) base_layer: u32,
 #ifdef SUN_SHADOWS
 #ifdef SUN_SHADOW_PER_VERTEX
     // Where the sun's one cascade sees this point (`sun_shadow_coord`).
@@ -122,6 +140,7 @@ fn vs_main(input: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput 
     out.inst_ambient = inst.ambient.rgb;
     out.inst_emissive = inst.emissive;
     out.inst_cutoff = inst.ambient.w;
+    out.base_layer = u32(inst.texture.x);
     // Only for the shadow's normal offset — nothing here shades with it.
     out.world_normal = normalize((model * vec4<f32>(input.normal, 0.0)).xyz);
 #ifdef SUN_SHADOWS
@@ -190,7 +209,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let surface_axes = receiver_axes(dpdx(in.world_pos), dpdy(in.world_pos), n);
 #endif
 #endif
-    let tex = textureSample(t_diffuse, s_diffuse, in.tex_coords.xy);
+    let tex = base_colour(in.tex_coords.xy, in.base_layer);
 
     // **Cut-outs.** Foliage on a quad, a chain-link fence, a pierced railing: opaque geometry
     // with holes in it. Discarding the holes keeps the draw in the opaque pass — depth written,

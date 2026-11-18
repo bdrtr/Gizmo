@@ -99,6 +99,25 @@ impl super::AssetManager {
         height: u32,
         format: wgpu::TextureFormat,
     ) -> (wgpu::TextureView, u32) {
+        let (texture, mip_level_count) =
+            Self::upload_rgba_mipped(device, queue, label, rgba, width, height, format, crate::texture_quality::MIPPED_TEXTURE_USAGE);
+        (texture.create_view(&wgpu::TextureViewDescriptor::default()), mip_level_count)
+    }
+
+    /// [`Self::upload_rgba_texture`]'s texture itself, with its mip count: what the texture pool
+    /// copies into a layer of its array (it asks for `COPY_SRC` in `usage` too), so that a pooled
+    /// picture is the same pixels at every level.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn upload_rgba_mipped(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        label: &str,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        usage: wgpu::TextureUsages,
+    ) -> (wgpu::Texture, u32) {
         let texture_size = wgpu::Extent3d {
             width,
             height,
@@ -113,7 +132,7 @@ impl super::AssetManager {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: crate::texture_quality::MIPPED_TEXTURE_USAGE,
+            usage,
             label: Some(label),
             view_formats: &[],
         });
@@ -139,7 +158,7 @@ impl super::AssetManager {
                 .generate(device, queue, &texture, mip_level_count);
         }
 
-        (texture.create_view(&wgpu::TextureViewDescriptor::default()), mip_level_count)
+        (texture, mip_level_count)
     }
 
     /// A texture's view, read from `path_or_uuid` as [`load_material_texture`](Self::load_material_texture)
@@ -409,6 +428,7 @@ impl super::AssetManager {
             &d.white_view,
             &d.white_view,
             &d.params_buffer,
+            &d.pool_placeholder_view,
             KEY,
         );
         self.texture_cache.insert(KEY.to_string(), bg.clone());

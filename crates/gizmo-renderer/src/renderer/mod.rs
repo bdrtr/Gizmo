@@ -359,6 +359,11 @@ pub struct Renderer {
     /// once, and the forward pass draws a run of them sharing a pipeline and a material as one
     /// indirect multi-draw. For many static meshes — a merged city — see [`crate::mesh_arena`].
     pub mesh_arena: crate::mesh_arena::MeshArena,
+    /// Shared texture arrays, a bind group each, for textures of one size
+    /// ([`TexturePool::colour`](crate::texture_pool::TexturePool::colour)): materials made from them
+    /// ([`Material::from_pool`](crate::components::Material::from_pool)) share a batch where their
+    /// meshes share buffers. For many textures — a city — see [`crate::texture_pool`].
+    pub texture_pool: crate::texture_pool::TexturePool,
     /// Whether the passes may merge a run of draws into one indirect multi-draw: the device has
     /// `INDIRECT_FIRST_INSTANCE`, which a merged draw starting past instance 0 needs. Set from the
     /// device; turned off, the passes draw one draw at a time, which is the same frame.
@@ -1737,8 +1742,9 @@ mod tests {
         // 160 since 2026-11-01: camera motion blur, a vec4 (shutter, max, pad) and the reprojection
         // matrix. 176 since 2026-11-07: bloom's composite mode.
         assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 192, "PostProcessUniforms is 192 bytes since the bokeh shape (`dof_shape`) joined it");
-        // 144 since 2026-11-08: `optics`, the specular tint and the glass volume.
-        assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 144, "InstanceRaw size shifted from target 144 bytes!");
+        // 144 since 2026-11-08: `optics`, the specular tint and the glass volume. 160 since 2026-11-18:
+        // `texture`, the base colour's layer in a texture pool.
+        assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 160, "InstanceRaw size shifted from target 160 bytes!");
         // Textured-PBR per-material params: three std140 vec4 slots.
         assert_eq!(std::mem::size_of::<crate::gpu_types::MaterialParams>(), 48, "MaterialParams size shifted from target 48 bytes!");
         assert_eq!(std::mem::align_of::<crate::gpu_types::MaterialParams>(), 4, "MaterialParams alignment unexpected!");

@@ -295,6 +295,8 @@ pub fn rebind_changed_materials(world: &mut World, renderer: &crate::Renderer) {
         let bind_group = renderer.material_bind_group(sources.texture_source.as_deref(), &sources.maps);
         if let Some(mut material) = world.query_mut::<&mut Material>().get_mut(entity) {
             material.bind_group = bind_group;
+            // Built from its sources, so its base colour is its own texture: no pool layer any more.
+            material.pool = None;
             // A clone of it spawned elsewhere is then taken as it is, not built a second time.
             material.mark_maps_bound();
         }

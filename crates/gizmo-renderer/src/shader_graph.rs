@@ -891,7 +891,7 @@ impl ShaderGraph {
         let mut wgsl = String::from(
             "// Generated from a shader graph (gizmo_renderer::shader_graph).\n\
              #import gizmo::surface::{Surface, SurfaceInput}\n\
-             #import gizmo::material::{standard_surface, surface_uv, t_diffuse, s_diffuse, t_normal, t_mr, t_emissive, t_ao}\n\n",
+             #import gizmo::material::{standard_surface, surface_uv, base_colour, t_diffuse, s_diffuse, t_normal, t_mr, t_emissive, t_ao}\n\n",
         );
         if noise {
             wgsl.push_str(NOISE_WGSL);
@@ -1133,7 +1133,8 @@ fn node_exprs(node: &GraphNode, id: NodeId, a: &[String], any: ValueType, body: 
             "surface.N".into(),
         ],
         Texture => {
-            let _ = writeln!(body, "    let n{}_texel = textureSample(t_diffuse, s_diffuse, {});", id.0, a[0]);
+            // The base colour where the material keeps it: its own texture, or its layer of a pool.
+            let _ = writeln!(body, "    let n{}_texel = base_colour({}, input.base_layer);", id.0, a[0]);
             vec![format!("n{}_texel.rgb", id.0), format!("n{}_texel.a", id.0)]
         }
         // As the engine's material reads it (`gizmo::material::evaluate_surface`): a flat map is the

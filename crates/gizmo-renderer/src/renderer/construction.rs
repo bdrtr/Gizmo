@@ -690,6 +690,7 @@ impl Renderer {
 
         let mut renderer = Self {
             mesh_arena: crate::mesh_arena::MeshArena::new(&device, &queue),
+            texture_pool: crate::texture_pool::TexturePool::new(&device, &queue, &scene_state.texture_bind_group_layout),
             // A device with `INDIRECT_FIRST_INSTANCE` has indirect execution too: the feature is a
             // desktop's and WebGPU's, and neither WebGL nor any adapter without indirect draws
             // offers it.

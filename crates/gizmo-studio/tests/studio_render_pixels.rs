@@ -2738,7 +2738,7 @@ const MAGENTA_PIPELINE: &str = "#import gizmo::common::{SceneUniforms}
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 struct InstanceRaw {
     m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, m3: vec4<f32>,
-    albedo_color: vec4<f32>, pbr: vec4<f32>, ambient: vec4<f32>, emissive: vec4<f32>, optics: vec4<f32>,
+    albedo_color: vec4<f32>, pbr: vec4<f32>, ambient: vec4<f32>, emissive: vec4<f32>, optics: vec4<f32>, texture: vec4<f32>,
 };
 @group(#{INSTANCE_GROUP}) @binding(0) var<storage, read> instances: array<InstanceRaw>;
 struct VIn { @location(0) position: vec3<f32> };

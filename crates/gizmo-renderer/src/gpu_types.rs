@@ -505,8 +505,9 @@ impl From<&crate::local_shadows::LocalShadowLayer> for LocalShadowLayerRaw {
 /// anisotropy/clear-coat/subsurface slot is packed, and assembling it at a call site is how the
 /// engine and the studio came to pack it two incompatible ways.
 ///
-/// Every shader that indexes `array<InstanceRaw>` must declare all eight `vec4`s, or `instances[i]`
-/// reads the wrong offsets for every `i > 0`.
+/// Every shader that indexes `array<InstanceRaw>` must declare all ten `vec4`s (the model's four,
+/// then `albedo_color`, `pbr`, `ambient`, `emissive`, `optics`, `texture`), or `instances[i]` reads
+/// the wrong offsets for every `i > 0`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct InstanceRaw {
@@ -549,6 +550,16 @@ pub struct InstanceRaw {
     /// volume had been packed into the route flag. A custom shader that declares the instance struct
     /// has to declare this too; `CustomMaterial::from_wgsl` says so if it does not.
     pub optics: [f32; 4],
+    /// Where the base colour is: x = 0 for the material's own texture (group 1, binding 0), or one
+    /// more than its layer in the texture pool's array (binding 8) for a material made from a
+    /// [`TexturePool`](crate::texture_pool::TexturePool) — see [`InstanceRaw::with_texture_of`].
+    /// yzw unused, zero.
+    ///
+    /// Per instance because materials from one pool share one bind group, and with it one batch:
+    /// which of the array's pictures an object shows is the one thing about its material the bind
+    /// group cannot say. Added 2026-11-18, with the pool; a custom shader that declares the
+    /// instance struct declares this too (`CustomMaterial::from_wgsl` says so).
+    pub texture: [f32; 4],
 }
 
 impl InstanceRaw {
@@ -601,7 +612,17 @@ impl InstanceRaw {
             ambient: [ambient[0].max(0.0), ambient[1].max(0.0), ambient[2].max(0.0), 0.0],
             emissive: [emissive[0].max(0.0), emissive[1].max(0.0), emissive[2].max(0.0), 0.0],
             optics: [0.0; 4],
+            texture: [0.0; 4],
         }
+    }
+
+    /// Carry where `material`'s base colour is: a layer of its texture pool's array, or (zero) its
+    /// own texture. See [`InstanceRaw::texture`].
+    #[must_use]
+    #[inline]
+    pub fn with_texture_of(mut self, material: &crate::components::Material) -> Self {
+        self.texture[0] = material.pool.as_ref().map_or(0.0, |slot| (slot.layer() + 1) as f32);
+        self
     }
 
     /// Carry a cut-out threshold in the slot `ambient.w` has always reserved.
@@ -876,10 +897,11 @@ mod tests {
         // 96 (was 92) since the vertex colour became RGBA; 104 since the lightmap's UV set.
         assert_eq!(std::mem::size_of::<Vertex>(), 104, "Vertex stride");
         assert_eq!(std::mem::size_of::<LightData>(), 64, "LightData = 4×vec4");
-        // 128 (was 96) since `ambient` + `emissive` joined it. EVERY shader that indexes
-        // `array<InstanceRaw>` must declare the same 8 vec4s or `instances[i]` reads the
-        // wrong offsets for i > 0 — see `every_instance_shader_declares_the_full_struct`.
-        assert_eq!(std::mem::size_of::<InstanceRaw>(), 144, "InstanceRaw");
+        // 128 (was 96) since `ambient` + `emissive` joined it, 144 with `optics`, 160 with `texture`.
+        // EVERY shader that indexes `array<InstanceRaw>` must declare the same ten vec4s or
+        // `instances[i]` reads the wrong offsets for i > 0 — see
+        // `every_instance_shader_declares_the_full_struct`.
+        assert_eq!(std::mem::size_of::<InstanceRaw>(), 160, "InstanceRaw");
         assert_eq!(std::mem::size_of::<MaterialParams>(), 48, "MaterialParams = 3×vec4");
         assert_eq!(std::mem::size_of::<LocalShadowLayerRaw>(), 80, "LocalShadowLayerRaw = mat4 + vec4");
         // The fixed part is 3 216 bytes (560 until `fog` / `fog_shape` and `shadow_bias` were
@@ -987,9 +1009,10 @@ mod tests {
     #[test]
     fn instance_with_zero_knobs_is_byte_identical_to_the_pre_knob_record() {
         // The bit-identical-defaults promise, checked rather than hoped: a material that sets
-        // no knob produces the same first 96 bytes it always did, and the 48 after them are all
+        // no knob produces the same first 96 bytes it always did, and the 64 after them are all
         // zero — which is what makes the shader's `(lit + ambient) * base + emissive` collapse back
-        // to `lit * base`, and `optics` read as a white tint and no volume.
+        // to `lit * base`, `optics` read as a white tint and no volume, and `texture` as the
+        // material's own base colour.
         let i = InstanceRaw::new(
             [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             [1.0, 1.0, 1.0, 1.0],
@@ -1003,7 +1026,7 @@ mod tests {
             [0.0; 3],
         );
         let bytes = bytemuck::bytes_of(&i);
-        assert_eq!(&bytes[96..], &[0u8; 48], "unset knobs must be all-zero bytes");
+        assert_eq!(&bytes[96..], &[0u8; 64], "unset knobs must be all-zero bytes");
         assert_eq!(std::mem::offset_of!(InstanceRaw, ambient), 96);
         assert_eq!(std::mem::offset_of!(InstanceRaw, emissive), 112);
     }

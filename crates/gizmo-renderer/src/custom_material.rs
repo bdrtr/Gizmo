@@ -205,7 +205,7 @@ impl CustomMaterial {
     /// If the shader declares the instance buffer with another element size than
     /// [`InstanceRaw`](crate::gpu_types::InstanceRaw)'s: it would read the wrong instance for every
     /// index above 0, with nothing to say so, and the record grows when the engine needs a field (it
-    /// gained `optics` on 2026-11-08). The message names both sizes. Otherwise never directly, but `wgpu`
+    /// gained `optics` on 2026-11-08 and `texture` on 2026-11-18). The message names both sizes. Otherwise never directly, but `wgpu`
     /// will report a shader that fails to compile through the device's error scope, as it does for
     /// every pipeline in the engine.
     #[must_use]
@@ -809,7 +809,7 @@ fn check_instance_stride(composed: &str) -> Result<(), String> {
                 return Err(format!(
                     "its instance struct is {stride} bytes and the engine's `InstanceRaw` is {want}: declare every \
                      field `gpu_types::InstanceRaw` has, in order (`model_matrix_0`..`3`, `albedo_color`, `pbr`, \
-                     `ambient`, `emissive`, `optics`), or `instances[i]` reads the wrong instance for every i > 0"
+                     `ambient`, `emissive`, `optics`, `texture`), or `instances[i]` reads the wrong instance for every i > 0"
                 ));
             }
         }
@@ -819,9 +819,9 @@ fn check_instance_stride(composed: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    /// A custom shader declaring the instance struct as it was before `optics` (eight vec4s) is told
-    /// so, with both sizes, rather than reading the wrong instance for every index above 0; the
-    /// struct as it is now, and a shader with no instance buffer at all, pass.
+    /// A custom shader declaring the instance struct as it was before `optics` (eight vec4s) or before
+    /// `texture` (nine) is told so, with both sizes, rather than reading the wrong instance for every
+    /// index above 0; the struct as it is now, and a shader with no instance buffer at all, pass.
     #[test]
     fn a_custom_shader_with_the_old_instance_struct_is_told_so() {
         let group = if cfg!(gizmo_forward_only) { 3 } else { 4 };
@@ -833,9 +833,12 @@ mod tests {
             )
         };
         let old = "m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, m3: vec4<f32>, a: vec4<f32>, p: vec4<f32>, b: vec4<f32>, e: vec4<f32>,";
-        let err = super::check_instance_stride(&shader(old)).expect_err("eight vec4s are the old record");
-        assert!(err.contains("128") && err.contains("144") && err.contains("optics"), "{err}");
-        let now = format!("{old} o: vec4<f32>,");
+        let err = super::check_instance_stride(&shader(old)).expect_err("eight vec4s are an old record");
+        assert!(err.contains("128") && err.contains("160") && err.contains("optics"), "{err}");
+        let before_texture = format!("{old} o: vec4<f32>,");
+        let err = super::check_instance_stride(&shader(&before_texture)).expect_err("nine vec4s are an old record");
+        assert!(err.contains("144") && err.contains("160") && err.contains("texture"), "{err}");
+        let now = format!("{before_texture} t: vec4<f32>,");
         assert_eq!(super::check_instance_stride(&shader(&now)), Ok(()));
         let none = "@vertex fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }";
         assert_eq!(super::check_instance_stride(none), Ok(()), "a shader that reads no instances");

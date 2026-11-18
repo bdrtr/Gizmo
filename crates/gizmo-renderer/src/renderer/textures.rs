@@ -83,7 +83,11 @@ impl Renderer {
 
     /// Uploads RGBA8 pixels and returns a material bind group over them, built against
     /// [`SceneState::texture_bind_group_layout`](crate::pipeline::SceneState::texture_bind_group_layout).
-    pub fn create_texture(&self, rgba_bytes: &[u8], width: u32, height: u32) -> wgpu::BindGroup {
+    ///
+    /// Through `AssetManager::assemble_single_texture_bind_group`, as every other single-texture
+    /// material: until 2026-11-18 it built its own seven-entry group, which the layout's eighth
+    /// entry (the lightmap) made invalid — the terrain's and the editor's stand-in white material.
+    pub fn create_texture(&self, rgba_bytes: &[u8], width: u32, height: u32) -> std::sync::Arc<wgpu::BindGroup> {
         let mip_level_count = crate::texture_quality::mip_level_count(width, height);
         let size = wgpu::Extent3d {
             width,
@@ -134,50 +138,14 @@ impl Renderer {
             wgpu::FilterMode::Linear,
             mip_level_count > 1,
         );
-        // Fill the auxiliary textured-PBR slots (normal/MR/emissive/AO/params) with
-        // the shared neutral defaults so this bind group matches the 7-entry layout.
-        self.asset_manager
-            .write()
-            .unwrap()
-            .ensure_material_defaults(&self.device, &self.queue);
-        let am = self.asset_manager.read().unwrap();
-        let d = am
-            .material_defaults()
-            .expect("material defaults ensured above");
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.scene.texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&d.flat_normal_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&d.white_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&d.white_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&d.white_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: d.params_buffer.as_entire_binding(),
-                },
-            ],
-            label: Some("texture_bind_group"),
-        })
+        self.asset_manager.write().unwrap_or_else(std::sync::PoisonError::into_inner).assemble_single_texture_bind_group(
+            &self.device,
+            &self.queue,
+            &self.scene.texture_bind_group_layout,
+            &view,
+            &sampler,
+            "texture_bind_group",
+        )
     }
 
 }

@@ -96,6 +96,8 @@ fn apply_completed_textures(world: &World) {
             if let Some(mut mat) = materials.entity(eid as u32).and_then(|e| materials.get_mut(e)) {
                 if still_wants(mat.texture_source.as_deref(), &path) && streams(&path, &mat.maps) {
                     mat.bind_group = bind_group.clone();
+                    // Its own texture now, not a layer of a pool's array.
+                    mat.pool = None;
                 }
             }
         }
