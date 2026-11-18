@@ -229,6 +229,7 @@ fn record_veil_depth(
     pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
     pass.set_bind_group(BG_INSTANCE, renderer.scene.view_instance_bind_group(), &[]);
     pass.set_bind_group(5, &def.motion.bind_group, &[]);
+    let mut plan = super::plan::PassPlan::default();
     for item in blended {
         if !item.visible_in_camera || item.blend_mode == crate::renderer::components::BlendMode::Additive {
             continue;
@@ -251,12 +252,13 @@ fn record_veil_depth(
             None if item.discards => &def.z_prepass_discard_pipelines[1],
             None => &def.z_prepass_double_sided_pipeline,
         };
-        pass.set_pipeline(pipeline);
+        plan.set_pipeline(pipeline);
         let skeleton = item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-        pass.set_bind_group(3, skeleton.as_ref(), &[]);
-        pass.set_bind_group(1, &*item.bind_group, &[]);
-        item.record_draw(&mut pass, instances);
+        plan.set_bind_group(3, skeleton.as_ref());
+        plan.set_bind_group(1, &item.bind_group);
+        item.plan_draw(&mut plan, instances);
     }
+    plan.replay(&mut pass, &renderer.device, renderer.multi_draw);
     #[cfg(not(gizmo_forward_only))]
     if let Some((particles, depth)) = particles.as_ref() {
         particles.record_veil(&mut pass, renderer.scene.view_bind_group(), depth, particles.active_particles);

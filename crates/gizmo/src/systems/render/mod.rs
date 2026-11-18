@@ -223,8 +223,9 @@ fn record_render_stats(renderer: &mut Renderer, items: &[batching::DrawItem], el
     for item in items.iter().filter(|i| i.visible_in_camera && i.camera_count > 0) {
         stats.draw_calls += 1;
         stats.instances += item.camera_count;
-        let indices = if item.ibuf.is_some() { item.index_count } else { item.vertex_count };
-        stats.triangles += (indices / 3) * item.camera_count;
+        // Each instance's own range: a batch's instances may be different meshes sharing buffers.
+        let range = item.first_instance as usize..(item.first_instance + item.camera_count) as usize;
+        stats.triangles += item.ranges.get(range).map_or(0, |r| r.iter().map(|r| r.count / 3).sum());
     }
     let previous = renderer
         .render_stats
@@ -4110,6 +4111,66 @@ mod golden_render_tests {
                 std::sync::Arc::ptr_eq(&opaque[0].bind_group, &materials[0]),
                 "the material seen first is drawn first"
             );
+        });
+    }
+
+    /// **Meshes sharing an arena buffer and a material are one batch.** A batch is the buffers, the
+    /// material and the routing; where each instance's mesh lies in the buffers is the instance's own
+    /// (`MeshRange`). Six different meshes in the renderer's `MeshArena` with one material used to be
+    /// six batches — every per-batch cost of the frame, six times; in a merged city, 14 620 times
+    /// for 68 materials. Now they are one, its six instances each with its own range; and six copies
+    /// of one mesh are one batch whose instances share a range, which `plan_draw` draws as one
+    /// instanced draw.
+    #[test]
+    fn arena_meshes_of_one_material_are_one_batch() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let shared = renderer.mesh_arena.triangle_list(&cube_vertices(), "copied");
+            for i in 0..12 {
+                let mesh = if i < 6 {
+                    let squashed: Vec<_> = cube_vertices()
+                        .into_iter()
+                        .map(|mut v| {
+                            v.position[1] *= 0.3 + 0.1 * i as f32;
+                            v
+                        })
+                        .collect();
+                    renderer.mesh_arena.triangle_list(&squashed, "own shape")
+                } else {
+                    shared.clone()
+                };
+                let material = if i < 6 { Material::new(white.clone()).with_baked_lit(Vec4::ONE) } else { Material::new(white.clone()).with_unlit(Vec4::ONE) };
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(i as f32 * 2.5 - 14.0, 0.0, 0.0)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, mesh);
+                world.add_component(e, material);
+                world.add_component(e, MeshRenderer::new());
+            }
+            crate::systems::render::ensure_global_transforms(&mut world);
+            let cam = Vec3::new(0.0, 3.0, 40.0);
+            let view_proj = gizmo_math::Mat4::perspective_rh(1.2, 1.0, 0.1, 200.0) * gizmo_math::Mat4::look_at_rh(cam, Vec3::ZERO, Vec3::Y);
+            super::batching::clear_render_cache();
+            let (items, _) = super::batching::collect_draw_items(&world, &mut renderer, view_proj, &[view_proj; 4], cam, false);
+            super::batching::clear_render_cache();
+            let drawn: Vec<_> = items.iter().filter(|i| i.camera_count > 0).collect();
+            assert_eq!(drawn.len(), 2, "two materials, one buffer: two batches, not {}", drawn.len());
+            for item in drawn {
+                assert_eq!(item.camera_count, 6, "each batch holds its six instances");
+                let ranges: Vec<_> = (item.first_instance..item.first_instance + 6).map(|i| item.ranges[i as usize]).collect();
+                let distinct = ranges.iter().collect::<std::collections::HashSet<_>>().len();
+                assert!(distinct == 6 || distinct == 1, "six shapes or six copies, got {distinct} ranges");
+            }
         });
     }
 

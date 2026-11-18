@@ -50,6 +50,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Meshes sharing buffers and a material are one batch, each instance with its own range.** A batch was keyed by
+  its mesh — buffer and, since `MeshArena`, where in it the mesh starts — so a merged city was one batch per piece:
+  14 620 batches for 68 materials, and every per-batch cost of the frame (idle bookkeeping, dealing cursors, a
+  `DrawItem` with its handles, the draw-order sort) paid 14 620 times. The key is now the buffers, the material and
+  the routing; where each instance's mesh lies in the buffers is the instance's own (`MeshRange`, dealt with the
+  instances and reordered with them). `DrawItem::plan_draw` draws a run of instances sharing a range as one
+  instanced draw and the rest a draw each, which the pass plan merges into one multi-draw; `record_draw` is gone
+  (the veil depth pass plans too). Static city: 68 batches, collection 3.2 → 1.9 ms, recording 4.3 → 2.8 ms.
+  Test `arena_meshes_of_one_material_are_one_batch` (six shapes of one material: one batch of six ranges; six copies
+  of one mesh: one batch of one range); the frame tests over the arena still compare byte for byte.
+
 - **A run of draws sharing what is bound is one indirect multi-draw.** Every pass that draws meshes — the z-prepass,
   the G-buffer, the forward pass, the forward surfaces' motion, the shadow maps — records through a `PassPlan`, which
   drops what is set again unchanged and replays each run of two or more draws with nothing set between them as one

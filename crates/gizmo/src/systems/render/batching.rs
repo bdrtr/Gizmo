@@ -48,6 +48,8 @@ pub struct RenderCache {
     previous: Vec<[[f32; 4]; 4]>,
     /// The world box of each instance, index for index: what the shadow passes' runs are cut by.
     bounds: Vec<crate::math::Aabb>,
+    /// What each instance draws of its batch's buffers, index for index — see [`MeshRange`].
+    ranges: Vec<MeshRange>,
     /// One entry per batch: the geometry to bind and how many instances of it to draw.
     pub draw_items: Vec<DrawItem>,
     /// The first-seen numbers `opaque_order` orders batches by.
@@ -77,6 +79,21 @@ struct Record {
     instance: crate::renderer::gpu_types::InstanceRaw,
     previous: [[f32; 4]; 4],
     bounds: crate::math::Aabb,
+    range: MeshRange,
+}
+
+/// Which part of its batch's buffers one instance draws: `first..first + count` of the index buffer
+/// (with `base_vertex`) when the batch is indexed, of the vertex buffer when it is not.
+///
+/// Per instance, not per batch: a batch is the buffers, the material and the routing, and the meshes
+/// in it may differ — every mesh made in a `MeshArena` shares a buffer with the others, so a merged
+/// city's pieces of one texture are one batch, not one batch each. Instances of one mesh carry the
+/// same range, and a run of them is drawn as one instanced draw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub(super) struct MeshRange {
+    pub(super) first: u32,
+    pub(super) count: u32,
+    pub(super) base_vertex: i32,
 }
 
 /// `range` of a flat per-batch array: a batch's `(start, len)` run.
@@ -309,16 +326,12 @@ pub struct DrawItem {
     // Fields are `pub(super)` (= visible across the whole `render` module tree) so the sibling
     // `passes/` recorders can still read them now that DrawItem lives here, not in mod.rs.
     pub(super) vbuf: std::sync::Arc<wgpu::Buffer>,
-    /// Where the mesh's vertices start in `vbuf` — `Mesh::first_vertex`, or its LOD's.
-    pub(super) first_vertex: u32,
-    /// Where its indices start in `ibuf` — `Mesh::first_index`.
-    pub(super) first_index: u32,
-    pub(super) vertex_count: u32,
     /// If `Some`, this batch is drawn with `draw_indexed`; if `None`, with a plain `draw`.
     /// Always `None` while a LOD level is active — see `collect_draw_items`.
     pub(super) ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
-    /// The number of indices to draw while `ibuf` is `Some`.
-    pub(super) index_count: u32,
+    /// What every instance of the frame draws of its batch's buffers, by instance index — shared by
+    /// all of the frame's items. See [`MeshRange`].
+    pub(super) ranges: std::sync::Arc<[MeshRange]>,
     /// The element width of `ibuf` — carried over from the mesh as-is, not derived.
     pub(super) index_format: wgpu::IndexFormat,
     pub(super) bind_group: std::sync::Arc<wgpu::BindGroup>,
@@ -409,44 +422,37 @@ pub struct DrawItem {
 }
 
 impl DrawItem {
-    /// Binds this item's geometry and issues the draw call for `instances`.
+    /// Draws `instances` of this item into a [`PassPlan`](super::passes::plan::PassPlan): its
+    /// buffers, bound when they change, and a draw per run of instances that draw the same range
+    /// of them — one instanced draw for the copies of one mesh, one draw each for different meshes
+    /// sharing the buffers, which the plan merges with the draws around them into one multi-draw.
     ///
     /// This is the ONE place where the indexed/plain decision is made. The engine has eight
     /// mesh draw sites (z-pass, G-buffer, two shadow passes, two branches in forward), and
     /// drawing an item indexed at one and plain at another produces an inconsistent frame — its
     /// most visible form is a shadow that does not match its object. If the branching is spread
     /// out, skipping one site becomes a silent bug.
-    pub(super) fn record_draw(
-        &self,
-        pass: &mut wgpu::RenderPass<'_>,
-        instances: std::ops::Range<u32>,
-    ) {
-        pass.set_vertex_buffer(0, self.vbuf.slice(..));
-        // From where the mesh starts in its buffers: a mesh made in a `MeshArena` shares them, and
-        // its indices count from its own first vertex (`base_vertex`).
-        match &self.ibuf {
-            Some(ibuf) => {
-                // Format mesh'ten geliyor: `Mesh::new_indexed` 65536 tekil vertex'e kadar
-                // `Uint16` yazıyor. Türetmek değil TAŞIMAK önemli — tamponu yazıldığından
-                // farklı bir formatta bağlamak çökmez, sessizce yanlış üçgen çizer.
-                pass.set_index_buffer(ibuf.slice(..), self.index_format);
-                pass.draw_indexed(self.first_index..self.first_index + self.index_count, self.first_vertex as i32, instances);
-            }
-            None => pass.draw(self.first_vertex..self.first_vertex + self.vertex_count, instances),
-        }
-    }
-
-    /// [`record_draw`](Self::record_draw) into a [`PassPlan`](super::passes::plan::PassPlan): the
-    /// same buffers and the same draw, which the plan binds only when they change and merges with
-    /// the draws around it that share them.
     pub(super) fn plan_draw<'a>(&'a self, plan: &mut super::passes::plan::PassPlan<'a>, instances: std::ops::Range<u32>) {
         plan.set_vertex_buffer(&self.vbuf);
-        match &self.ibuf {
-            Some(ibuf) => {
-                plan.set_index_buffer(ibuf, self.index_format);
-                plan.draw_indexed(self.first_index..self.first_index + self.index_count, self.first_vertex as i32, instances);
+        if let Some(ibuf) = &self.ibuf {
+            // Format mesh'ten geliyor: `Mesh::new_indexed` 65536 tekil vertex'e kadar `Uint16`
+            // yazıyor. Türetmek değil TAŞIMAK önemli — tamponu yazıldığından farklı bir formatta
+            // bağlamak çökmez, sessizce yanlış üçgen çizer.
+            plan.set_index_buffer(ibuf, self.index_format);
+        }
+        let mut at = instances.start;
+        while at < instances.end {
+            let range = self.ranges[at as usize];
+            let mut end = at + 1;
+            while end < instances.end && self.ranges[end as usize] == range {
+                end += 1;
             }
-            None => plan.draw(self.first_vertex..self.first_vertex + self.vertex_count, instances),
+            if self.ibuf.is_some() {
+                plan.draw_indexed(range.first..range.first + range.count, range.base_vertex, at..end);
+            } else {
+                plan.draw(range.first..range.first + range.count, at..end);
+            }
+            at = end;
         }
     }
 
@@ -469,10 +475,9 @@ impl DrawItem {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct BatchKey {
     vbuf_id: usize,
-    /// Where the mesh starts in that buffer: meshes made in a `MeshArena` share one, and the buffer
-    /// alone would merge them into one batch drawing the first one's triangles for all.
-    first_vertex: u32,
-    first_index: u32,
+    /// The index buffer, if the draw is indexed. Not where the mesh lies in either buffer: that is
+    /// each instance's own (`MeshRange`), so meshes sharing a `MeshArena` buffer share a batch.
+    ibuf_id: Option<usize>,
     mat_id: usize,
     skeleton_id: Option<usize>,
     // Pass-routing flags MUST be part of the key. `mat_id` is the material's
@@ -535,13 +540,9 @@ pub(crate) struct BatchKey {
 
 pub(crate) struct BatchData {
     vbuf: std::sync::Arc<wgpu::Buffer>,
-    first_vertex: u32,
-    first_index: u32,
     ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
-    index_count: u32,
     index_format: wgpu::IndexFormat,
     bind_group: std::sync::Arc<wgpu::BindGroup>,
-    vertex_count: u32,
     unlit: bool,
     baked_lit: bool,
     is_skybox: bool,
@@ -1028,8 +1029,7 @@ pub(super) fn collect_draw_items(
 
                 let key = BatchKey {
                     vbuf_id: std::sync::Arc::as_ptr(active_vbuf) as usize,
-                    first_vertex: active_first_vertex,
-                    first_index: active_first_index,
+                    ibuf_id: active_ibuf.map(|b| std::sync::Arc::as_ptr(b) as usize),
                     mat_id: std::sync::Arc::as_ptr(&$mat.bind_group) as usize,
                     skeleton_id: skel_bg.map(|bg| std::sync::Arc::as_ptr(bg) as usize),
                     is_transparent,
@@ -1071,13 +1071,9 @@ pub(super) fn collect_draw_items(
                                 let slot = cache.batches.len() as u32;
                                 cache.batches.push(BatchData {
                     vbuf: active_vbuf.clone(),
-                    first_vertex: active_first_vertex,
-                    first_index: active_first_index,
                     ibuf: active_ibuf.cloned(),
-                    index_count: active_index_count,
                     index_format: active_index_format,
                     bind_group: $mat.bind_group.clone(),
-                    vertex_count: active_vertex_count,
                     unlit,
                     baked_lit,
                     is_skybox,
@@ -1122,6 +1118,10 @@ pub(super) fn collect_draw_items(
                     instance: instance_data,
                     previous: previous_model,
                     bounds: drawn_world_aabb,
+                    range: match active_ibuf {
+                        Some(_) => MeshRange { first: active_first_index, count: active_index_count, base_vertex: active_first_vertex as i32 },
+                        None => MeshRange { first: active_first_vertex, count: active_vertex_count, base_vertex: 0 },
+                    },
                 });
             };
         }
@@ -1229,6 +1229,7 @@ pub(super) fn collect_draw_items(
             let (camera_n, total) = (camera_at as usize, (camera_at + shadow_at) as usize);
             cache.instances.resize(total, zero);
             cache.bounds.resize(total, crate::math::Aabb::empty());
+            cache.ranges.resize(total, MeshRange::default());
             cache.previous.clear();
             if velocity_read {
                 cache.previous.resize(total, [[0.0; 4]; 4]);
@@ -1244,6 +1245,7 @@ pub(super) fn collect_draw_items(
                 };
                 cache.instances[at] = record.instance;
                 cache.bounds[at] = record.bounds;
+                cache.ranges[at] = record.range;
                 if velocity_read {
                     cache.previous[at] = record.previous;
                 }
@@ -1272,7 +1274,18 @@ pub(super) fn collect_draw_items(
         for batch in &cache.batches {
             if batch.is_transparent || batch.is_backdrop {
                 let range = run(batch.camera);
-                crate::renderer::sort_back_to_front(&mut cache.instances[range.clone()], cam_pos);
+                // Far to near, as `sort_back_to_front` orders them (stably), with each instance's
+                // range moved along with it.
+                let depth = |i: &crate::renderer::gpu_types::InstanceRaw| {
+                    cam_pos.distance_squared(Vec3::new(i.model[3][0], i.model[3][1], i.model[3][2]))
+                };
+                let mut order: Vec<u32> = (0..range.len() as u32).collect();
+                order.sort_by(|&a, &b| {
+                    let (a, b) = (&cache.instances[range.start + a as usize], &cache.instances[range.start + b as usize]);
+                    depth(b).partial_cmp(&depth(a)).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                permute(&mut cache.instances, range.clone(), &order, &mut Vec::new());
+                permute(&mut cache.ranges, range.clone(), &order, &mut Vec::new());
                 // The sort reorders the instances but not their previous models. Neither layer is
                 // drawn into the G-buffer, so their velocity is never read — give them none rather
                 // than another instance's history.
@@ -1293,6 +1306,7 @@ pub(super) fn collect_draw_items(
             let mut scratch_instances = Vec::new();
             let mut scratch_models = Vec::new();
             let mut scratch_bounds = Vec::new();
+            let mut scratch_ranges = Vec::new();
             // Only an order that is not already the identity is applied — a batch of one or of a
             // single chunk keeps its own (one batch per object in a scene of merged, unique meshes).
             let identity = |order: &[u32]| order.iter().enumerate().all(|(i, &o)| i as u32 == o);
@@ -1309,12 +1323,16 @@ pub(super) fn collect_draw_items(
                     if velocity_read {
                         permute(&mut cache.previous, range.clone(), &order, &mut scratch_models);
                     }
-                    permute(&mut cache.bounds, range, &order, &mut scratch_bounds);
+                    permute(&mut cache.bounds, range.clone(), &order, &mut scratch_bounds);
+                    permute(&mut cache.ranges, range, &order, &mut scratch_ranges);
                 }
             }
         }
 
         let batches: Vec<&BatchData> = cache.batches.iter().filter(|b| b.camera.1 + b.shadow.1 > 0).collect();
+
+        // Every instance's range, shared by the frame's items.
+        let ranges: std::sync::Arc<[MeshRange]> = std::sync::Arc::from(&cache.ranges[..]);
 
         // Region A — all camera-visible instances. One DrawItem per batch (shadow fields
         // filled in the region-B pass below; the batch list order is stable between passes).
@@ -1335,11 +1353,8 @@ pub(super) fn collect_draw_items(
             };
             local_draw_items.push(DrawItem {
                 vbuf: batch.vbuf.clone(),
-                first_vertex: batch.first_vertex,
-                first_index: batch.first_index,
-                vertex_count: batch.vertex_count,
                 ibuf: batch.ibuf.clone(),
-                index_count: batch.index_count,
+                ranges: ranges.clone(),
                 index_format: batch.index_format,
                 bind_group: batch.bind_group.clone(),
                 unlit: batch.unlit,
@@ -1481,8 +1496,7 @@ mod batch_key_tests {
     fn shadow_casting_distinguishes_batches_sharing_a_material() {
         let base = BatchKey {
             vbuf_id: 1,
-            first_vertex: 0,
-            first_index: 0,
+            ibuf_id: None,
             mat_id: 42,
             skeleton_id: None,
             is_transparent: false,
@@ -1517,8 +1531,7 @@ mod batch_key_tests {
     fn routing_flags_distinguish_batches_sharing_a_texture() {
         let base = BatchKey {
             vbuf_id: 1,
-            first_vertex: 0,
-            first_index: 0,
+            ibuf_id: None,
             mat_id: 42, // same cached texture bind group as the variants below
             skeleton_id: None,
             is_transparent: false,
