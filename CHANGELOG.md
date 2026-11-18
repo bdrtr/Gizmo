@@ -50,6 +50,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A run of draws sharing what is bound is one indirect multi-draw.** Every pass that draws meshes — the z-prepass,
+  the G-buffer, the forward pass, the forward surfaces' motion, the shadow maps — records through a `PassPlan`, which
+  drops what is set again unchanged and replays each run of two or more draws with nothing set between them as one
+  `multi_draw_indirect` / `multi_draw_indexed_indirect`, their arguments in a buffer made for the pass. It needs
+  `INDIRECT_FIRST_INSTANCE`, now asked for where the adapter has it (`Renderer::multi_draw`); without it the plan
+  draws one at a time, the same frame. With the opaque world ordered by pipeline, material and buffer, meshes in a
+  `MeshArena` make a run per material. Static city measurement (11 685 draws, arena): forward recording 1.6 → 0.2 ms,
+  `CommandEncoder::finish` 4.8 → 0.6 ms, the CPU side 12.9 → 6.3 ms. Tests: `a_plan_merges_runs_of_draws_with_nothing_set_between`
+  (no GPU: deduplication, runs, argument packing) and `merged_draws_render_byte_identically` (thirty arena meshes,
+  three materials, G-buffer, shadow, baked-lit and indexed: merged and single frames byte-equal; fails with a wrong
+  first instance or base vertex in the arguments). The forward-only path's 160 GPU tests pass.
+
 - **`MeshArena`: many meshes in a few shared vertex and index buffers** (`Renderer::mesh_arena`,
   `MeshArena::triangle_list` / `indexed`). A mesh made the ordinary way has a buffer of its own and every draw of it
   binds that buffer, which wgpu validates and tracks on the CPU when the frame is finished; a city merged into 14 600

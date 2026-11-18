@@ -175,13 +175,15 @@ fn record_forward_motion(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer
     pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
     pass.set_bind_group(BG_INSTANCE, renderer.scene.view_instance_bind_group(), &[]);
     pass.set_bind_group(5, &def.motion.bind_group, &[]);
+    let mut plan = super::plan::PassPlan::default();
     for item in draw_items.iter().filter(moving) {
-        pass.set_pipeline(&def.motion_pipelines[usize::from(item.is_double_sided)]);
+        plan.set_pipeline(&def.motion_pipelines[usize::from(item.is_double_sided)]);
         let skeleton = item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-        pass.set_bind_group(3, skeleton.as_ref(), &[]);
-        pass.set_bind_group(1, &*item.bind_group, &[]);
-        item.record_draw(&mut pass, item.camera_instance_range(uploaded_instances));
+        plan.set_bind_group(3, skeleton.as_ref());
+        plan.set_bind_group(1, &item.bind_group);
+        item.plan_draw(&mut plan, item.camera_instance_range(uploaded_instances));
     }
+    plan.replay(&mut pass, &renderer.device, renderer.multi_draw);
 }
 
 /// The depth of the nearest surface that blends, depth only, into the volumetric march's
@@ -305,13 +307,16 @@ fn begin_forward_pass<'e>(
     render_pass
 }
 
-/// Draws these items, in order, with the forward pipeline each one asks for.
+/// Draws these items, in order, with the forward pipeline each one asks for — through a
+/// [`PassPlan`](super::plan::PassPlan), which binds what changes only and draws a run of items
+/// sharing a pipeline, a material and a buffer as one multi-draw.
 fn draw_forward_items(
     render_pass: &mut wgpu::RenderPass<'_>,
     renderer: &Renderer,
     draw_items: &[DrawItem],
     uploaded_instances: u32,
 ) {
+    let mut plan = super::plan::PassPlan::default();
     for item in draw_items {
         // `ShadowCasting::Only`: casts, is not drawn — by this pass either, which until 2026-11-11 did
         // not ask, so a shadow-only draw stood in the picture whenever it was drawn forward: blended,
@@ -460,29 +465,30 @@ fn draw_forward_items(
             };
 
             if let Some(pipeline) = pipeline {
-                render_pass.set_pipeline(pipeline);
-                render_pass.set_bind_group(1, mirror.unwrap_or(&*item.bind_group), &[]);
-                render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
-                item.record_draw(render_pass, inst_start..inst_end);
+                plan.set_pipeline(pipeline);
+                plan.set_bind_group(1, mirror.unwrap_or(&*item.bind_group));
+                plan.set_bind_group(BG_SKELETON, skel_bg.as_ref());
+                item.plan_draw(&mut plan, inst_start..inst_end);
             }
         }
 
         if let Some(wire) = wire {
-            render_pass.set_pipeline(&renderer.scene.wireframe_pipeline);
-            render_pass.set_bind_group(1, &*item.bind_group, &[]);
-            render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
+            plan.set_pipeline(&renderer.scene.wireframe_pipeline);
+            plan.set_bind_group(1, &item.bind_group);
+            plan.set_bind_group(BG_SKELETON, skel_bg.as_ref());
             // Group 5 is this colour for the lines, and the probes again for whatever comes next.
             #[cfg(not(gizmo_forward_only))]
-            render_pass.set_bind_group(5, &**wire, &[]);
+            plan.set_bind_group(5, wire);
             #[cfg(gizmo_forward_only)]
             let _ = wire;
-            item.record_draw(render_pass, inst_start..inst_end);
+            item.plan_draw(&mut plan, inst_start..inst_end);
             #[cfg(not(gizmo_forward_only))]
             if let Some(def) = renderer.deferred.as_ref() {
-                render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
+                plan.set_bind_group(5, &def.irradiance.bind_group);
             }
         }
     }
+    plan.replay(render_pass, &renderer.device, renderer.multi_draw);
 }
 
 /// An [`EnvironmentMap`](crate::renderer::environment::EnvironmentMap) behind the scene: at the far

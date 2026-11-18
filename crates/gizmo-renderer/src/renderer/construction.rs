@@ -690,6 +690,10 @@ impl Renderer {
 
         let mut renderer = Self {
             mesh_arena: crate::mesh_arena::MeshArena::new(&device, &queue),
+            // A device with `INDIRECT_FIRST_INSTANCE` has indirect execution too: the feature is a
+            // desktop's and WebGPU's, and neither WebGL nor any adapter without indirect draws
+            // offers it.
+            multi_draw: device.features().contains(wgpu::Features::INDIRECT_FIRST_INSTANCE),
             instance: None,
             tonemap_curve: crate::gpu_types::TonemapCurve::Aces,
             tonemap_white_point: 4.0,
@@ -795,10 +799,13 @@ impl Renderer {
     }
 }
 
-/// The features every native renderer device is asked for: line polygons (the debug wireframe), and
-/// the GPU timer's timestamps (`crate::gpu_timer`) where the adapter has them.
+/// The features every native renderer device is asked for: line polygons (the debug wireframe), the
+/// GPU timer's timestamps (`crate::gpu_timer`) where the adapter has them, and
+/// `INDIRECT_FIRST_INSTANCE` where it has that — what lets a run of draws become one indirect
+/// multi-draw ([`Renderer::multi_draw`](crate::Renderer::multi_draw)).
 pub(crate) fn native_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
-    wgpu::Features::POLYGON_MODE_LINE | (adapter.features() & crate::gpu_timer::GpuTimer::FEATURES)
+    wgpu::Features::POLYGON_MODE_LINE
+        | (adapter.features() & (crate::gpu_timer::GpuTimer::FEATURES | wgpu::Features::INDIRECT_FIRST_INSTANCE))
 }
 
 /// The limits every native renderer device is asked for.

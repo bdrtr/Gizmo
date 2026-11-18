@@ -435,6 +435,20 @@ impl DrawItem {
         }
     }
 
+    /// [`record_draw`](Self::record_draw) into a [`PassPlan`](super::passes::plan::PassPlan): the
+    /// same buffers and the same draw, which the plan binds only when they change and merges with
+    /// the draws around it that share them.
+    pub(super) fn plan_draw<'a>(&'a self, plan: &mut super::passes::plan::PassPlan<'a>, instances: std::ops::Range<u32>) {
+        plan.set_vertex_buffer(&self.vbuf);
+        match &self.ibuf {
+            Some(ibuf) => {
+                plan.set_index_buffer(ibuf, self.index_format);
+                plan.draw_indexed(self.first_index..self.first_index + self.index_count, self.first_vertex as i32, instances);
+            }
+            None => plan.draw(self.first_vertex..self.first_vertex + self.vertex_count, instances),
+        }
+    }
+
     /// Camera-visible instance range (region A), clamped to what actually fit the GPU
     /// instance buffer (`uploaded`). `.max(start)` keeps the range non-reversed when this
     /// batch's region was entirely truncated (an empty range = a 0-instance no-op draw).

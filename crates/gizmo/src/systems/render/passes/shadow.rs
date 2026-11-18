@@ -20,21 +20,12 @@ fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem, front_faces: boo
 }
 
 /// Binds what every shadow pipeline reads per draw — the material for a cut-out's fragment stage,
-/// the skeleton — and the pipeline itself when it changes.
-fn bind_caster(
-    pass: &mut wgpu::RenderPass<'_>,
-    renderer: &Renderer,
-    item: &DrawItem,
-    pipeline: &wgpu::RenderPipeline,
-    bound: &mut Option<*const wgpu::RenderPipeline>,
-) {
-    if *bound != Some(std::ptr::from_ref(pipeline)) {
-        pass.set_pipeline(pipeline);
-        *bound = Some(std::ptr::from_ref(pipeline));
-    }
+/// the skeleton — and the pipeline, through `plan`, which records each only when it changes.
+fn bind_caster<'a>(plan: &mut super::plan::PassPlan<'a>, renderer: &'a Renderer, item: &'a DrawItem, pipeline: &'a wgpu::RenderPipeline) {
+    plan.set_pipeline(pipeline);
     let skeleton = item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-    pass.set_bind_group(1, &*item.bind_group, &[]);
-    pass.set_bind_group(2, skeleton.as_ref(), &[]);
+    plan.set_bind_group(1, &item.bind_group);
+    plan.set_bind_group(2, skeleton.as_ref());
 }
 
 /// Whether `item` casts into a shadow map at all: its own flag, then its material's say — the same
@@ -100,7 +91,8 @@ fn record_caster_pass(
     // cut-out), the skeleton and the instances.
     pass.set_bind_group(0, light, &[]);
     pass.set_bind_group(3, renderer.scene.view_instance_bind_group(), &[]);
-    let mut bound = None;
+    // Through a plan: a run of casters sharing a pipeline, a material and a buffer is one multi-draw.
+    let mut plan = super::plan::PassPlan::default();
     for item in draw_items {
         if !casts_into_shadow_maps(renderer, item) {
             continue;
@@ -114,13 +106,14 @@ fn record_caster_pass(
         // second.
         let mut ranges = gizmo_renderer::shadow_culling::visible_ranges(&item.shadow_chunks, &frustum, uploaded_instances).peekable();
         if ranges.peek().is_some() {
-            bind_caster(&mut pass, renderer, item, pipeline, &mut bound);
+            bind_caster(&mut plan, renderer, item, pipeline);
         }
         for range in ranges {
             drawn += range.end - range.start;
-            item.record_draw(&mut pass, range);
+            item.plan_draw(&mut plan, range);
         }
     }
+    plan.replay(&mut pass, &renderer.device, renderer.multi_draw);
     drawn
 }
 

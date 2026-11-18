@@ -359,6 +359,10 @@ pub struct Renderer {
     /// once, and the forward pass draws a run of them sharing a pipeline and a material as one
     /// indirect multi-draw. For many static meshes — a merged city — see [`crate::mesh_arena`].
     pub mesh_arena: crate::mesh_arena::MeshArena,
+    /// Whether the passes may merge a run of draws into one indirect multi-draw: the device has
+    /// `INDIRECT_FIRST_INSTANCE`, which a merged draw starting past instance 0 needs. Set from the
+    /// device; turned off, the passes draw one draw at a time, which is the same frame.
+    pub multi_draw: bool,
     /// The GPU's half: timestamps between the draw's parts (`gpu.*`), read back a few frames late
     /// into [`draw_laps`](Self::draw_laps). `None` where the device has no timestamp queries.
     pub gpu_timer: Option<crate::gpu_timer::GpuTimer>,

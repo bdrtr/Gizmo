@@ -33,6 +33,9 @@ pub fn record_deferred_geometry(
         // The cull mode is baked into the pipeline, so a double-sided material needs its own.
         // Tracked and set only on change rather than per item: the batches are not sorted by this
         // flag and a scene is overwhelmingly one-sided, so this is a handful of switches at most.
+        // Through a plan: it binds what changes only, and draws a run sharing a pipeline, a material
+        // and a buffer as one multi-draw.
+        let mut plan = super::plan::PassPlan::default();
         let mut bound: Option<(Option<gizmo_renderer::custom_material::SurfaceId>, bool, bool)> = None;
         for item in draw_items {
             // `ShadowCasting::Only`: casts, is not drawn. Checked in the z-prepass as well as the
@@ -68,18 +71,19 @@ pub fn record_deferred_geometry(
                         (false, false) => &def.z_prepass_pipeline,
                     },
                 };
-                z_pass.set_pipeline(pipeline);
+                plan.set_pipeline(pipeline);
                 bound = Some(key);
             }
             let skel_bg = item
                 .skeleton_bind_group
                 .as_ref()
                 .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-            z_pass.set_bind_group(3, skel_bg.as_ref(), &[]);
-            z_pass.set_bind_group(1, &*item.bind_group, &[]);
+            plan.set_bind_group(3, skel_bg.as_ref());
+            plan.set_bind_group(1, &item.bind_group);
             // Main pass: camera-visible instances only.
-            item.record_draw(&mut z_pass, item.camera_instance_range(uploaded_instances));
+            item.plan_draw(&mut plan, item.camera_instance_range(uploaded_instances));
         }
+        plan.replay(&mut z_pass, &renderer.device, renderer.multi_draw);
     }
 
     // ── G-buffer pass (PBR geometry → albedo / normal / world-position) ─────
@@ -165,6 +169,7 @@ pub fn record_deferred_geometry(
         gbuf_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         gbuf_pass.set_bind_group(4, renderer.scene.view_instance_bind_group(), &[]);
         gbuf_pass.set_bind_group(5, &def.motion.bind_group, &[]);
+        let mut plan = super::plan::PassPlan::default();
         let mut bound: Option<(Option<gizmo_renderer::custom_material::SurfaceId>, bool)> = None;
         for item in draw_items {
             if !item.visible_in_camera {
@@ -184,18 +189,19 @@ pub fn record_deferred_geometry(
                     None if item.is_double_sided => &def.gbuffer_double_sided_pipeline,
                     None => &def.gbuffer_pipeline,
                 };
-                gbuf_pass.set_pipeline(pipeline);
+                plan.set_pipeline(pipeline);
                 bound = Some(key);
             }
             let skel_bg = item
                 .skeleton_bind_group
                 .as_ref()
                 .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-            gbuf_pass.set_bind_group(3, skel_bg.as_ref(), &[]);
-            gbuf_pass.set_bind_group(1, &*item.bind_group, &[]);
+            plan.set_bind_group(3, skel_bg.as_ref());
+            plan.set_bind_group(1, &item.bind_group);
             // Main pass: camera-visible instances only.
-            item.record_draw(&mut gbuf_pass, item.camera_instance_range(uploaded_instances));
+            item.plan_draw(&mut plan, item.camera_instance_range(uploaded_instances));
         }
+        plan.replay(&mut gbuf_pass, &renderer.device, renderer.multi_draw);
     }
 
     // ── Decal Pass (Blend into G-buffer) ──────────────────────────

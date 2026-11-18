@@ -3951,6 +3951,7 @@ mod golden_render_tests {
                 v
             };
             let (cells, per_cell) = (215usize, 68usize);
+            let own_buffers = std::env::var("GIZMO_CITY_OWN").is_ok();
             for cell in 0..cells {
                 let origin = Vec3::new((cell % 15) as f32 * 256.0 - 1900.0, 0.0, (cell / 15) as f32 * -256.0);
                 for (k, texture) in textures.iter().enumerate().take(per_cell) {
@@ -3958,7 +3959,14 @@ mod golden_render_tests {
                     let at = origin + Vec3::new((k % 9) as f32 * 25.0, 0.0, (k / 9) as f32 * -25.0);
                     world.add_component(e, Transform::new(Vec3::ZERO));
                     world.add_component(e, GlobalTransform::default());
-                    world.add_component(e, crate::renderer::components::Mesh::from_vertices(&renderer.device, &piece(at), "city piece"));
+                    // In the renderer's `MeshArena`, as the game builds its city; `GIZMO_CITY_OWN=1` gives
+                    // every piece a buffer of its own instead, for the comparison.
+                    let mesh = if own_buffers {
+                        crate::renderer::components::Mesh::from_vertices(&renderer.device, &piece(at), "city piece")
+                    } else {
+                        renderer.mesh_arena.triangle_list(&piece(at), "city piece")
+                    };
+                    world.add_component(e, mesh);
                     world.add_component(e, Material::new(texture.clone()).with_baked_lit(Vec4::ONE));
                     world.add_component(
                         e,
@@ -4669,6 +4677,87 @@ mod golden_render_tests {
             assert!(lit > 500, "the setup: the three meshes are in the frame ({lit} lit pixels)");
             let differing = own.iter().zip(&shared).filter(|(a, b)| a != b).count();
             assert_eq!(differing, 0, "{differing} bytes differ between the meshes with their own buffers and the shared ones");
+        });
+    }
+
+    /// **A run of draws merged into one multi-draw draws what the draws did, to the byte.** Every pass
+    /// that draws meshes records through a `PassPlan`, which draws a run sharing a pipeline, a
+    /// material and a buffer as one `multi_draw_indirect` when the device has
+    /// `INDIRECT_FIRST_INSTANCE` (`Renderer::multi_draw`). Thirty meshes in the arena, three
+    /// materials taking turns — lit through the G-buffer (z-prepass, G-buffer, sun shadow), baked-lit
+    /// (forward), and indexed — drawn with merging and without: the same frame.
+    #[test]
+    fn merged_draws_render_byte_identically() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        type Vertex = crate::renderer::gpu_types::Vertex;
+        async fn frame(multi: bool) -> Option<Vec<u8>> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            if !renderer.multi_draw {
+                return None;
+            }
+            renderer.multi_draw = multi;
+            renderer.taa = None;
+            let mut assets = AssetManager::new();
+            let layout = renderer.scene.texture_bind_group_layout.clone();
+            let textures: Vec<_> = (0..3u8)
+                .map(|k| {
+                    let rgba: Vec<u8> = (0..16).flat_map(|_| [60 + k * 80, 200 - k * 60, 90, 255]).collect();
+                    assets
+                        .install_decoded_material_texture(&renderer.device, &renderer.queue, &layout, &format!("merged_{k}"), &rgba, 4, 4)
+                        .expect("a 4×4 texture installs")
+                })
+                .collect();
+            let mut world = World::new();
+            for i in 0..30 {
+                // Placed by their transforms, so that a draw reading another's instance draws in the
+                // wrong place; each mesh a little different, so that one reading another's vertices
+                // draws the wrong shape. One material's meshes are all indexed: indexed runs too.
+                let at = Vec3::new((i / 6) as f32 * 1.6, (i % 3) as f32 * 1.4 - 1.4, (i % 6) as f32 * 1.6 - 4.0);
+                let squash = 0.3 + 0.02 * i as f32;
+                let vertices: Vec<Vertex> = cube_vertices()
+                    .into_iter()
+                    .map(|mut v| {
+                        v.position = (Vec3::from(v.position) * Vec3::new(0.5, squash, 0.5)).to_array();
+                        v
+                    })
+                    .collect();
+                let mesh = if i % 3 == 1 {
+                    renderer.mesh_arena.indexed(&vertices, Vec3::ZERO, "merged indexed")
+                } else {
+                    renderer.mesh_arena.triangle_list(&vertices, "merged")
+                };
+                let texture = textures[i % 3].clone();
+                let material = if i % 3 == 2 {
+                    Material::new(texture).with_baked_lit(Vec4::ONE)
+                } else {
+                    Material::new(texture).with_pbr(Vec4::ONE, 0.0, 0.6)
+                };
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, mesh);
+                world.add_component(e, material);
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(-7.0, 2.5, 0.0), yaw: 0.0, pitch: -0.25, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            Some(render_world(&mut renderer, &mut world).await)
+        }
+        pollster::block_on(async {
+            let (Some(merged), Some(single)) = (frame(true).await, frame(false).await) else {
+                eprintln!("skipping: the device has no INDIRECT_FIRST_INSTANCE, so nothing is merged");
+                return;
+            };
+            let lit = single.as_chunks::<4>().0.iter().filter(|p| p[0] > 30 || p[1] > 30).count();
+            assert!(lit > 1500, "the setup: the meshes fill the frame ({lit} lit pixels)");
+            let differing = merged.iter().zip(&single).filter(|(a, b)| a != b).count();
+            assert_eq!(differing, 0, "{differing} bytes differ between the merged draws and the single ones");
         });
     }
 

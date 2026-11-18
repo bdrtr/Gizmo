@@ -5,6 +5,7 @@
 
 mod forward;
 mod geometry;
+pub(crate) mod plan;
 mod screen_space;
 mod shadow;
 mod ssao;
