@@ -384,6 +384,24 @@ fn local_shadow_in_air(
     return textureSampleCompareLevel(t, s, uv, index, ndc.z - bias_metres * ndc_per_metre);
 }
 
+// How much of a baked-lit surface's light the sun is taken to be responsible for: the share its
+// shadow darkens. The rest is the sky and the bounce, already in the baked light. One copy, read by
+// `baked_lit.wgsl` (the forward path) and `deferred_lighting.wgsl` (the deferred one's `BAKED_SURFACE`
+// pixels), so the two draw the same surface the same.
+const BAKED_SUN_SHARE: f32 = 0.45;
+
+// RT2's `.w` for a baked-lit surface in the G-buffer (`gbuffer.wgsl`'s `fs_baked`): written (≥ 0.5),
+// and above anything a lit surface packs there (`0.5 + 0.49·anisotropy + floor(100·subsurface)`, at
+// most 100.99), so every reader of RT2 can tell it apart — the lighting pass finishes it as baked-lit
+// does, SSAO and SSGI leave it alone (its baked light has its occlusion and its bounce in it). Read
+// as "above 150"; `ssao_apply.wgsl`, which is not composed, writes the number out.
+const BAKED_SURFACE: f32 = 200.5;
+
+// Whether RT2's `.w` says a baked-lit surface (`BAKED_SURFACE`).
+fn is_baked_surface(position_w: f32) -> bool {
+    return position_w > 150.0;
+}
+
 // Mirror of `csm::SHADOW_FADE_FRACTION` / `csm::shadow_distance_fade`. Past the last cascade there is
 // no shadow data, so the term snaps to "fully lit"; without a fade that snap is a hard line across
 // the world at `cascade_splits.w`. See csm.rs for the reasoning and the cost of the alternative;

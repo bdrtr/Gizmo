@@ -6,13 +6,13 @@
 // `CUSTOM_SURFACE`, from a game's `material_surface` (`custom_material::SurfaceMaterial`): the same
 // shader around it, so a game's surface is written to the G-buffer exactly as the engine's own is.
 
-#import gizmo::common::{instance_keeps, dielectric_f0}
+#import gizmo::common::{instance_keeps, dielectric_f0, BAKED_SURFACE}
 #import gizmo::surface::{Surface, tangent_frame, surface_lobes}
 #ifdef CUSTOM_SURFACE
 #import gizmo::surface::{SurfaceInput}
 #import gizmo::custom_surface::{material_surface}
 #else
-#import gizmo::material::{evaluate_surface, surface_uv, baked_light}
+#import gizmo::material::{evaluate_surface, surface_uv, baked_light, base_colour}
 #endif
 
 fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
@@ -62,7 +62,8 @@ struct InstanceData {
 
 struct VertexInput {
     @location(0) position:      vec3<f32>,
-    @location(1) color:         vec3<f32>,
+    // RGBA: the alpha is a baked-lit cut-out's (`fs_baked`), as `baked_lit.wgsl` reads it.
+    @location(1) color:         vec4<f32>,
     @location(2) normal:        vec3<f32>,
     @location(3) tex_coords:    vec2<f32>,
     @location(4) joint_indices: vec4<u32>,
@@ -87,9 +88,12 @@ struct VertexOutput {
     @location(9) inst_emissive:  vec4<f32>,  // w = F0, < 0: receives no shadows
     @location(10) bitangent:     vec3<f32>,
     // `Material::clear_coat_roughness`.
-    @location(11) inst_coat_roughness: f32,
-    // The instance's cut-out and LOD crossfade, `instance_keeps`.
-    @location(12) inst_keep: f32,
+    // x: `Material::clear_coat_roughness`; y: the instance's cut-out and LOD crossfade
+    // (`instance_keeps`). One location for both: the G-buffer's fragment stage has the front-facing
+    // flag besides, and a desktop device gives sixteen.
+    @location(11) inst_coat_keep: vec2<f32>,
+    // A baked-lit surface's (`fs_baked`): the instance's ambient in `xyz`, the vertex's alpha in `w`.
+    @location(12) baked_extra: vec4<f32>,
     // `Material::specular_tint`, from `1 − optics.xyz`.
     @location(13) inst_tint: vec3<f32>,
     // Where the base colour is (`InstanceRaw::texture.x`, `gizmo::material::base_colour`).
@@ -118,7 +122,7 @@ struct Motion {
 @vertex
 fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.color     = input.color;
+    out.color     = input.color.rgb;
 #ifdef CUSTOM_SURFACE
     // What group 1 means is the game's, so the material's UV transform is not applied here: a
     // surface that wants it calls `gizmo::material::standard_surface`, which does.
@@ -168,10 +172,10 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr    = inst.pbr;
     out.inst_emissive = inst.emissive;
-    out.inst_coat_roughness = inst.ambient.z;
-    out.inst_keep = inst.ambient.w;
+    out.inst_coat_keep = inst.ambient.zw;
     out.inst_tint = vec3<f32>(1.0) - inst.optics.xyz;
     out.base_layer = u32(inst.texture.x);
+    out.baked_extra = vec4<f32>(inst.ambient.rgb, input.color.a);
     out.clip_position = scene.view_proj * world_pos;
     out.motion_now    = motion.view_proj * world_pos;
     // `select` takes no matrices.
@@ -241,7 +245,7 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
 fn fs_prepass(in: VertexOutput, @builtin(front_facing) front: bool) {
     let surface = fragment_surface(in, front);
     if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }
-    if (!instance_keeps(in.inst_keep, surface.alpha, in.clip_position.xy)) { discard; }
+    if (!instance_keeps(in.inst_coat_keep.y, surface.alpha, in.clip_position.xy)) { discard; }
 }
 
 // How a surface drawn forward moved — unlit, baked-lit — which writes depth and no G-buffer: RT4's `xy`
@@ -252,11 +256,54 @@ fn fs_prepass(in: VertexOutput, @builtin(front_facing) front: bool) {
 fn fs_motion(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let surface = fragment_surface(in, front);
     if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }
-    if (!instance_keeps(in.inst_keep, surface.alpha, in.clip_position.xy)) { discard; }
+    if (!instance_keeps(in.inst_coat_keep.y, surface.alpha, in.clip_position.xy)) { discard; }
     let now_ndc    = in.motion_now.xy / in.motion_now.w;
     let before_ndc = in.motion_before.xy / in.motion_before.w;
     return vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 0.0, 0.0);
 }
+
+// A baked-lit surface on the deferred path (`MaterialType::BakedLit`, opaque): what `baked_lit.wgsl`
+// draws, kept in its parts for the lighting pass to finish (`deferred_lighting.wgsl`, `BAKED_SURFACE`)
+// — and so that what reads the G-buffer sees it: a reflection in the screen's space, a decal.
+//
+//   RT0  the base colour (`Material::albedo` × the texture), no metal
+//   RT1  the normal, the material's roughness
+//   RT2  the position, `.w` = `BAKED_SURFACE`
+//   RT3  the baked light: the vertex colour, times the lightmap where there is one
+//   RT4  the velocity, a white tint
+//   RT5  ambient × base + emissive — the part no shadow touches — and the F0 with its shadow sign
+//
+// The lighting pass makes `baked × base × (1 − share + share × sun) + RT5` of it, `baked_lit.wgsl`'s
+// `(lit + ambient) × base + emissive`.
+#ifndef CUSTOM_SURFACE
+@fragment
+fn fs_baked(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
+    let tex = base_colour(in.tex_coords.xy, in.base_layer);
+    let final_alpha = in.baked_extra.w * in.inst_albedo.a * tex.a;
+    if (!instance_keeps(in.inst_coat_keep.y, final_alpha, in.clip_position.xy)) {
+        discard;
+    }
+    let base = in.inst_albedo.rgb * tex.rgb;
+    var baked = in.color;
+    let lightmap = baked_light(in.tex_coords.zw);
+    if (lightmap.w > 0.5) {
+        baked = baked * lightmap.rgb;
+    }
+    let N = normalize(select(-in.normal, in.normal, front));
+    let now_ndc    = in.motion_now.xy / in.motion_now.w;
+    let before_ndc = in.motion_before.xy / in.motion_before.w;
+    let f0 = dielectric_f0(in.inst_emissive.w);
+
+    var out: GBufferOut;
+    out.albedo_metallic  = vec4<f32>(base, 0.0);
+    out.normal_roughness = vec4<f32>(N, in.inst_pbr.x);
+    out.world_position   = vec4<f32>(in.world_position - scene.camera_pos.xyz, BAKED_SURFACE);
+    out.world_tangent    = vec4<f32>(baked, 0.0);
+    out.velocity         = vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 0.0, 0.0);
+    out.emissive         = vec4<f32>(in.baked_extra.xyz * base + max(in.inst_emissive.xyz, vec3<f32>(0.0)), select(f0, -f0, in.inst_emissive.w < 0.0));
+    return out;
+}
+#endif
 
 @fragment
 fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
@@ -267,7 +314,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     // glTF AlphaMode::Mask cutout: hard per-texel discard at alphaCutoff.
     // cutoff == 0 → no cutout (Opaque / Blend materials), so this is a no-op for them.
     if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }
-    if (!instance_keeps(in.inst_keep, surface.alpha, in.clip_position.xy)) { discard; }
+    if (!instance_keeps(in.inst_coat_keep.y, surface.alpha, in.clip_position.xy)) { discard; }
 
     let albedo = surface.albedo;
     let metallic = surface.metallic;
@@ -290,7 +337,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     // Two numbers and a sign in one half float, as an integer it holds exactly (up to 2048): 32 steps
     // of coat, 32 of its roughness from the hard lacquer up, and 1 so that nothing is still signed.
     let coat_steps = round(clear_coat_raw * 31.0);
-    let coat_rough_steps = round(clamp((in.inst_coat_roughness - 0.08) / 0.92, 0.0, 1.0) * 31.0);
+    let coat_rough_steps = round(clamp((in.inst_coat_keep.x - 0.08) / 0.92, 0.0, 1.0) * 31.0);
     let packed_tangent_w = handedness * (1.0 + coat_steps * 32.0 + coat_rough_steps);
 
     // **Baked light** (`MaterialMaps::lightmap`): what lands on the surface from everything static,

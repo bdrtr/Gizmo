@@ -100,6 +100,11 @@ pub struct DeferredState {
     /// faces in the game — the deferred path culled unconditionally. Two pipelines rather than a
     /// per-draw state because wgpu bakes the cull mode into the pipeline.
     pub gbuffer_double_sided_pipeline: wgpu::RenderPipeline,
+    /// An opaque baked-lit surface into the G-buffer (`gbuffer.wgsl`'s `fs_baked`), single-sided then
+    /// double-sided: the lighting pass finishes it as `baked_lit.wgsl` draws it, and what reads the
+    /// G-buffer — screen-space reflections, decals — sees it. The forward path keeps drawing it with
+    /// `baked_lit.wgsl` where there is no G-buffer.
+    pub gbuffer_baked_pipelines: [wgpu::RenderPipeline; 2],
 
     // Z-Prepass (Depth only)
     /// The depth-only prepass, so the geometry pass shades each pixel once rather than once per
@@ -170,6 +175,8 @@ pub struct DeferredState {
 struct GeometryPipelines {
     /// Single-sided, then double-sided.
     gbuffer: [wgpu::RenderPipeline; 2],
+    /// `fs_baked`'s, likewise.
+    gbuffer_baked: [wgpu::RenderPipeline; 2],
     /// The prepass with no fragment stage: single-sided, then double-sided.
     z_prepass: [wgpu::RenderPipeline; 2],
     /// The prepass that cuts what its surface cuts, likewise.
@@ -228,6 +235,7 @@ impl DeferredState {
         let irradiance = crate::irradiance::IrradianceState::new(device);
         let GeometryPipelines {
             gbuffer: [gbuffer_pipeline, gbuffer_double_sided_pipeline],
+            gbuffer_baked: gbuffer_baked_pipelines,
             z_prepass: [z_prepass_pipeline, z_prepass_double_sided_pipeline],
             z_prepass_discard: z_prepass_discard_pipelines,
             environment_sky: environment_sky_pipeline,
@@ -259,6 +267,7 @@ impl DeferredState {
             motion,
             gbuffer_pipeline,
             gbuffer_double_sided_pipeline,
+            gbuffer_baked_pipelines,
             z_prepass_pipeline,
             z_prepass_double_sided_pipeline,
             z_prepass_discard_pipelines,
@@ -302,8 +311,12 @@ impl DeferredState {
         };
         GeometryPipelines {
             gbuffer: [
-                Self::create_gbuffer_pipeline(device, scene, motion_layout, &geometry, back, "GBuffer Pipeline"),
-                Self::create_gbuffer_pipeline(device, scene, motion_layout, &geometry, None, "GBuffer TwoSided Pipeline"),
+                Self::create_gbuffer_pipeline(device, scene, motion_layout, &geometry, "fs_main", false, back, "GBuffer Pipeline"),
+                Self::create_gbuffer_pipeline(device, scene, motion_layout, &geometry, "fs_main", false, None, "GBuffer TwoSided Pipeline"),
+            ],
+            gbuffer_baked: [
+                Self::create_gbuffer_pipeline(device, scene, motion_layout, &geometry, "fs_baked", true, back, "GBuffer Baked Pipeline"),
+                Self::create_gbuffer_pipeline(device, scene, motion_layout, &geometry, "fs_baked", true, None, "GBuffer Baked TwoSided Pipeline"),
             ],
             z_prepass: [
                 prepass(back, false, "Z-Prepass Pipeline"),
@@ -327,7 +340,7 @@ impl DeferredState {
     /// 2026-11-11, so a hot-reloaded copy of any of the three changed nothing in a running studio,
     /// while the skill that describes hot reload names `deferred_lighting` as what it is for.
     pub fn rebuild_pipelines(&mut self, device: &wgpu::Device, scene: &SceneState) {
-        let GeometryPipelines { gbuffer, z_prepass, z_prepass_discard, environment_sky, lighting, seen, motion } = Self::create_pipelines(
+        let GeometryPipelines { gbuffer, gbuffer_baked, z_prepass, z_prepass_discard, environment_sky, lighting, seen, motion } = Self::create_pipelines(
             device,
             scene,
             &self.motion.layout,
@@ -336,6 +349,7 @@ impl DeferredState {
             &self.seen_bgl,
         );
         [self.gbuffer_pipeline, self.gbuffer_double_sided_pipeline] = gbuffer;
+        self.gbuffer_baked_pipelines = gbuffer_baked;
         [self.z_prepass_pipeline, self.z_prepass_double_sided_pipeline] = z_prepass;
         self.z_prepass_discard_pipelines = z_prepass_discard;
         self.environment_sky_pipeline = environment_sky;
@@ -767,6 +781,12 @@ impl DeferredState {
         scene: &SceneState,
         motion_layout: &wgpu::BindGroupLayout,
         shader: &wgpu::ShaderModule,
+        // `fs_main` for a lit surface, `fs_baked` for a baked-lit one.
+        entry: &str,
+        // Whether it writes the depth itself (`Less`) rather than test against the prepass's
+        // (`LessEqual`): a baked-lit surface is not in the prepass — its fragment stage is a texture
+        // and a few products, cheaper shaded twice where surfaces overlap than drawn twice.
+        writes_depth: bool,
         cull_mode: Option<wgpu::Face>,
         label: &str,
     ) -> wgpu::RenderPipeline {
@@ -794,7 +814,7 @@ impl DeferredState {
             },
             fragment: Some(wgpu::FragmentState {
                 module: shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some(entry),
                 compilation_options: Default::default(),
                 targets: &[
                     // RT0: albedo_metallic
@@ -844,8 +864,8 @@ impl DeferredState {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_write_enabled: Some(writes_depth),
+                depth_compare: Some(if writes_depth { wgpu::CompareFunction::Less } else { wgpu::CompareFunction::LessEqual }),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),

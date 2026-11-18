@@ -1705,6 +1705,14 @@ fn draw_camera_view_with(
         def.motion.set_view_projs(&renderer.queue, now, renderer.previous_view_proj.unwrap_or(now), velocity_read);
     }
     renderer.previous_view_proj = Some(unjittered_view_proj.to_cols_array_2d());
+    // Whether the opaque baked-lit surfaces go through the G-buffer this view (`gbuffer.wgsl`'s
+    // `fs_baked`): when something reads them there — screen-space reflections, which they show and
+    // are shown in, or a decal, which is projected onto the G-buffer. Without a reader the forward
+    // pass draws them for less (`baked_lit.wgsl`, the same picture): measured in `nfsu2-gizmo`'s city,
+    // the G-buffer route is 2 ms more on a Radeon 780M and 1.4 ms on an RTX 3050 (2026-11-19).
+    let baked_in_gbuffer = renderer.deferred.is_some()
+        && (renderer.ssr.as_ref().is_some_and(|s| s.enabled)
+            || world.query::<&crate::renderer::components::Decal>().iter().next().is_some());
     let post = crate::renderer::PostProcessUniforms {
         reproject: reproject.to_cols_array_2d(),
         ..post
@@ -1911,6 +1919,7 @@ fn draw_camera_view_with(
         &draw_items,
         uploaded_instances,
         cam_pos,
+        baked_in_gbuffer,
     );
     renderer.gpu_mark(encoder, "gpu.geometry");
     passes::record_ssao(encoder, renderer);
@@ -1931,7 +1940,7 @@ fn draw_camera_view_with(
     }
     passes::record_forward_and_fluid(
         encoder, renderer, world, &draw_items, uploaded_instances, simulations,
-        inv_view_proj, clear_color, velocity_read,
+        inv_view_proj, clear_color, velocity_read, baked_in_gbuffer,
     );
     passes::record_screen_space_effects(encoder, renderer);
     // Advance SSGI temporal ping-pong / frame counter after its passes have run.
@@ -4952,6 +4961,236 @@ mod golden_render_tests {
             assert!(lit > 500, "the setup: the three meshes are in the frame ({lit} lit pixels)");
             let differing = own.iter().zip(&shared).filter(|(a, b)| a != b).count();
             assert_eq!(differing, 0, "{differing} bytes differ between the meshes with their own buffers and the shared ones");
+        });
+    }
+
+    /// **A baked-lit surface in the G-buffer draws what the forward pass drew.** On the deferred path an
+    /// opaque baked-lit surface goes into the G-buffer (`gbuffer.wgsl`'s `fs_baked`) and the lighting
+    /// pass finishes it as `baked_lit.wgsl` does — so that screen-space reflections and decals can see a
+    /// baked world. The oracle is the same scene with the deferred path taken away, where the forward
+    /// pass draws it with `baked_lit.wgsl`. The scene has what the formula has: vertex colours as the
+    /// baked light, a texture, the sun's shadow falling on it (from a baked-lit caster), a surface that
+    /// receives none, the ambient and emissive knobs, a cut-out by vertex alpha, and fog. The two
+    /// frames hold the parts at different precisions (the G-buffer's targets are 8 and 16 bits), so
+    /// they may differ by a step or two of 255, and by more on a few silhouette pixels (see the
+    /// assertion) — and no more.
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no G-buffer.
+    #[test]
+    fn a_baked_surface_in_the_gbuffer_draws_what_the_forward_pass_drew() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        type Vertex = crate::renderer::gpu_types::Vertex;
+        // A box with a colour per corner height, as a baked city's light runs up a wall; `alpha_low`
+        // fades the bottom's alpha out, for the cut-out.
+        let shaded = |by: Vec3, size: Vec3, warm: bool, alpha_low: f32| -> Vec<Vertex> {
+            cube_vertices()
+                .into_iter()
+                .map(|mut v| {
+                    let up = v.position[1] > 0.0;
+                    v.color = if warm {
+                        if up { [0.9, 0.6, 0.3, 1.0] } else { [0.3, 0.15, 0.08, alpha_low] }
+                    } else if up {
+                        [0.4, 0.5, 0.8, 1.0]
+                    } else {
+                        [0.05, 0.08, 0.2, alpha_low]
+                    };
+                    v.position = (Vec3::from(v.position) * size + by).to_array();
+                    v
+                })
+                .collect()
+        };
+        // `deferred`: the G-buffer path, or the forward one; `reader`: screen-space reflections on, the
+        // reader that sends the baked surfaces through the G-buffer (`baked_in_gbuffer`).
+        async fn frame(deferred: bool, reader: bool, shaded: &dyn Fn(Vec3, Vec3, bool, f32) -> Vec<Vertex>) -> (Vec<u8>, usize) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.fog = Some(crate::renderer::Fog::new([0.2, 0.25, 0.35], 0.02));
+            // The screen-space passes read the G-buffer, which the forward frame has none of; off, but
+            // for the reflections that make the baked surfaces' reader — over matte surfaces (below),
+            // where they add nothing.
+            if reader {
+                renderer.ssr.as_mut().expect("the deferred path has screen-space reflections").enabled = true;
+            } else {
+                renderer.ssr = None;
+            }
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            if !deferred {
+                renderer.deferred = None;
+            }
+            assert_eq!(renderer.deferred.is_some(), deferred, "the setup: the path asked for");
+            let mut assets = AssetManager::new();
+            let layout = renderer.scene.texture_bind_group_layout.clone();
+            let rgba: Vec<u8> = (0..64u32).flat_map(|i| if (i % 8 / 2 + i / 16) % 2 == 0 { [230, 220, 200, 255] } else { [120, 110, 100, 255] }).collect();
+            let checker = assets
+                .install_decoded_material_texture(&renderer.device, &renderer.queue, &layout, "baked_checker", &rgba, 8, 8)
+                .expect("the texture installs");
+            let mut world = World::new();
+            let mut spawn = |vertices: Vec<Vertex>, material: Material, mesh_renderer: MeshRenderer| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::ZERO));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, renderer.mesh_arena.triangle_list(&vertices, "baked piece"));
+                world.add_component(e, material);
+                world.add_component(e, mesh_renderer);
+            };
+            let baked = |tint: Vec4| {
+                let mut material = Material::new(checker.clone()).with_baked_lit(tint);
+                material.roughness = 1.0;
+                material
+            };
+            // The ground, and a caster over it: the sun's shadow falls on baked light.
+            spawn(shaded(Vec3::new(0.0, -1.0, 0.0), Vec3::new(8.0, 0.2, 8.0), false, 1.0), baked(Vec4::ONE), MeshRenderer::new());
+            spawn(shaded(Vec3::new(0.0, 1.2, 0.0), Vec3::new(0.8, 0.8, 0.8), true, 1.0), baked(Vec4::ONE), MeshRenderer::new());
+            // One that receives no shadow, beside it.
+            spawn(
+                shaded(Vec3::new(-2.6, 0.2, 1.5), Vec3::new(0.6, 1.0, 0.6), true, 1.0),
+                baked(Vec4::new(0.8, 1.0, 0.9, 1.0)),
+                MeshRenderer::new().with_receives_shadows(false),
+            );
+            // The two lighting knobs.
+            spawn(
+                shaded(Vec3::new(2.6, 0.2, -1.5), Vec3::new(0.6, 1.0, 0.6), false, 1.0),
+                baked(Vec4::ONE).with_ambient(Vec3::new(0.2, 0.15, 0.1)).with_emissive(Vec3::new(0.0, 0.3, 0.1)),
+                MeshRenderer::new(),
+            );
+            // A cut-out by the vertex alpha, its face to the camera: its lower half is gone.
+            spawn(
+                shaded(Vec3::new(-4.0, 0.6, -2.0), Vec3::new(0.1, 1.2, 1.2), true, 0.0),
+                baked(Vec4::ONE).with_alpha_cutoff(0.5),
+                MeshRenderer::new(),
+            );
+            // Yaw 0 looks along +X: from −X, over the scene.
+            world.spawn_bundle(CameraBundle { position: Vec3::new(-10.0, 4.0, 0.0), yaw: 0.0, pitch: -0.35, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            super::batching::clear_render_cache();
+            let pixels = render_world(&mut renderer, &mut world).await;
+            super::batching::clear_render_cache();
+            // How many of RT2's texels say a baked-lit surface (`BAKED_SURFACE`, its `.w`): where the
+            // deferred frame's baked light came from, or nothing came through the G-buffer at all.
+            let baked = match renderer.deferred.as_ref() {
+                Some(def) => read_target(&renderer, &def.world_position_tex, 128)
+                    .await
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .filter(|t| f16_bits_to_f32(u16::from_le_bytes([t[6], t[7]])) > 150.0)
+                    .count(),
+                None => 0,
+            };
+            (pixels, baked)
+        }
+        pollster::block_on(async {
+            let (forward, _) = frame(false, false, &shaded).await;
+            let (deferred, baked_texels) = frame(true, true, &shaded).await;
+            // With no reader the deferred path draws them forward, for less.
+            let (_, unread) = frame(true, false, &shaded).await;
+            assert_eq!(unread, 0, "with nothing reading them, the baked surfaces stay out of the G-buffer");
+            // 1 458 of the 16 384 when written: the five boxes, the rest is fogged background.
+            assert!(baked_texels > 1000, "the deferred frame's baked surfaces are in the G-buffer: {baked_texels} texels");
+            let lit = forward.as_chunks::<4>().0.iter().filter(|p| p[0].max(p[1]).max(p[2]) > 30).count();
+            assert!(lit > 4000, "the setup: the scene is in the frame ({lit} lit pixels)");
+            // Apart by a step or two, from the precision the G-buffer holds the parts at; and, at an
+            // object's silhouette, by more on a few pixels: the lighting pass takes the sun shadow's
+            // filter axes from the G-buffer's neighbouring pixels, which there are another surface's,
+            // where the forward shader takes them from its own triangle (the deferred PBR path's
+            // shadows do the same). 47 bytes of 65 536 when written. A term left out of the baked
+            // formula moves thousands.
+            let off = forward.iter().zip(&deferred).filter(|(a, b)| a.abs_diff(**b) > 2).count();
+            let mean = forward.iter().zip(&deferred).map(|(a, b)| f64::from(a.abs_diff(*b))).sum::<f64>() / forward.len() as f64;
+            assert!(
+                off * 400 <= forward.len() && mean < 0.2,
+                "the deferred frame is not the forward one: {off} bytes more than 2 apart, {mean:.3} apart on average"
+            );
+        });
+    }
+
+    /// **A glossy baked floor shows what stands on it, and is never darkened for it.** With screen-space
+    /// reflections on, a baked-lit surface goes through the G-buffer (`baked_in_gbuffer`) and SSR reads it:
+    /// a smooth one reflects. The lighting pass gives a baked surface no environment — its baked light is
+    /// all it has — so what SSR finds is added whole; subtracting the environment it would have replaced
+    /// on a lit surface took the sky out of a floor that never had it, and darkened it where something
+    /// stood. A red box on a smooth grey baked floor, under a day sky, from low down: with reflections
+    /// the floor in front of the box turns red, and the frame is nowhere darker than without them but
+    /// on a few silhouette pixels.
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no G-buffer.
+    #[test]
+    fn screen_space_reflections_show_on_a_baked_floor_and_never_darken_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        type Vertex = crate::renderer::gpu_types::Vertex;
+        let box_of = |at: Vec3, size: Vec3, colour: [f32; 4]| -> Vec<Vertex> {
+            cube_vertices()
+                .into_iter()
+                .map(|mut v| {
+                    v.position = (Vec3::from(v.position) * size + at).to_array();
+                    v.color = colour;
+                    v
+                })
+                .collect()
+        };
+        async fn frame(reflections: bool, box_of: &dyn Fn(Vec3, Vec3, [f32; 4]) -> Vec<Vertex>) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            if reflections {
+                renderer.ssr.as_mut().expect("the deferred path has screen-space reflections").enabled = true;
+            } else {
+                renderer.ssr = None;
+            }
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let mut spawn = |vertices: Vec<Vertex>, roughness: f32| {
+                let mut material = Material::new(white.clone()).with_baked_lit(Vec4::ONE);
+                material.roughness = roughness;
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::ZERO));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, renderer.mesh_arena.triangle_list(&vertices, "piece"));
+                world.add_component(e, material);
+                world.add_component(e, MeshRenderer::new().with_shadows(crate::renderer::components::ShadowCasting::Off));
+            };
+            spawn(box_of(Vec3::new(0.0, -0.05, 0.0), Vec3::new(12.0, 0.05, 12.0), [0.3, 0.3, 0.3, 1.0]), 0.05);
+            spawn(box_of(Vec3::new(0.0, 0.6, 0.0), Vec3::new(0.6, 0.6, 1.2), [1.0, 0.1, 0.05, 1.0]), 1.0);
+            // Yaw 0 looks along +X: low, towards the box, so the floor between shows it.
+            world.spawn_bundle(CameraBundle { position: Vec3::new(-6.0, 0.7, 0.0), yaw: 0.0, pitch: -0.12, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            super::batching::clear_render_cache();
+            let pixels = render_world(&mut renderer, &mut world).await;
+            super::batching::clear_render_cache();
+            pixels
+        }
+        pollster::block_on(async {
+            let without = frame(false, &box_of).await;
+            let with = frame(true, &box_of).await;
+            let px = |f: &[u8], i: usize| [f[i * 4], f[i * 4 + 1], f[i * 4 + 2]].map(i32::from);
+            let reddened = (0..128 * 128)
+                .filter(|&i| {
+                    let (a, b) = (px(&with, i), px(&without, i));
+                    a[0] - b[0] > 12 && (a[0] - a[1]) > (b[0] - b[1]) + 12
+                })
+                .count();
+            let darkened = (0..128 * 128).filter(|&i| (0..3).any(|c| px(&without, i)[c] - px(&with, i)[c] > 4)).count();
+            assert!(reddened > 60, "the floor shows the red box: {reddened} pixels reddened");
+            // Two when written, at the box's silhouette, where the frame with reflections draws the floor
+            // through the G-buffer and the one without draws it forward (see
+            // `a_baked_surface_in_the_gbuffer_draws_what_the_forward_pass_drew`). Subtracting the
+            // environment from the baked floor darkened 253.
+            assert!(darkened <= 8, "{darkened} pixels darker with reflections than without");
         });
     }
 

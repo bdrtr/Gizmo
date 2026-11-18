@@ -33,7 +33,10 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let iuv = vec2<i32>(i32(frag_coord.x) * 2, i32(frag_coord.y) * 2);
 
     let pos_samp = textureLoad(t_position_rel_camera, iuv, 0);
-    if (pos_samp.w < 0.5) { return vec4(1.0); } // sky / unlit → fully lit
+    // Sky or unlit: fully lit. A baked-lit surface (`.w` above 150, `common.wgsl`'s `BAKED_SURFACE`)
+    // too — the apply leaves it alone, its baked light has its occlusion — so its texels cost nothing
+    // here; it still occludes the surfaces round it.
+    if (pos_samp.w < 0.5 || pos_samp.w > 150.0) { return vec4(1.0); }
 
     // The G-buffer stores position relative to the camera (see gbuffer.wgsl). Everything below
     // — the kernel offset, the `view_proj` projection, the distance comparisons — is world-space

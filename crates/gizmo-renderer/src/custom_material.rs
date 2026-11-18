@@ -625,7 +625,7 @@ impl SurfacePipelines {
                 let sides = [Some(wgpu::Face::Back), None];
                 Some(DeferredSurface {
                     gbuffer: sides.map(|cull| {
-                        crate::deferred::DeferredState::create_gbuffer_pipeline(device, scene, motion, &geometry, cull, label)
+                        crate::deferred::DeferredState::create_gbuffer_pipeline(device, scene, motion, &geometry, "fs_main", false, cull, label)
                     }),
                     prepass: sides.map(|cull| {
                         crate::deferred::DeferredState::create_z_prepass_pipeline(device, scene, motion, &geometry, cull, true, label)

@@ -45,7 +45,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let full_last = vec2<i32>(textureDimensions(t_position_rel_camera)) - vec2<i32>(1);
     let pixel = vec2<i32>(in.position.xy);
     let here = textureLoad(t_position_rel_camera, clamp(pixel, vec2<i32>(0), full_last), 0);
-    if (here.w < 0.5) {
+    // Nothing drawn here, or a baked-lit surface (`.w` above 150: `common.wgsl`'s `BAKED_SURFACE`,
+    // written out because this shader is not composed): its baked light has its occlusion in it, and
+    // darkening it again would draw the corners twice.
+    if (here.w < 0.5 || here.w > 150.0) {
         return vec4(1.0);
     }
     let normal = normalize(textureLoad(t_normal, clamp(pixel, vec2<i32>(0), full_last), 0).xyz);

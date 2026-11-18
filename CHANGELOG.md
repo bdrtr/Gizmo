@@ -50,6 +50,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A baked-lit surface goes through the G-buffer when something reads it there.** Baked-lit (`MaterialType::BakedLit`)
+  was drawn forward only, so nothing that works from the G-buffer saw a baked world: screen-space reflections had
+  neither a surface to reflect on nor a building to reflect, and a decal had nothing to land on. On the deferred
+  path an opaque one now goes into the G-buffer (`gbuffer.wgsl`'s `fs_baked`) when the view has a reader for it —
+  screen-space reflections on, or a `Decal` in the world — and the lighting pass finishes it as `baked_lit.wgsl` draws
+  it: its baked light (RT3) times its base (RT0), the sun's share of it (`BAKED_SUN_SHARE`, shared by both shaders)
+  darkened by the sun's shadow, plus ambient and emissive (RT5), fogged. RT2's `.w` marks it (`BAKED_SURFACE`), and
+  SSAO and SSGI leave it alone: its baked light has its occlusion and its bounce. It writes its own depth rather
+  than go through the prepass, which drawn twice cost more than shading the overlaps again (city, Radeon 780M: the
+  route is +2 ms that way, +4.5 ms through the prepass). Without a reader the forward pass draws it as before — the
+  route costs nothing a game does not use. The G-buffer's vertex stage passes the clear coat's roughness and the
+  instance's cut-out in one location now: with the front-facing flag, the desktop's sixteen were all taken. Test
+  `a_baked_surface_in_the_gbuffer_draws_what_the_forward_pass_drew`: a baked scene with the sun's shadow on it, a
+  surface that receives none, the ambient and emissive knobs, a cut-out by vertex alpha and fog, drawn through the
+  G-buffer and forward, agree to 2 steps of 255 but on a few silhouette pixels; the G-buffer holds them, and holds
+  none with nothing reading them. Leaving out the shadow, the ambient, the fog or the cut-out's vertex alpha, or
+  routing them always or never, each turns it red. Screen-space reflections add what they find on a baked surface
+  whole: on a lit one they replace the environment the lighting pass put there, and subtracting that from a baked
+  surface, which was given none, darkened it where something stood (`screen_space_reflections_show_on_a_baked_floor_and_never_darken_it`:
+  a red box on a smooth baked floor reddens the floor and darkens 2 silhouette pixels, against 253 before).
+
 - **Every mesh's vertices go to the GPU packed: 60 bytes a vertex from 104.** `Vertex` stays what the engine builds,
   imports and keeps on the CPU; its buffers hold `GpuVertex`, each attribute in the narrowest format that still
   holds it — position and both UV sets as `f32`, the colour as half floats (a value above 1 kept, and the precision a

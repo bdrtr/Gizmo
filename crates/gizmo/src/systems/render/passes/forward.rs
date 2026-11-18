@@ -33,6 +33,9 @@ pub fn record_forward_and_fluid(
     // Whether anything reads the G-buffer's velocity this frame (TAA, motion blur, SSR). Without a
     // reader the forward-drawn surfaces are not drawn into it a second time.
     velocity_read: bool,
+    // Whether the opaque baked-lit surfaces went into the G-buffer this view (`DrawItem::in_gbuffer`):
+    // then not drawn here.
+    baked_in_gbuffer: bool,
 ) {
     // ── Forward pass (unlit / skybox / GPU subsystems; PBR skipped if deferred) ──
     {
@@ -65,7 +68,7 @@ pub fn record_forward_and_fluid(
         };
         let mut render_pass = begin_forward_pass(encoder, renderer, hdr_load, depth_load);
         draw_environment_sky(&mut render_pass, renderer);
-        draw_forward_items(&mut render_pass, renderer, &draw_items[..world_end], uploaded_instances);
+        draw_forward_items(&mut render_pass, renderer, &draw_items[..world_end], uploaded_instances, baked_in_gbuffer);
 
         // Draw GPU Physics Spheres!
         if let Some(physics) = &renderer.gpu_physics {
@@ -90,7 +93,7 @@ pub fn record_forward_and_fluid(
         }
         if world_end < draw_items.len() {
             let mut render_pass = begin_forward_pass(encoder, renderer, wgpu::LoadOp::Load, wgpu::LoadOp::Load);
-            draw_forward_items(&mut render_pass, renderer, &draw_items[world_end..], uploaded_instances);
+            draw_forward_items(&mut render_pass, renderer, &draw_items[world_end..], uploaded_instances, baked_in_gbuffer);
         }
     }
 
@@ -98,7 +101,7 @@ pub fn record_forward_and_fluid(
     // — when either, or SSR, reads it. It is every forward-drawn surface drawn again: in a baked-lit
     // city, as many draws as the frame itself.
     if velocity_read {
-        record_forward_motion(encoder, renderer, draw_items, uploaded_instances);
+        record_forward_motion(encoder, renderer, draw_items, uploaded_instances, baked_in_gbuffer);
     }
 
     // ── GPU particles (soft: a pass of their own, see `record_gpu_particles`) and the fluid's
@@ -129,19 +132,20 @@ pub fn record_forward_and_fluid(
     }
 }
 
-/// How each opaque surface drawn forward moved — unlit, baked-lit — into the G-buffer's velocity, where
+/// How each opaque surface drawn forward moved — unlit; a baked-lit one is in the G-buffer where there is
+/// one (`DrawItem::in_gbuffer`) and writes its own — into the G-buffer's velocity, where
 /// the forward pass left the frame's depth (`fs_motion` in `gbuffer.wgsl`). They write depth and no
 /// G-buffer, so their pixels kept the motion of what stood behind them: TAA reprojected a moving unlit
 /// object as if it stood still, and motion blur left it sharp. Not a sky, a backdrop, the grid, water
 /// (its waves move its vertices, which this pass would not), a mirror, or a game's own pipeline (its own
 /// vertex stage); nothing that blends, whose pixels are what stands behind as much as they are its own.
-fn record_forward_motion(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer, draw_items: &[DrawItem], uploaded_instances: u32) {
+fn record_forward_motion(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer, draw_items: &[DrawItem], uploaded_instances: u32, baked_in_gbuffer: bool) {
     let Some(def) = renderer.deferred.as_ref() else {
         return;
     };
     let moving = |item: &&DrawItem| {
         item.visible_in_camera
-            && item.unlit
+            && !item.in_gbuffer(baked_in_gbuffer)
             && !item.is_transparent
             && !item.is_skybox
             && !item.is_backdrop
@@ -317,6 +321,7 @@ fn draw_forward_items(
     renderer: &Renderer,
     draw_items: &[DrawItem],
     uploaded_instances: u32,
+    baked_in_gbuffer: bool,
 ) {
     let mut plan = super::plan::PassPlan::default();
     for item in draw_items {
@@ -333,7 +338,9 @@ fn draw_forward_items(
         // depth, so a backdrop's wireframe would be drawn somewhere the backdrop is not.
         let wire = item.wire.as_ref().filter(|_| !item.is_skybox && !item.is_backdrop);
 
-        if item.is_skybox || item.unlit || renderer.deferred.is_none() || item.is_transparent {
+        // Forward: what the G-buffer does not hold (`DrawItem::in_gbuffer` — a baked-lit surface is in it
+        // where there is one), and everything where there is none.
+        if item.is_skybox || !item.in_gbuffer(baked_in_gbuffer) || renderer.deferred.is_none() || item.is_transparent {
             draw_solid = true;
         }
 

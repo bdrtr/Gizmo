@@ -10,7 +10,7 @@
 // It samples the shadow group the forward pass already binds at slot 2, so it needs no plumbing of
 // its own. On the web schema that group does not exist (the 4-bind-group limit), and there the
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
-#import gizmo::common::{SceneUniforms, height_fog, instance_keeps}
+#import gizmo::common::{SceneUniforms, height_fog, instance_keeps, BAKED_SUN_SHARE}
 #ifdef SUN_SHADOWS
 #ifdef SUN_SHADOW_PER_VERTEX
 #import gizmo::common::{sun_shadow_coord, sun_shadow_lean, sun_shadow_tap, shadow_distance_fade}
@@ -262,7 +262,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // bounce; a shadowed patch of it is dimmer, not black, and multiplying the whole thing by the
     // visibility would make every shadow a hole. 0.45 is how much of the surface's own light the
     // sun is taken to be responsible for.
-    let sun_share = 0.45;
+    let sun_share = BAKED_SUN_SHARE;
     let lit = baked * (1.0 - sun_share + sun_share * vis);
 
     // `ambient` is incident light: it joins the baked term BEFORE the surface's own colour, so a

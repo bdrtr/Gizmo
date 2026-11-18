@@ -7,7 +7,7 @@
 // fullscreen pass, the procedural environment/IBL and contact shadows. The shadow lookups — the
 // sun's and the local lights' — are common.wgsl's, handed the textures, so the forward shader takes
 // the same ones.
-#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cone, spot_cookie_uv, light_contact_length, gizmo_cluster_index, scene_environment, height_fog, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes, sun_shadow_visibility, shadow_distance_fade}
+#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cone, spot_cookie_uv, light_contact_length, gizmo_cluster_index, scene_environment, height_fog, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes, sun_shadow_visibility, shadow_distance_fade, BAKED_SUN_SHARE, is_baked_surface}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -248,6 +248,37 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // G-buffer happened to still hold from the previous frame.
     if (pos_sample.w < 0.5) {
         return vec4<f32>(scene.clear_color, 1.0);
+    }
+
+    // A baked-lit surface (`gbuffer.wgsl`'s `fs_baked`): finished as `baked_lit.wgsl` draws it — its
+    // baked light (RT3) times its base (RT0), the sun's share of that darkened by the sun's shadow,
+    // plus what no shadow touches (RT5) — and fogged. No other light reaches it: its baked light is
+    // all the light it has. The shadow is baked-lit's own: the cascades, faded at the end of their
+    // range, no contact shadows.
+    if (is_baked_surface(pos_sample.w)) {
+        let baked_pos = pos_sample.xyz + scene.camera_pos.xyz;
+        let baked_n = normalize(normal_roughness.xyz);
+        let rest = textureLoad(t_emissive_gbuf, iuv, 0);
+        var vis = 1.0;
+        let baked_depth = dot(baked_pos - scene.camera_pos.xyz, scene.camera_forward.xyz);
+        let baked_fade = shadow_distance_fade(baked_depth, scene.cascade_splits.w);
+        // RT5's alpha is negative under `MeshRenderer::receives_shadows == false`.
+        if (rest.w >= 0.0 && scene.sun_direction.w > 0.5 && baked_fade > 0.0) {
+            let ci = select_cascade(baked_depth);
+            vis = mix(
+                1.0,
+                sun_shadow_visibility(
+                    t_shadow, s_shadow, scene.light_view_proj[ci], i32(ci), scene.cascade_params.y, baked_pos, baked_n,
+                    receiver_axes(pos_dx, pos_dy, baked_n), normalize(-scene.sun_direction.xyz), scene.shadow_bias.xy,
+                    scene.camera_forward.w,
+                ),
+                baked_fade,
+            );
+        }
+        let lit = tangent_sample.rgb * (1.0 - BAKED_SUN_SHARE + BAKED_SUN_SHARE * vis);
+        let colour = lit * albedo_metallic.rgb + rest.rgb;
+        let fog = compute_height_fog(baked_pos, scene.camera_pos.xyz);
+        return vec4<f32>(mix(colour, fog.rgb, fog.a), 1.0);
     }
 
     let albedo    = albedo_metallic.rgb;

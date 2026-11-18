@@ -1,6 +1,6 @@
 // SSR Raymarching Shader
 // SceneUniforms shared from gizmo::common (composed by load_shader_composed).
-#import gizmo::common::{SceneUniforms, dielectric_f0, scene_environment}
+#import gizmo::common::{SceneUniforms, dielectric_f0, scene_environment, is_baked_surface}
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #import gizmo::reflection_probes::{probe_environment}
 
@@ -134,7 +134,14 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 // so this can be negative, and the additive pass that applies it takes light away: a
                 // dark thing reflected in a metal floor is dark. Added on top, a metal would have shown
                 // both pictures at once, which is why this was held down at 4 % for everything.
-                let environment = reflected_environment(R, normal, world_pos, normal_roughness.w);
+                // A baked-lit surface (`BAKED_SURFACE`) was given no environment by the lighting pass —
+                // its baked light is all it has — so what it reflects is added whole, not swapped for
+                // a reflection that was never there.
+                let environment = select(
+                    reflected_environment(R, normal, world_pos, normal_roughness.w),
+                    vec3<f32>(0.0),
+                    is_baked_surface(pos_sample.w),
+                );
                 return vec4((hit_color - environment) * weight * fade_roughness * edge_fade, 1.0);
             }
         }

@@ -7,6 +7,8 @@ pub fn record_deferred_geometry(
     draw_items: &[DrawItem],
     uploaded_instances: u32,
     cam_pos: gizmo_math::Vec3,
+    // Whether the opaque baked-lit surfaces go into the G-buffer this view (`DrawItem::in_gbuffer`).
+    baked_in_gbuffer: bool,
 ) {
 
     // ── Z-Prepass (Depth Only) ────────────────────────────────────────────────
@@ -44,7 +46,9 @@ pub fn record_deferred_geometry(
             if !item.visible_in_camera {
                 continue;
             }
-            if item.unlit || item.is_skybox || item.is_transparent {
+            // Not a baked-lit surface either: it writes its own depth in the G-buffer pass (`fs_baked`'s
+            // pipelines), where shading it again on an overlap costs less than drawing it twice.
+            if !item.in_gbuffer(baked_in_gbuffer) || item.baked_lit || item.is_skybox || item.is_transparent {
                 continue;
             }
             let key = (item.surface, item.is_double_sided, item.discards);
@@ -170,15 +174,15 @@ pub fn record_deferred_geometry(
         gbuf_pass.set_bind_group(4, renderer.scene.view_instance_bind_group(), &[]);
         gbuf_pass.set_bind_group(5, &def.motion.bind_group, &[]);
         let mut plan = super::plan::PassPlan::default();
-        let mut bound: Option<(Option<gizmo_renderer::custom_material::SurfaceId>, bool)> = None;
+        let mut bound: Option<(Option<gizmo_renderer::custom_material::SurfaceId>, bool, bool)> = None;
         for item in draw_items {
             if !item.visible_in_camera {
                 continue; // ShadowCasting::Only
             }
-            if item.unlit || item.is_transparent {
+            if !item.in_gbuffer(baked_in_gbuffer) || item.is_transparent {
                 continue;
             }
-            let key = (item.surface, item.is_double_sided);
+            let key = (item.surface, item.is_double_sided, item.baked_lit);
             if bound != Some(key) {
                 let pipeline = match item.surface {
                     // The engine's G-buffer shader around the game's surface: written as `Pbr` is.
@@ -186,6 +190,8 @@ pub fn record_deferred_geometry(
                         Some(pipeline) => pipeline,
                         None => continue,
                     },
+                    // A baked-lit surface, finished by the lighting pass as `baked_lit.wgsl` draws it.
+                    None if item.baked_lit => &def.gbuffer_baked_pipelines[usize::from(item.is_double_sided)],
                     None if item.is_double_sided => &def.gbuffer_double_sided_pipeline,
                     None => &def.gbuffer_pipeline,
                 };

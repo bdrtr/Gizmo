@@ -426,6 +426,16 @@ pub struct DrawItem {
 }
 
 impl DrawItem {
+    /// Whether the item is drawn into the G-buffer on a path that has one: what the deferred path
+    /// lights (everything not `unlit`), and — `baked`, when the view has a reader for it there
+    /// (screen-space reflections, a decal) — an opaque baked-lit surface, which the lighting pass
+    /// finishes as `baked_lit.wgsl` would (`gbuffer.wgsl`'s `fs_baked`). A blended baked-lit layer
+    /// stays forward, where it composites in order; on the forward-only path there is no G-buffer and
+    /// every one of them is drawn forward.
+    pub(super) fn in_gbuffer(&self, baked: bool) -> bool {
+        !self.unlit || (baked && self.baked_lit && !self.is_transparent)
+    }
+
     /// Draws `instances` of this item into a [`PassPlan`](super::passes::plan::PassPlan): its
     /// buffers, bound when they change, and a draw per run of instances that draw the same range
     /// of them — one instanced draw for the copies of one mesh, one draw each for different meshes
