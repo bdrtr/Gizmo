@@ -199,6 +199,26 @@ pub(crate) fn cmp_draw_order(a: (DrawLayer, f32), b: (DrawLayer, f32)) -> std::c
     }
 }
 
+/// Puts `items` in the order `order` names: `order` lists, position by position, the index of the
+/// item that goes there. Each item moves once along the permutation's cycles, rather than once per
+/// comparison as in a sort.
+fn permute_into_order<T>(items: &mut [T], order: impl Iterator<Item = usize>) {
+    // `from[i]`: where the item that belongs at `i` is now.
+    let mut from: Vec<usize> = order.collect();
+    debug_assert_eq!(from.len(), items.len());
+    for start in 0..from.len() {
+        // Follow the cycle through `start`, swapping each place's item in.
+        let mut at = start;
+        while from[at] != start {
+            let next = from[at];
+            items.swap(at, next);
+            from[at] = at;
+            at = next;
+        }
+        from[at] = at;
+    }
+}
+
 /// First-seen numbers for the handles a batch is drawn with — its mesh buffer, its material's bind
 /// group, its skeleton's — so that the opaque world can be ordered by them (`BatchData::order`).
 ///
@@ -1335,11 +1355,18 @@ pub(super) fn collect_draw_items(
         //
         // Within the opaque world the depth buffer decides what shows, so the order is free to serve
         // the recording instead: see `opaque_order`.
-        local_draw_items.sort_by(|a, b| {
-            cmp_draw_order((a.layer, a.sort_depth), (b.layer, b.sort_depth)).then_with(|| {
-                if a.layer == DrawLayer::Opaque { a.order.cmp(&b.order) } else { std::cmp::Ordering::Equal }
+        //
+        // The keys are sorted, not the items: a `DrawItem` is some 200 bytes, and a sort moves what it
+        // sorts O(n log n) times — in the static city measurement the sort was a sixth of the
+        // collection, most of it `memmove`. The items then move once, into their places.
+        let mut keys: Vec<(DrawLayer, f32, u128, u32)> =
+            local_draw_items.iter().enumerate().map(|(i, item)| (item.layer, item.sort_depth, item.order, i as u32)).collect();
+        keys.sort_by(|a, b| {
+            cmp_draw_order((a.0, a.1), (b.0, b.1)).then_with(|| {
+                if a.0 == DrawLayer::Opaque { a.2.cmp(&b.2) } else { std::cmp::Ordering::Equal }
             })
         });
+        permute_into_order(&mut local_draw_items, keys.iter().map(|k| k.3 as usize));
 
         cache.instances = local_instances;
         cache.draw_items = local_draw_items;
@@ -1524,6 +1551,31 @@ mod batch_key_tests {
 #[cfg(test)]
 mod transparent_order_tests {
     use super::{cmp_draw_order, draw_layer, DrawLayer, Vec3};
+
+    /// Every permutation of a few items, and some long ones, put in place exactly as gathering
+    /// `items[order[i]]` into a new vector would.
+    #[test]
+    fn permute_into_order_matches_a_gather() {
+        let mut seed = 0x2545_F491u32;
+        let mut orders: Vec<Vec<usize>> = vec![vec![], vec![0], vec![1, 0], vec![2, 0, 1], vec![0, 1, 2, 3]];
+        for n in [5usize, 17, 64, 1000] {
+            let mut order: Vec<usize> = (0..n).collect();
+            for i in (1..n).rev() {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                order.swap(i, seed as usize % (i + 1));
+            }
+            orders.push(order);
+        }
+        for order in orders {
+            let items: Vec<String> = (0..order.len()).map(|i| format!("item {i}")).collect();
+            let gathered: Vec<String> = order.iter().map(|&i| items[i].clone()).collect();
+            let mut permuted = items.clone();
+            super::permute_into_order(&mut permuted, order.iter().copied());
+            assert_eq!(permuted, gathered, "order {order:?}");
+        }
+    }
     use crate::renderer::batch_depth as batch_sort_depth;
     use crate::renderer::gpu_types::InstanceRaw;
     use bytemuck::Zeroable;

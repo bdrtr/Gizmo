@@ -1324,6 +1324,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The draw list is sorted by its keys, not by moving its items.** A `DrawItem` is some 200 bytes and a sort moves
+  what it sorts O(n log n) times: sorting 11 685 of them was a sixth of the collection, most of it `memmove`. The
+  (layer, depth, order, index) keys are sorted and the items then move once along the permutation's cycles
+  (`permute_into_order`, tested against a gather on random permutations). About 0.9 ms a frame in paired runs of the
+  static city measurement, which now also prints the collection and the forward recording on their own.
 - **The draw's per-frame material and mesh passes read only what changed.** `rebind_changed_materials` cloned and
   compared every material's sources, and `describe_meshes` compared every mesh's source string, every frame — in
   `nfsu2-gizmo`'s 14 600-object city together 37 % of the draw's CPU time (MOTOR-NOTLARI #29). Both now read the

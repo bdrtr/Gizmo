@@ -3997,15 +3997,19 @@ mod golden_render_tests {
             crate::systems::render::ensure_global_transforms(&mut world);
             let frames = std::env::var("GIZMO_CITY_FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(40);
             let mut times = [Vec::new(), Vec::new(), Vec::new()];
+            let mut parts = [Vec::new(), Vec::new()];
             for frame in 0..frames {
                 let reference = world.tick.wrapping_sub(1);
                 world.begin_change_frame(reference);
                 // The app's transform propagation, which a game's update runs before the draw.
                 crate::systems::render::ensure_global_transforms(&mut world);
                 let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+                renderer.draw_laps.clear();
                 let t0 = std::time::Instant::now();
                 default_render_pass(&mut world, &mut encoder, &view, &mut renderer);
                 let t1 = std::time::Instant::now();
+                let lap = |name: &str| renderer.draw_laps.iter().filter(|(n, _)| *n == name).map(|(_, d)| d.as_secs_f64() * 1000.0).sum::<f64>();
+                let (batch, forward) = (lap("view.batch"), lap("view.forward"));
                 let commands = encoder.finish();
                 let t2 = std::time::Instant::now();
                 renderer.queue.submit(Some(commands));
@@ -4016,6 +4020,8 @@ mod golden_render_tests {
                     for (slot, d) in times.iter_mut().zip([t1 - t0, t2 - t1, t3 - t2]) {
                         slot.push(d.as_secs_f64() * 1000.0);
                     }
+                    parts[0].push(batch);
+                    parts[1].push(forward);
                 }
             }
             let median = |v: &mut Vec<f64>| {
@@ -4023,13 +4029,16 @@ mod golden_render_tests {
                 v[v.len() / 2]
             };
             let [mut a, mut b, mut c] = times;
+            let [mut batch, mut forward] = parts;
             let stats = renderer.render_stats.expect("a view was drawn");
             eprintln!(
-                "static city, {} entities, {} draws, {} instances (median): record {:.2} ms, finish {:.2} ms, submit {:.2} ms",
+                "static city, {} entities, {} draws, {} instances (median): record {:.2} ms (collection {:.2}, forward {:.2}), finish {:.2} ms, submit {:.2} ms",
                 cells * per_cell,
                 stats.draw_calls,
                 stats.instances,
                 median(&mut a),
+                median(&mut batch),
+                median(&mut forward),
                 median(&mut b),
                 median(&mut c),
             );
