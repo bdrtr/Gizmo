@@ -78,6 +78,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Two shadow-fade tests assumed the desktop's 100 m shadow range** and failed on the forward-only path, whose
+  range has been 40 m since 2026-11-12 (`csm::SHADOW_DISTANCE`); nothing ran `gizmo-renderer`'s tests there. Their
+  depths are fractions of the range now, and the largest step allowed per 5 cm is twice the fade band's average
+  slope — 0.003 on the desktop, where 0.005 was written.
+
 - **`Renderer::create_texture` built a material bind group with seven entries for an eight-entry layout** — the
   terrain's and the editor's stand-in white material. It goes through `assemble_single_texture_bind_group` like
   every other single-texture material, and returns an `Arc<wgpu::BindGroup>`.

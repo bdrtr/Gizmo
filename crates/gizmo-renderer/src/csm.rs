@@ -1056,8 +1056,11 @@ mod tests {
     #[test]
     fn shadow_fade_is_inert_until_the_last_stretch_of_the_range() {
         let far = SHADOW_DISTANCE;
-        // Everything up to (1 - SHADOW_FADE_FRACTION) of the range samples the cascade verbatim.
-        for d in [0.0f32, 1.0, 25.0, 50.0, 84.9] {
+        // Everything up to (1 - SHADOW_FADE_FRACTION) of the range samples the cascade verbatim. As
+        // fractions of the range, which is 100 m on the desktop and 40 m on the forward-only path:
+        // written in metres (25, 50, 84.9) they were past the band on the second, and only the
+        // first ran them.
+        for d in [0.0f32, 0.01, 0.25, 0.5, 0.849].map(|f| f * far) {
             assert_eq!(
                 shadow_distance_fade(d, far),
                 1.0,
@@ -1108,11 +1111,14 @@ mod tests {
             }
             d += step_m;
         }
-        // A 0.45 jump (the pre-fix step) is ten times this bound; the fade spreads the same
-        // 0.45 over SHADOW_FADE_FRACTION x SHADOW_DISTANCE = 15 m, so no 5 cm slice moves far.
+        // The fade spreads the same 0.45 over SHADOW_FADE_FRACTION × SHADOW_DISTANCE (15 m on the
+        // desktop, 6 m on the forward-only path), so a 5 cm slice moves at most a few times its share
+        // of it: twice the average slope is the bound — 0.003 on the desktop, where 0.005 was
+        // written, and 0.0075 over 6 m. The pre-fix step (0.45) is sixty times either.
+        let bound = 2.0 * 0.45 * step_m / (SHADOW_FADE_FRACTION * far);
         assert!(
-            worst_delta < 0.005,
-            "shadow term still steps: {worst_delta} over {step_m} m at {worst_at} m \
+            worst_delta < bound,
+            "shadow term still steps: {worst_delta} over {step_m} m at {worst_at} m, past {bound} \
              (pre-fix this was 0.45 at {far} m)"
         );
         // And the endpoints are still the values the shading intends.
