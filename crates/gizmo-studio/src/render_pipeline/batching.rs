@@ -15,6 +15,9 @@ use super::*;
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct BatchKey {
     pub(super) vbuf: *const wgpu::Buffer,
+    // Where the mesh starts in that buffer: meshes made in a `MeshArena` share one buffer.
+    pub(super) first_vertex: u32,
+    pub(super) first_index: u32,
     pub(super) bind_group: *const wgpu::BindGroup,
     pub(super) skeleton: *const wgpu::BindGroup,
     pub(super) is_skybox: bool,
@@ -52,6 +55,8 @@ pub(super) struct BatchKey {
 
 pub(super) struct BatchData {
     pub(super) vbuf: std::sync::Arc<wgpu::Buffer>,
+    pub(super) first_vertex: u32,
+    pub(super) first_index: u32,
     pub(super) vertex_count: u32,
     /// When `Some`, the batch is drawn with `draw_indexed`.
     ///
@@ -113,6 +118,9 @@ pub(super) struct BatchData {
 #[derive(Clone)]
 pub(super) struct FlatBatchData {
     pub(super) vbuf: std::sync::Arc<wgpu::Buffer>,
+    /// Where the mesh starts in `vbuf` and `ibuf` — `Mesh::first_vertex` / `first_index`.
+    pub(super) first_vertex: u32,
+    pub(super) first_index: u32,
     pub(super) vertex_count: u32,
     /// When `Some`, the batch is drawn with `draw_indexed`.
     ///
@@ -181,12 +189,13 @@ impl FlatBatchData {
         instances: std::ops::Range<u32>,
     ) {
         pass.set_vertex_buffer(0, self.vbuf.slice(..));
+        // From where the mesh starts: a mesh made in a `MeshArena` shares its buffers.
         match &self.ibuf {
             Some(ibuf) => {
                 pass.set_index_buffer(ibuf.slice(..), self.index_format);
-                pass.draw_indexed(0..self.index_count, 0, instances);
+                pass.draw_indexed(self.first_index..self.first_index + self.index_count, self.first_vertex as i32, instances);
             }
-            None => pass.draw(0..self.vertex_count, instances),
+            None => pass.draw(self.first_vertex..self.first_vertex + self.vertex_count, instances),
         }
     }
 }

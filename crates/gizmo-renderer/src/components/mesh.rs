@@ -70,6 +70,19 @@ pub struct Mesh {
     /// closed, and by its back faces: a plane facing the sun cast no shadow at all, and a solid's
     /// soft shadow was measured from its far side.
     pub closed: bool,
+    /// Where this mesh's vertices start in [`Self::vbuf`], in vertices: 0 for a mesh with a buffer
+    /// of its own, its place in a shared buffer for one made in a
+    /// [`MeshArena`](crate::mesh_arena::MeshArena). Every draw of the mesh starts here — and an
+    /// indexed one adds it to each index (`base_vertex`).
+    pub first_vertex: u32,
+    /// Where this mesh's indices start in [`Self::ibuf`], in indices — 0 unless the mesh shares an
+    /// index buffer in a `MeshArena`.
+    pub first_index: u32,
+    /// [`Self::first_vertex`] for each of [`Self::lod_vbufs`].
+    pub lod_first_vertices: Vec<u32>,
+    /// The `MeshArena` ranges this mesh draws from, held by every clone and given back with the
+    /// last. `None` for a mesh with buffers of its own.
+    leases: Option<Arc<[crate::mesh_arena::Lease]>>,
 }
 
 /// One corner of a mesh as a lightmap bake reads it, beside its position in `Mesh::cpu_vertices`.
@@ -264,9 +277,13 @@ impl Mesh {
             bounds,
             cpu_vertices,
             cpu_lightmap,
+            lod_first_vertices: vec![0; lod_vbufs.len()],
             lod_vbufs,
             lod_vertex_counts,
             closed,
+            first_vertex: 0,
+            first_index: 0,
+            leases: None,
         }
     }
 
@@ -365,6 +382,7 @@ impl Mesh {
             if let Some((buf, count)) = build_lod1(device, &unique_vertices, &indices, &mesh.source) {
                 mesh.lod_vbufs.push(buf);
                 mesh.lod_vertex_counts.push(count);
+                mesh.lod_first_vertices.push(0);
             }
         }
         mesh.index_count = indices.len() as u32;
@@ -419,6 +437,10 @@ impl Mesh {
             lod_vbufs: Vec::new(),
             lod_vertex_counts: Vec::new(),
             closed: false,
+            first_vertex: 0,
+            first_index: 0,
+            lod_first_vertices: Vec::new(),
+            leases: None,
         }
     }
 
@@ -448,8 +470,126 @@ impl Mesh {
     /// and above 20000 vertices the LOD buffers are not updated.
     pub fn update_vertices(&self, queue: &wgpu::Queue, vertices: &[crate::gpu_types::Vertex]) {
         let bytes: &[u8] = bytemuck::cast_slice(vertices);
-        debug_assert!(bytes.len() as u64 <= self.vbuf.size());
-        queue.write_buffer(&self.vbuf, 0, bytes);
+        // Within this mesh's own vertices: in a shared buffer, past them is another mesh.
+        debug_assert!(vertices.len() <= self.vertex_count as usize);
+        let offset = u64::from(self.first_vertex) * std::mem::size_of::<crate::gpu_types::Vertex>() as u64;
+        debug_assert!(offset + bytes.len() as u64 <= self.vbuf.size());
+        queue.write_buffer(&self.vbuf, offset, bytes);
+    }
+
+    /// [`Self::from_vertices`] — the same mesh, LOD and all — with its vertices placed in `arena`.
+    // The LOD is native-only (meshopt), and with it what the `mut`s are for.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    pub(crate) fn triangle_list_in(
+        arena: &crate::mesh_arena::MeshArena,
+        vertices: &[crate::gpu_types::Vertex],
+        center_offset: Vec3,
+        source: String,
+    ) -> Self {
+        let placed = arena.place_vertices(vertices);
+        let mut leases = vec![placed.lease];
+        // The triangle-list LOD from `from_vertices_with_lod` would make a buffer of its own: built
+        // here instead, into the arena.
+        let mut mesh = Self::assemble(placed.buffer, vertices, center_offset, source, true);
+        mesh.first_vertex = placed.first;
+        #[cfg(not(target_arch = "wasm32"))]
+        if vertices.len() > LOD_MIN_CORNERS {
+            let (unique_count, indices) = meshopt::generate_vertex_remap(vertices, None);
+            let mut unique_vertices = vec![crate::gpu_types::Vertex::default(); unique_count];
+            for (i, &new_idx) in indices.iter().enumerate() {
+                unique_vertices[new_idx as usize] = vertices[i];
+            }
+            if let Some(lod) = lod1_vertices(&unique_vertices, &indices) {
+                let placed = arena.place_vertices(&lod);
+                mesh.lod_vbufs.push(placed.buffer);
+                mesh.lod_vertex_counts.push(lod.len() as u32);
+                mesh.lod_first_vertices.push(placed.first);
+                leases.push(placed.lease);
+            }
+        }
+        mesh.leases = Some(leases.into());
+        mesh
+    }
+
+    /// [`Self::new_indexed`] with its vertices and indices placed in `arena`, the indices 32-bit.
+    pub(crate) fn indexed_in(
+        arena: &crate::mesh_arena::MeshArena,
+        vertices: &[crate::gpu_types::Vertex],
+        center_offset: Vec3,
+        source: String,
+    ) -> Self {
+        // No deduplication without meshopt: a triangle list, as `new_indexed` falls back to.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let mut mesh = Self::triangle_list_in(arena, vertices, center_offset, source);
+            mesh.center_offset = center_offset;
+            mesh
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (unique_count, indices) = meshopt::generate_vertex_remap(vertices, None);
+            let mut unique_vertices = vec![crate::gpu_types::Vertex::default(); unique_count];
+            for (i, &new_idx) in indices.iter().enumerate() {
+                unique_vertices[new_idx as usize] = vertices[i];
+            }
+            let placed_vertices = arena.place_vertices(&unique_vertices);
+            let placed_indices = arena.place_indices(&indices);
+            let mut mesh = Self::assemble(placed_vertices.buffer, &unique_vertices, center_offset, source, false);
+            mesh.first_vertex = placed_vertices.first;
+            mesh.ibuf = Some(placed_indices.buffer);
+            mesh.first_index = placed_indices.first;
+            mesh.index_count = indices.len() as u32;
+            mesh.index_format = wgpu::IndexFormat::Uint32;
+            let mut leases = vec![placed_vertices.lease, placed_indices.lease];
+            if indices.len() > LOD_MIN_CORNERS {
+                if let Some(lod) = lod1_vertices(&unique_vertices, &indices) {
+                    let placed = arena.place_vertices(&lod);
+                    mesh.lod_vbufs.push(placed.buffer);
+                    mesh.lod_vertex_counts.push(lod.len() as u32);
+                    mesh.lod_first_vertices.push(placed.first);
+                    leases.push(placed.lease);
+                }
+            }
+            // As `new_indexed`: the CPU copy is the original triangle list.
+            mesh.cpu_vertices = Arc::new(vertices.iter().map(|v| Vec3::from(v.position)).collect());
+            mesh.cpu_lightmap = lightmap_corners(vertices);
+            mesh.closed = triangles_close(&mesh.cpu_vertices);
+            mesh.leases = Some(leases.into());
+            mesh
+        }
+    }
+
+    /// The CPU-side facts of a mesh over `vbuf` — bounds, the triangle-list copy, the lightmap
+    /// corners, whether it closes — with no LOD and nothing placed: what both arena constructors
+    /// start from. `triangles` says whether `vertices` is a triangle list (and so whether `closed`
+    /// can be worked out from it here).
+    fn assemble(
+        vbuf: Arc<wgpu::Buffer>,
+        vertices: &[crate::gpu_types::Vertex],
+        center_offset: Vec3,
+        source: String,
+        triangles: bool,
+    ) -> Self {
+        let cpu_vertices: Arc<Vec<Vec3>> = Arc::new(vertices.iter().map(|v| Vec3::from(v.position)).collect());
+        Self {
+            vbuf,
+            vertex_count: vertices.len() as u32,
+            ibuf: None,
+            index_count: 0,
+            index_format: wgpu::IndexFormat::Uint32,
+            center_offset,
+            source,
+            bounds: gizmo_math::Aabb::from_points(vertices.iter().map(|v| v.position)),
+            closed: triangles && triangles_close(&cpu_vertices),
+            cpu_vertices,
+            cpu_lightmap: lightmap_corners(vertices),
+            lod_vbufs: Vec::new(),
+            lod_vertex_counts: Vec::new(),
+            lod_first_vertices: Vec::new(),
+            first_vertex: 0,
+            first_index: 0,
+            leases: None,
+        }
     }
 }
 

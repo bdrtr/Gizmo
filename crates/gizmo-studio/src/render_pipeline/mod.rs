@@ -419,6 +419,8 @@ fn draw_studio_frame(
                 let batch = batches
                     .entry(BatchKey {
                         vbuf: vbuf_ptr,
+                        first_vertex: active_mesh.first_vertex,
+                        first_index: active_mesh.first_index,
                         bind_group: bg_ptr,
                         skeleton: skel_ptr,
                         is_skybox,
@@ -439,6 +441,8 @@ fn draw_studio_frame(
                     })
                     .or_insert_with(|| BatchData {
                         vbuf: active_mesh.vbuf.clone(),
+                        first_vertex: active_mesh.first_vertex,
+                        first_index: active_mesh.first_index,
                         vertex_count: active_mesh.vertex_count,
                         // Studio'nun LOD'u ayrı bir `Mesh` seçiyor (`lods` bileşeni), motorun
                         // `lod_vbufs` düzleştirilmiş tamponları değil — dolayısıyla seçilen
@@ -540,6 +544,8 @@ fn draw_studio_frame(
 
                     flat_b.push(FlatBatchData {
                         vbuf: batch.vbuf,
+                        first_vertex: batch.first_vertex,
+                        first_index: batch.first_index,
                         vertex_count: batch.vertex_count,
                         ibuf: batch.ibuf,
                         index_count: batch.index_count,

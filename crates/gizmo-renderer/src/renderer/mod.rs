@@ -353,6 +353,12 @@ pub struct Renderer {
     /// its own), which has no profiler, so it writes here and the next frame's preparation, which
     /// holds both the world and the renderer, moves it into the world's `FrameProfiler`.
     pub draw_laps: Vec<(&'static str, std::time::Duration)>,
+    /// Shared vertex and index buffers for meshes made through it
+    /// ([`MeshArena::triangle_list`](crate::mesh_arena::MeshArena::triangle_list),
+    /// [`MeshArena::indexed`](crate::mesh_arena::MeshArena::indexed)): draws over one buffer bind it
+    /// once, and the forward pass draws a run of them sharing a pipeline and a material as one
+    /// indirect multi-draw. For many static meshes — a merged city — see [`crate::mesh_arena`].
+    pub mesh_arena: crate::mesh_arena::MeshArena,
     /// The GPU's half: timestamps between the draw's parts (`gpu.*`), read back a few frames late
     /// into [`draw_laps`](Self::draw_laps). `None` where the device has no timestamp queries.
     pub gpu_timer: Option<crate::gpu_timer::GpuTimer>,

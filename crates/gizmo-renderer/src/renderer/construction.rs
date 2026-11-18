@@ -689,6 +689,7 @@ impl Renderer {
         let device_type = device.adapter_info().device_type;
 
         let mut renderer = Self {
+            mesh_arena: crate::mesh_arena::MeshArena::new(&device, &queue),
             instance: None,
             tonemap_curve: crate::gpu_types::TonemapCurve::Aces,
             tonemap_white_point: 4.0,

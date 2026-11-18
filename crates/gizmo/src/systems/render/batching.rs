@@ -308,6 +308,10 @@ pub struct DrawItem {
     // Fields are `pub(super)` (= visible across the whole `render` module tree) so the sibling
     // `passes/` recorders can still read them now that DrawItem lives here, not in mod.rs.
     pub(super) vbuf: std::sync::Arc<wgpu::Buffer>,
+    /// Where the mesh's vertices start in `vbuf` — `Mesh::first_vertex`, or its LOD's.
+    pub(super) first_vertex: u32,
+    /// Where its indices start in `ibuf` — `Mesh::first_index`.
+    pub(super) first_index: u32,
     pub(super) vertex_count: u32,
     /// If `Some`, this batch is drawn with `draw_indexed`; if `None`, with a plain `draw`.
     /// Always `None` while a LOD level is active — see `collect_draw_items`.
@@ -417,15 +421,17 @@ impl DrawItem {
         instances: std::ops::Range<u32>,
     ) {
         pass.set_vertex_buffer(0, self.vbuf.slice(..));
+        // From where the mesh starts in its buffers: a mesh made in a `MeshArena` shares them, and
+        // its indices count from its own first vertex (`base_vertex`).
         match &self.ibuf {
             Some(ibuf) => {
                 // Format mesh'ten geliyor: `Mesh::new_indexed` 65536 tekil vertex'e kadar
                 // `Uint16` yazıyor. Türetmek değil TAŞIMAK önemli — tamponu yazıldığından
                 // farklı bir formatta bağlamak çökmez, sessizce yanlış üçgen çizer.
                 pass.set_index_buffer(ibuf.slice(..), self.index_format);
-                pass.draw_indexed(0..self.index_count, 0, instances);
+                pass.draw_indexed(self.first_index..self.first_index + self.index_count, self.first_vertex as i32, instances);
             }
-            None => pass.draw(0..self.vertex_count, instances),
+            None => pass.draw(self.first_vertex..self.first_vertex + self.vertex_count, instances),
         }
     }
 
@@ -448,6 +454,10 @@ impl DrawItem {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct BatchKey {
     vbuf_id: usize,
+    /// Where the mesh starts in that buffer: meshes made in a `MeshArena` share one, and the buffer
+    /// alone would merge them into one batch drawing the first one's triangles for all.
+    first_vertex: u32,
+    first_index: u32,
     mat_id: usize,
     skeleton_id: Option<usize>,
     // Pass-routing flags MUST be part of the key. `mat_id` is the material's
@@ -510,6 +520,8 @@ pub(crate) struct BatchKey {
 
 pub(crate) struct BatchData {
     vbuf: std::sync::Arc<wgpu::Buffer>,
+    first_vertex: u32,
+    first_index: u32,
     ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
     index_count: u32,
     index_format: wgpu::IndexFormat,
@@ -877,6 +889,14 @@ pub(super) fn collect_draw_items(
                 } else {
                     $mesh.vertex_count
                 };
+                // Where the active buffer's vertices and indices start: 0 for a mesh with buffers of
+                // its own, its place in a shared one for a mesh made in a `MeshArena`.
+                let active_first_vertex = if use_lod1 {
+                    $mesh.lod_first_vertices.first().copied().unwrap_or(0)
+                } else {
+                    $mesh.first_vertex
+                };
+                let active_first_index = if use_lod1 { 0 } else { $mesh.first_index };
                 // LOD tamponları DÜZLEŞTİRİLMİŞ (`Mesh::new` meshopt çıktısını geri açıyor),
                 // yani mesh'in indeksleri tam çözünürlüklü vertex dizisine göre ve LOD1
                 // aktifken GEÇERSİZ. Onları burada düşürmek, karışık bir mesh'i indeksli
@@ -986,6 +1006,8 @@ pub(super) fn collect_draw_items(
 
                 let key = BatchKey {
                     vbuf_id: std::sync::Arc::as_ptr(active_vbuf) as usize,
+                    first_vertex: active_first_vertex,
+                    first_index: active_first_index,
                     mat_id: std::sync::Arc::as_ptr(&$mat.bind_group) as usize,
                     skeleton_id: skel_bg.map(|bg| std::sync::Arc::as_ptr(bg) as usize),
                     is_transparent,
@@ -1027,6 +1049,8 @@ pub(super) fn collect_draw_items(
                                 let slot = cache.batches.len() as u32;
                                 cache.batches.push(BatchData {
                     vbuf: active_vbuf.clone(),
+                    first_vertex: active_first_vertex,
+                    first_index: active_first_index,
                     ibuf: active_ibuf.cloned(),
                     index_count: active_index_count,
                     index_format: active_index_format,
@@ -1290,6 +1314,8 @@ pub(super) fn collect_draw_items(
             local_previous.extend_from_slice(&cache.camera_previous[run(batch.camera)]);
             local_draw_items.push(DrawItem {
                 vbuf: batch.vbuf.clone(),
+                first_vertex: batch.first_vertex,
+                first_index: batch.first_index,
                 vertex_count: batch.vertex_count,
                 ibuf: batch.ibuf.clone(),
                 index_count: batch.index_count,
@@ -1436,6 +1462,8 @@ mod batch_key_tests {
     fn shadow_casting_distinguishes_batches_sharing_a_material() {
         let base = BatchKey {
             vbuf_id: 1,
+            first_vertex: 0,
+            first_index: 0,
             mat_id: 42,
             skeleton_id: None,
             is_transparent: false,
@@ -1470,6 +1498,8 @@ mod batch_key_tests {
     fn routing_flags_distinguish_batches_sharing_a_texture() {
         let base = BatchKey {
             vbuf_id: 1,
+            first_vertex: 0,
+            first_index: 0,
             mat_id: 42, // same cached texture bind group as the variants below
             skeleton_id: None,
             is_transparent: false,

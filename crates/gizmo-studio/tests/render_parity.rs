@@ -649,6 +649,11 @@ fn every_render_capability_is_known_to_both_draw_paths() {
             Path::GameOnly,
             "the second half of `lod_vbufs` — a buffer without its vertex count is not usable,              so the two are one capability and are declined together.",
         ),
+        (
+            "lod_first_vertices",
+            Path::GameOnly,
+            "the third part of `lod_vbufs` — where each LOD buffer's vertices start when the mesh              lives in a `MeshArena` — declined with the other two for the same reason.",
+        ),
     ];
 
     #[derive(PartialEq, Debug, Clone, Copy)]

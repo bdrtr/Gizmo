@@ -50,6 +50,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`MeshArena`: many meshes in a few shared vertex and index buffers** (`Renderer::mesh_arena`,
+  `MeshArena::triangle_list` / `indexed`). A mesh made the ordinary way has a buffer of its own and every draw of it
+  binds that buffer, which wgpu validates and tracks on the CPU when the frame is finished; a city merged into 14 600
+  meshes is 14 600 buffers. Meshes placed in the arena share 52 MiB vertex slabs and 32 MiB index slabs (32-bit), each
+  at its own range — new `Mesh::first_vertex`, `first_index`, `lod_first_vertices`, honoured by every draw in the game
+  path and the studio's (an indexed one draws with `base_vertex`). A mesh's ranges are held by its clones and given back
+  with the last; LODs go into the arena too. Batching keys tell meshes apart by their range, not only their buffer.
+  Tests: slab bookkeeping (first-fit, merging, oversized meshes) and arena meshes sharing a buffer, on wgpu's noop
+  backend; `a_mesh_in_a_shared_buffer_renders_byte_identically` (G-buffer, shadow, baked-lit and indexed meshes placed
+  past a filler, frame byte-equal to their own-buffer twins; fails when a draw ignores the range).
+
 - **GPU timing: `gizmo_renderer::gpu_timer`.** Where the device has timestamp queries (a desktop's and most phones'
   Vulkan), the draw writes a timestamp between each part of each view — `gpu.shadows`, `gpu.geometry`, `gpu.ssao`,
   `gpu.forward`, `gpu.ui`, `gpu.post` — and reads them back from a ring of three a few frames later, never waiting,

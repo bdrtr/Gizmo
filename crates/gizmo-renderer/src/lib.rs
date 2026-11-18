@@ -118,6 +118,7 @@ pub mod material_sync;
 // Which engine fields a keyed property track may animate, and the world's registry of them.
 pub mod property_animation;
 pub mod mesh_sync;
+pub mod mesh_arena;
 pub mod text_sync;
 pub mod sprite_sync;
 /// Clustered light culling — which lights can reach which part of the frame.

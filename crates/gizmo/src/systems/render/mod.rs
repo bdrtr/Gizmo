@@ -4592,6 +4592,86 @@ mod golden_render_tests {
         out
     }
 
+    /// **A mesh in a shared buffer draws as one with a buffer of its own, to the byte.** Meshes made
+    /// in a `MeshArena` share its vertex and index buffers, each from its own range
+    /// (`Mesh::first_vertex`, `first_index`), and every pass draws from there. The scene has one of
+    /// each route that draws a mesh — lit through the G-buffer (z-prepass, G-buffer, sun shadow),
+    /// baked-lit (forward), and indexed (`base_vertex`) — and the arena gets a mesh first that is
+    /// never drawn, so that none of them starts at 0: a pass that ignored the ranges would draw that
+    /// one's triangles, or the wrong corners.
+    #[test]
+    fn a_mesh_in_a_shared_buffer_renders_byte_identically() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        type Vertex = crate::renderer::gpu_types::Vertex;
+        let moved = |by: Vec3, scale: f32| -> Vec<Vertex> {
+            cube_vertices()
+                .into_iter()
+                .map(|mut v| {
+                    v.position = (Vec3::from(v.position) * scale + by).to_array();
+                    v
+                })
+                .collect()
+        };
+        async fn frame(arena: bool, pieces: &[(Vec<Vertex>, bool, &str)]) -> (Vec<u8>, Vec<(u32, u32)>) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            // Taken first and kept, never drawn: the meshes below start past it.
+            let _filler = arena.then(|| {
+                let filler: Vec<Vertex> = (0..300).map(|i| Vertex { position: [i as f32, 9.0, 9.0], ..Default::default() }).collect();
+                (renderer.mesh_arena.triangle_list(&filler, "filler"), renderer.mesh_arena.indexed(&filler, Vec3::ZERO, "filler indexed"))
+            });
+            let mut world = World::new();
+            let mut starts = Vec::new();
+            for (vertices, indexed, route) in pieces {
+                let mesh = match (arena, indexed) {
+                    (true, true) => renderer.mesh_arena.indexed(vertices, Vec3::ZERO, "piece"),
+                    (true, false) => renderer.mesh_arena.triangle_list(vertices, "piece"),
+                    (false, true) => crate::renderer::components::Mesh::new_indexed(&renderer.device, vertices, Vec3::ZERO, "piece".into()),
+                    (false, false) => crate::renderer::components::Mesh::from_vertices(&renderer.device, vertices, "piece"),
+                };
+                starts.push((mesh.first_vertex, mesh.first_index));
+                let material = match *route {
+                    "baked" => Material::new(white.clone()).with_baked_lit(Vec4::new(0.2, 0.8, 0.3, 1.0)),
+                    _ => Material::new(white.clone()).with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.0, 0.6),
+                };
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::ZERO));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, mesh);
+                world.add_component(e, material);
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(-9.0, 1.0, 0.0), yaw: 0.0, pitch: -0.1, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            (render_world(&mut renderer, &mut world).await, starts)
+        }
+        pollster::block_on(async {
+            let pieces = vec![
+                (moved(Vec3::new(0.0, 0.0, -2.5), 1.0), false, "lit"),
+                (moved(Vec3::new(0.0, 0.0, 2.5), 0.6), false, "baked"),
+                (moved(Vec3::new(1.0, 2.2, 0.0), 0.8), true, "lit"),
+            ];
+            let (own, _) = frame(false, &pieces).await;
+            let (shared, starts) = frame(true, &pieces).await;
+            assert!(
+                starts.iter().all(|&(v, _)| v > 0) && starts[2].1 > 0,
+                "the setup: every arena mesh starts past the filler ({starts:?})"
+            );
+            let lit = own.as_chunks::<4>().0.iter().filter(|p| p[0] > 40 || p[1] > 40).count();
+            assert!(lit > 500, "the setup: the three meshes are in the frame ({lit} lit pixels)");
+            let differing = own.iter().zip(&shared).filter(|(a, b)| a != b).count();
+            assert_eq!(differing, 0, "{differing} bytes differ between the meshes with their own buffers and the shared ones");
+        });
+    }
+
     /// The indexed draw path must produce the same picture as the flat one, to the byte.
     ///
     /// This is the only test that executes `draw_indexed` at all. Until it existed, both
