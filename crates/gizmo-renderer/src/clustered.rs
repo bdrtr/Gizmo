@@ -25,9 +25,9 @@
 //!   | 128 | 0.469 | 1638 |
 //!   | 256 | 0.764 | 3180 |
 //!
-//!   0.1–0.2 ms at the light counts a scene actually has today, and 0.76 ms at 256 — which is 4.6 %
-//!   of a 60 Hz frame and therefore the number that justifies a compute-shader build *when* a scene
-//!   needs that many, rather than now.
+//!   Those were with every cluster's bound rebuilt for every light that might touch it. Built once a
+//!   frame (2026-11-19, `benches/clustered_bench.rs`): 0.032 ms at 8 lights, 0.140 ms at 256 — the
+//!   full light array, which a city's street lamps fill.
 //! * The upload is two storage buffers of a few tens of kilobytes.
 //!
 //! A compute-shader build is the follow-up, and its trigger is a measurement: this assignment
@@ -245,7 +245,6 @@ pub fn assign_lights(
             rays.push(unproject(ndc_x, ndc_y));
         }
     }
-    let ray = |i: u32, j: u32| rays[(i + j * (grid.x + 1)) as usize];
 
     // A corner ray, walked out to a given view depth. Dividing by `dot(dir, forward)` is what makes
     // this the point at that *depth* rather than at that distance — the difference is the cosine at
@@ -255,6 +254,31 @@ pub fn assign_lights(
         let t = if cos.abs() < 1e-6 { depth } else { depth / cos };
         Vec3A::from(view.camera_pos + dir * t)
     };
+
+    // Every cluster's bound, once a frame: the AABB of its eight corners, each a corner ray walked out
+    // to the depth of a slice boundary. They used to be built inside the light loop, for every light
+    // and every slice it spans, from the same corners: 256 lights rebuilt some 40 000 bounds a frame
+    // (0.75 ms) where the grid has 3456.
+    let corners: Vec<Vec3A> = (0..=grid.z)
+        .flat_map(|z| {
+            let depth = slice_depth(grid, view.near, view.far, z);
+            rays.iter().map(move |&dir| (dir, depth))
+        })
+        .map(|(dir, depth)| at_depth(dir, depth))
+        .collect();
+    let corner = |i: u32, j: u32, z: u32| corners[((z * (grid.y + 1) + j) * (grid.x + 1) + i) as usize];
+    let mut bounds = vec![Aabb::empty(); cluster_count];
+    for z in 0..grid.z {
+        for j in 0..grid.y {
+            for i in 0..grid.x {
+                let b = &mut bounds[grid.index(i, j, z)];
+                for (ci, cj) in [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)] {
+                    b.extend(corner(ci, cj, z));
+                    b.extend(corner(ci, cj, z + 1));
+                }
+            }
+        }
+    }
 
     for (light_index, light) in lights.iter().enumerate() {
         // A light with no reach to end lights every cluster: a directional light, a fill or a rim
@@ -285,23 +309,13 @@ pub fn assign_lights(
 
         let center = Vec3A::from(light.center);
         for z in z0..=z1 {
-            let d0 = slice_depth(grid, view.near, view.far, z);
-            let d1 = slice_depth(grid, view.near, view.far, z + 1);
             for j in 0..grid.y {
                 for i in 0..grid.x {
-                    // The cluster's eight corners, as an AABB. Built per cluster rather than cached
-                    // because the cache would be 3456 AABBs rebuilt every frame anyway, and this
-                    // way the bound cannot go stale against a moved camera.
-                    let mut bounds = Aabb::empty();
-                    for (ci, cj) in [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)] {
-                        let dir = ray(ci, cj);
-                        bounds.extend(at_depth(dir, d0));
-                        bounds.extend(at_depth(dir, d1));
-                    }
-                    if !sphere_touches_aabb(center, light.radius, bounds) {
+                    let cluster = grid.index(i, j, z);
+                    if !sphere_touches_aabb(center, light.radius, bounds[cluster]) {
                         continue;
                     }
-                    let list = &mut lists[grid.index(i, j, z)];
+                    let list = &mut lists[cluster];
                     if list.len() < MAX_LIGHTS_PER_CLUSTER {
                         list.push(light_index as u32);
                     } else {
@@ -545,6 +559,67 @@ mod tests {
     }
 
     /// Non-finite or zero-radius input is skipped rather than poisoning the assignment.
+    /// The bounds are built once a frame, not per light: the assignment must be the one the per-light
+    /// build made — the same clusters for every light, in the same order. `reference` is that build,
+    /// kept here as it was.
+    #[test]
+    fn the_assignment_is_the_per_light_bounds_one() {
+        fn reference(grid: ClusterGrid, view: ClusterView, lights: &[LightSphere]) -> Vec<Vec<u32>> {
+            let mut lists: Vec<Vec<u32>> = vec![Vec::new(); grid.count()];
+            let inv = view.view_proj.inverse();
+            let ray = |i: u32, j: u32| {
+                let ndc = |k: u32, n: u32| (k as f32 / n as f32) * 2.0 - 1.0;
+                let p = inv * gizmo_math::Vec4::new(ndc(i, grid.x), ndc(j, grid.y), 1.0, 1.0);
+                (Vec3::new(p.x / p.w, p.y / p.w, p.z / p.w) - view.camera_pos).normalize_or_zero()
+            };
+            let at_depth = |dir: Vec3, depth: f32| Vec3A::from(view.camera_pos + dir * (depth / dir.dot(view.forward)));
+            for (index, light) in lights.iter().enumerate() {
+                let depth = (light.center - view.camera_pos).dot(view.forward);
+                let (near_d, far_d) = (depth - light.radius, depth + light.radius);
+                if far_d <= 0.0 || near_d >= view.far {
+                    continue;
+                }
+                let z0 = slice_of_depth(grid, view.near, view.far, near_d.max(view.near));
+                let z1 = slice_of_depth(grid, view.near, view.far, far_d.min(view.far));
+                for z in z0..=z1 {
+                    let (d0, d1) = (slice_depth(grid, view.near, view.far, z), slice_depth(grid, view.near, view.far, z + 1));
+                    for j in 0..grid.y {
+                        for i in 0..grid.x {
+                            let mut bounds = Aabb::empty();
+                            for (ci, cj) in [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)] {
+                                bounds.extend(at_depth(ray(ci, cj), d0));
+                                bounds.extend(at_depth(ray(ci, cj), d1));
+                            }
+                            let list = &mut lists[grid.index(i, j, z)];
+                            if sphere_touches_aabb(Vec3A::from(light.center), light.radius, bounds) && list.len() < MAX_LIGHTS_PER_CLUSTER {
+                                list.push(index as u32);
+                            }
+                        }
+                    }
+                }
+            }
+            lists
+        }
+        let grid = ClusterGrid::default();
+        let lights: Vec<LightSphere> = (0..300)
+            .map(|i| {
+                let t = i as f32 / 300.0;
+                let a = t * std::f32::consts::TAU * 7.0;
+                LightSphere { center: Vec3::new(a.cos() * (2.0 + 60.0 * t), -3.0 + (i % 7) as f32 * 2.0, -150.0 * t + 10.0), radius: 1.0 + (i % 5) as f32 * 7.0 }
+            })
+            .collect();
+        for (near, far) in [(0.1, 100.0), (0.5, 20_000.0)] {
+            let v = view(near, far);
+            let got = assign_lights(grid, v, &lights);
+            let want = reference(grid, v, &lights);
+            for (cluster, list) in want.iter().enumerate() {
+                let [start, count] = got.table[cluster];
+                assert_eq!(&got.indices[start as usize..(start + count) as usize], list.as_slice(), "cluster {cluster}, near {near}, far {far}");
+            }
+            assert!(want.iter().map(Vec::len).sum::<usize>() > 1000, "the lights reach a good share of the grid");
+        }
+    }
+
     #[test]
     fn garbage_lights_are_skipped() {
         let grid = ClusterGrid { x: 2, y: 2, z: 2 };

@@ -1283,13 +1283,13 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   joins CI's `cargo bench -- --test` smoke gate, so the harness cannot quietly stop compiling
   between the times anyone looks at it.
 
-  | lights | recorded by hand | benchmark (2026-08-18) |
-  |---|---|---|
-  | 8 | 0.047 ms | 0.027 ms |
-  | 32 | 0.106 ms | 0.091 ms |
-  | 64 | 0.201 ms | 0.177 ms |
-  | 128 | 0.469 ms | 0.346 ms |
-  | 256 | 0.764 ms | 0.718 ms |
+  | lights | recorded by hand | benchmark (2026-08-18) | bounds once a frame (2026-11-19) |
+  |---|---|---|---|
+  | 8 | 0.047 ms | 0.027 ms | 0.032 ms |
+  | 32 | 0.106 ms | 0.091 ms | 0.043 ms |
+  | 64 | 0.201 ms | 0.177 ms | 0.059 ms |
+  | 128 | 0.469 ms | 0.346 ms | 0.088 ms |
+  | 256 | 0.764 ms | 0.718 ms | 0.140 ms |
 
   Same order, same scaling — linear in light count — and consistently a little lower, which is
   what a different light distribution and criterion's median rather than a wall-clock stopwatch
@@ -1297,6 +1297,16 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   last row: **0.72 ms at 256 lights is 4.3 % of a 60 fps frame**, so the CPU version is still the
   right side of the trade, and a profile that says otherwise is now something anyone can produce
   by running one command.
+
+  **The profile came on 2026-11-19**, and it did not call for compute. `nfsu2-gizmo`'s city spawns
+  its 2,233 street lamps as point lights, the full 256 reach the frame, and the frame's setup grew
+  0.7 → 2.0 ms on the CPU, 0.6 ms of it assignment. The cost was not the light count but a rebuild:
+  every cluster's bound is the AABB of eight corner points, and it was built inside the light loop —
+  for every light, for every slice it spans, all 144 tiles — about 40 000 bounds a frame at 256 lights
+  where the grid has 3456. Built once a frame instead, the assignment is the same list for every
+  cluster (`the_assignment_is_the_per_light_bounds_one` keeps the old build as its reference) at a
+  fifth of the cost; the fixed part — building the bounds, 3456 empty lists — is the 0.03 ms the
+  smallest row now shows.
 
   **The guard finding is the part worth remembering.** Clustering is correct only if
   `assign_lights` (CPU) and `gizmo_cluster_index` (WGSL) agree about which cluster a point is in,

@@ -252,6 +252,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Clustered light assignment builds each cluster's bound once a frame: 0.75 → 0.14 ms at 256 lights.** Each
+  cluster's bound is the AABB of eight corner points. It was rebuilt inside the light loop — for every light,
+  for every depth slice it spans, all 144 tiles — about 40 000 bounds a frame at 256 lights where the grid has
+  3456. `nfsu2-gizmo`'s city, its 2,233 street lamps spawned as point lights, filled the light array, and the
+  frame's setup grew 0.7 → 2.0 ms on the CPU; with the bounds built once, 0.5 → 0.8 ms. The lists are the same
+  for every cluster, in the same order: `the_assignment_is_the_per_light_bounds_one` keeps the old build as its
+  reference and compares all 3456 clusters over 300 lights and two depth ranges. Numbers from
+  `benches/clustered_bench.rs`; ENGINE.md §3 has the table.
+
 - **`Vertex::desc` is `GpuVertex::desc`, and a buffer handed to `Mesh::new` holds `gpu_types::pack_vertices(vertices)`.**
   A pipeline of a game's own describes its vertex buffer with `GpuVertex::desc()`; a buffer built from
   `cast_slice(vertices)` is caught by the size check `Mesh::new` already had, which names `pack_vertices`.
