@@ -14546,6 +14546,91 @@ mod golden_render_tests {
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no TAA.
+    /// **TAA holds small bright lights steady under a moving camera.** A dark facade with a grid of lit
+    /// windows, each smaller than a pixel and many times brighter than the wall, seen while the camera
+    /// slides past — `nfsu2-gizmo`'s night city from a moving car, where TAA made the lights blink
+    /// (MOTOR-NOTLARI #27). The frame's total light should drift as smoothly as the motion: measured as
+    /// the mean change from one frame to the next, against the frame's own light.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn taa_holds_small_bright_lights_steady_under_a_moving_camera() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        const W: usize = 128;
+        // How much the lights blink: over the pixels bright in one frame or the next, how far they move
+        // between the two against how bright they are, after the history has settled. The frame's total
+        // light hides it — the windows blink out of step with one another.
+        async fn flicker(taa: bool) -> f64 {
+            let mut renderer = crate::test_gpu::headless_renderer(W as u32, W as u32).await;
+            if !taa {
+                renderer.taa = None;
+            }
+            renderer.ssr = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.fxaa = None;
+            renderer.smaa = None;
+            renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::uniform([0.01, 0.01, 0.015]));
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let mut cube = |at: Vec3, half: Vec3, material: Material| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, material);
+                world.add_component(e, MeshRenderer::new());
+            };
+            // The facade, 20 m off, and its windows: 12 cm a side, a pixel being about 18 cm there.
+            cube(Vec3::new(0.0, 0.0, -20.5), Vec3::new(12.0, 6.0, 0.4), Material::new(white.clone()).with_pbr(Vec4::new(0.04, 0.04, 0.05, 1.0), 0.9, 0.0));
+            for row in 0..5 {
+                for col in 0..12 {
+                    let at = Vec3::new(-6.6 + col as f32 * 1.13, -2.4 + row as f32 * 1.21, -20.05);
+                    cube(at, Vec3::new(0.06, 0.06, 0.02), Material::new(white.clone()).with_pbr(Vec4::new(1.0, 0.9, 0.7, 1.0), 0.9, 0.0).with_emissive(Vec3::new(30.0, 24.0, 14.0)));
+                }
+            }
+            let cam = world.spawn_bundle(CameraBundle { position: Vec3::ZERO, yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+            let mut frames = Vec::new();
+            for i in 0..56 {
+                if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(cam) {
+                    // Sliding past: a fifteenth of a pixel a frame at the facade.
+                    t.position.x = i as f32 * 0.012;
+                }
+                let pixels = render_world(&mut renderer, &mut world).await;
+                if i >= 24 {
+                    frames.push(pixels);
+                }
+            }
+            let light = |f: &[u8], i: usize| (0..3).map(|c| f64::from(f[i * 4 + c])).sum::<f64>();
+            let (mut moved, mut lit) = (0.0, 0.0);
+            for w in frames.windows(2) {
+                for i in 0..W * W {
+                    let (a, b) = (light(&w[0], i), light(&w[1], i));
+                    if a > 150.0 || b > 150.0 {
+                        moved += (a - b).abs();
+                        lit += a.max(b);
+                    }
+                }
+            }
+            moved / lit
+        }
+        pollster::block_on(async {
+            let (with, without) = (flicker(true).await, flicker(false).await);
+            // 0.015 and 0.054 when written. Clamping the history to the neighbourhood's bare minimum and
+            // maximum, blended in linear light, the lights blinked more with TAA than without: 0.069 —
+            // a window the jitter left out of a frame took its history down with it.
+            assert!(with < 0.5 * without, "TAA's lights blink: {with:.4} against {without:.4} without it");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no TAA.
     /// **TAA treats the frame's edge like the rest of it.** Its history is clamped to the colours around
     /// each pixel, and around an edge pixel that read past the frame, where a load returns zero. So black
     /// was always in range, and what appears at an edge came in over many frames where it came in at once

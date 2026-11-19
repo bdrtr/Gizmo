@@ -50,6 +50,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **TAA holds small bright lights steady under a moving camera.** In `nfsu2-gizmo`'s night city the lit windows,
+  neon and signs blinked as the car drove with TAA on (its MOTOR-NOTLARI #27; the game had TAA off since). TAA
+  clamped the history to the neighbourhood's colours and blended in linear light, where a light a pixel wide and
+  many times brighter than the wall around it, which the jitter puts in one frame and leaves out of the next, swung
+  the box from wall to light and back — a frame without the light took its history down with it. The resolve now
+  clamps and blends each colour over one plus its brightness, and expands the result back (Karis 2014): a light
+  weighs no more than a bright surface does. Test `taa_holds_small_bright_lights_steady_under_a_moving_camera`: a
+  dark facade with sub-pixel windows thirty times brighter, the camera sliding past; over the bright pixels, how far
+  they move from one frame to the next against how bright they are — 0.069 with the old resolve, more than the 0.054
+  without TAA at all, and 0.015 now. (Clamping to the neighbourhood's mean and spread in YCoCg instead was measured
+  too, and changed nothing that the weighting had not.)
+
 - **A desktop game can take the deferred path away and draw forward.** `Renderer::deferred` is a public field, and a
   game that set it to `None` on the desktop failed validation at its next lit surface: the lit forward pipelines
   read the deferred path's irradiance group (group 5), which only the deferred path bound. And SSAO, the

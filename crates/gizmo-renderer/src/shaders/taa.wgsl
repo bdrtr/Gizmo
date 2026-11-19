@@ -39,7 +39,8 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     // read at uv + jitter. It was read at uv − jitter, which put twice the jitter into every frame
     // instead of none: a still scene shimmered along every edge (`taa_settles_on_a_still_scene`).
     let current_uv = uv + params.jitter * vec2<f32>(0.5, -0.5);
-    let current = textureSample(t_current, s_linear, current_uv).rgb;
+    // In the space the resolve filters in (`compress`): see below.
+    let current = compress(textureSample(t_current, s_linear, current_uv).rgb);
 
     // ── Reproject: where this pixel's surface was last frame ──────────────────
     // The velocity is that of the surface the jittered raster found here, between two unjittered
@@ -68,16 +69,22 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     }
 
     // ── Sample history ────────────────────────────────────────────────────────
-    var history = textureSample(t_history, s_linear, history_uv).rgb;
+    var history = compress(textureSample(t_history, s_linear, history_uv).rgb);
 
     // ── Neighbourhood AABB clamp (prevents ghosting from disoccluded regions) ─
+    // Clamped and blended with each colour over one plus its brightness (Karis 2014, `compress`), and
+    // expanded back after: in linear light a lamp a pixel wide, many times brighter than what surrounds
+    // it, which the jitter puts in one frame and leaves out of the next, swung this box from wall to lamp
+    // and back, and the history with it — a frame without the lamp took its history down — so small
+    // bright lights blinked as the camera moved (`nfsu2-gizmo`'s night city, MOTOR-NOTLARI #27;
+    // `taa_holds_small_bright_lights_steady_under_a_moving_camera`).
     let last = vec2<i32>(textureDimensions(t_current)) - vec2<i32>(1);
     var c_min = current;
     var c_max = current;
     for (var dx = -1; dx <= 1; dx++) {
         for (var dy = -1; dy <= 1; dy++) {
             // Clamped: a load past the edge reads zero, which would keep black in range here.
-            let n = textureLoad(t_current, clamp(iuv + vec2(dx, dy), vec2<i32>(0), last), 0).rgb;
+            let n = compress(textureLoad(t_current, clamp(iuv + vec2(dx, dy), vec2<i32>(0), last), 0).rgb);
             c_min = min(c_min, n);
             c_max = max(c_max, n);
         }
@@ -91,8 +98,17 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     // 1/5, so it does not trail. `params.alpha` is 1 when there is no history to keep.
     let moved = length((history_uv - uv) * dims);
     let weight = select(mix(0.05, 0.2, clamp(moved * 0.5, 0.0, 1.0)), 1.0, params.alpha >= 1.0);
-    let resolved = mix(history, current, weight);
+    let resolved = expand(mix(history, current, weight));
     return vec4(resolved, 1.0);
+}
+
+// A colour over one plus its brightest channel, and back: what the resolve clamps and blends in, so that a
+// light weighs no more than a bright surface does.
+fn compress(c: vec3<f32>) -> vec3<f32> {
+    return c / (1.0 + max(c.r, max(c.g, c.b)));
+}
+fn expand(c: vec3<f32>) -> vec3<f32> {
+    return c / max(1.0 - max(c.r, max(c.g, c.b)), 1e-4);
 }
 
 // ── Blit pass: copy TAA output back into the HDR texture ─────────────────────
