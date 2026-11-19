@@ -11,13 +11,29 @@
 // its own. On the web schema that group does not exist (the 4-bind-group limit), and there the
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
 #import gizmo::common::{SceneUniforms, height_fog, instance_keeps, BAKED_SUN_SHARE}
-#import gizmo::surface::{rain_on, wet_darkening}
+#import gizmo::surface::{rain_on, wet_darkening, wet_roughness, WATER_F0}
+#import gizmo::common::{compute_direct_lighting}
 #ifdef RAIN_MAP
 #import gizmo::common::{rain_exposure}
 #endif
 #ifdef REFLECTION_INPUTS
 #import gizmo::common::{BAKED_SURFACE, dielectric_f0}
-#import gizmo::surface::{wet_roughness}
+#endif
+#ifdef LOCAL_LIGHTS
+#import gizmo::common::{light_falloff, spot_cone, spot_cookie_uv, gizmo_cluster_index}
+#endif
+#ifdef SIZED_LIGHTS
+#import gizmo::common::{compute_sphere_lighting, compute_tube_lighting}
+#endif
+#ifdef RECT_LIGHTS
+#import gizmo::common::{compute_rect_lighting}
+#endif
+#ifdef LOCAL_LIGHT_MAPS
+#ifdef LOCAL_SHADOW_TAP
+#import gizmo::common::{local_shadow_layer, local_shadow_tap}
+#else
+#import gizmo::common::{local_shadow_layer, local_shadow_visibility, light_source_radius}
+#endif
 #endif
 #ifdef SUN_SHADOWS
 #ifdef SUN_SHADOW_PER_VERTEX
@@ -29,6 +45,29 @@
 
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
+
+#ifdef LOCAL_LIGHTS
+// The clustered light lists (`gizmo_renderer::clustered`), on the global group as the lit shader has them:
+// what the water on a baked-lit surface reflects (`water_glints`).
+@group(0) @binding(1)
+var<storage, read> cluster_table: array<vec2<u32>>;
+@group(0) @binding(2)
+var<storage, read> cluster_light_indices: array<u32>;
+#endif
+#ifdef LOCAL_LIGHT_MAPS
+// The local lights' shadow layers and the spots' cookies, as the lit shader reads them.
+@group(#{LOCAL_LIGHT_MAP_GROUP}) @binding(#{LOCAL_SHADOW_TEXTURE_BINDING})
+var t_local_shadow: texture_depth_2d_array;
+@group(#{LOCAL_LIGHT_MAP_GROUP}) @binding(#{COOKIE_TEXTURE_BINDING})
+var t_cookie: texture_2d_array<f32>;
+@group(#{LOCAL_LIGHT_MAP_GROUP}) @binding(#{COOKIE_SAMPLER_BINDING})
+var s_cookie: sampler;
+#ifndef SUN_SHADOWS
+// Their comparison sampler is the sun's, declared with the sun's shadow when there is one.
+@group(#{SUN_SHADOW_GROUP}) @binding(#{SUN_SHADOW_SAMPLER_BINDING})
+var s_shadow: sampler_comparison;
+#endif
+#endif
 
 @group(1) @binding(0)
 var t_diffuse: texture_2d<f32>;
@@ -257,6 +296,111 @@ fn fs_reflective(in: VertexOutput, @builtin(front_facing) front: bool) -> Reflec
 }
 #endif
 
+// What the water on a surface reflects of the sun and the frame's lights: water's reflectance
+// (`WATER_F0`) at its roughness, view-dependent, so no bake holds it — the lit shader's lights, the same
+// way, with no colour of its own beneath. `sun`: the sun's visibility here; `receives_shadows`: whether the
+// local lights' shadows fall on it.
+fn water_glints(
+    world_pos: vec3<f32>,
+    N: vec3<f32>,
+    roughness: f32,
+    sun: f32,
+    receives_shadows: bool,
+#ifdef LOCAL_LIGHT_MAPS
+#ifndef LOCAL_SHADOW_TAP
+    axes: ReceiverAxes,
+#endif
+#endif
+) -> vec3<f32> {
+    let V = normalize(scene.camera_pos.xyz - world_pos);
+    let f0 = vec3<f32>(WATER_F0);
+    let r = max(roughness, 0.05);
+    var total = vec3<f32>(0.0);
+    if (scene.sun_direction.w > 0.5) {
+        total += compute_direct_lighting(
+            N, V, normalize(-scene.sun_direction.xyz), vec3<f32>(0.0), r, 0.0, f0, scene.sun_color.rgb, scene.sun_color.w, sun,
+        );
+    }
+#ifdef LOCAL_LIGHTS
+    let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, world_pos);
+    let cluster_range = cluster_table[cluster];
+    for (var ci = 0u; ci < cluster_range.y; ci++) {
+        let i = cluster_light_indices[cluster_range.x + ci];
+        let light = scene.lights[i];
+        let light_type = u32(light.params.y);
+        let intensity = light.position.w;
+        var L: vec3<f32>;
+        var attenuation = 1.0;
+        var window = 1.0;
+        var cookie = vec3<f32>(1.0);
+        if (light_type == 2u) {
+            L = normalize(-light.direction.xyz);
+        } else {
+            let to_light = light.position.xyz - world_pos;
+            L = normalize(to_light);
+            let falloff = light_falloff(length(to_light), light.color.a);
+            attenuation = falloff.x;
+            window = falloff.y;
+            if (light_type == 1u) {
+                attenuation *= spot_cone(light, -L);
+#ifdef LOCAL_LIGHT_MAPS
+                if (light.params.w > 0.0) {
+                    cookie = textureSampleLevel(t_cookie, s_cookie, spot_cookie_uv(light, world_pos), i32(light.params.w) - 1, 0.0).rgb;
+                }
+#endif
+            }
+#ifdef LOCAL_LIGHT_MAPS
+            let shadow_layer = local_shadow_layer(scene.light_shadows[i / 4u][i % 4u], world_pos - light.position.xyz);
+            if (receives_shadows && shadow_layer >= 0 && max(attenuation, window) > 0.0) {
+                // As the lit shader takes it: one tap on the forward-only path, filtered on the desktop.
+#ifdef LOCAL_SHADOW_TAP
+                let lit = local_shadow_tap(
+                    t_local_shadow, s_shadow, scene.local_shadow_layers[shadow_layer].view_proj,
+                    scene.local_shadow_layers[shadow_layer].params, shadow_layer, world_pos, N, to_light,
+                    scene.shadow_bias.xy,
+                );
+#else
+                let lit = local_shadow_visibility(
+                    t_local_shadow, s_shadow, scene.local_shadow_layers[shadow_layer], shadow_layer,
+                    world_pos, N, axes, to_light, scene.shadow_bias.xy, light_source_radius(light),
+                );
+#endif
+                attenuation *= lit;
+                window *= lit;
+            }
+#endif
+        }
+        let light_rgb = light.color.rgb * cookie;
+#ifdef RECT_LIGHTS
+        if (light_type == 3u) {
+            total += compute_rect_lighting(
+                N, V, light.position.xyz - world_pos, light.direction, light.params.z, light.params.w,
+                vec3<f32>(0.0), r, 0.0, f0, light_rgb, intensity, window,
+            );
+            continue;
+        }
+#endif
+#ifdef SIZED_LIGHTS
+        if (light_type == 0u && light.params.w > 0.0) {
+            total += compute_tube_lighting(
+                N, V, light.position.xyz - world_pos, light.direction.xyz, light.params.w, light.params.z,
+                vec3<f32>(0.0), r, 0.0, f0, light_rgb, intensity, attenuation,
+            );
+            continue;
+        }
+        if (light_type != 2u && light.params.z > 0.0) {
+            total += compute_sphere_lighting(
+                N, V, light.position.xyz - world_pos, light.params.z, vec3<f32>(0.0), r, 0.0, f0, light_rgb, intensity, attenuation,
+            );
+            continue;
+        }
+#endif
+        total += compute_direct_lighting(N, V, L, vec3<f32>(0.0), r, 0.0, f0, light_rgb, intensity, attenuation);
+    }
+#endif
+    return total;
+}
+
 // The surface's colour, fogged, with its alpha; `rain` is `rain_on`'s.
 fn shade(in: VertexOutput, rain: vec2<f32>) -> vec4<f32> {
     // The surface's normal and how it runs across neighbouring pixels, for the sun's shadow
@@ -331,9 +475,26 @@ fn shade(in: VertexOutput, rain: vec2<f32>) -> vec4<f32> {
     // leaves this expression exactly `lit * base`.
     let colour = (lit + in.inst_ambient) * base + in.inst_emissive.xyz;
 
+    // The rain on it reflects the sun and the frame's lights (`water_glints`): what no bake holds, since a
+    // reflection depends on where it is seen from. Nothing on a dry surface — baked-lit's own light is
+    // the bake's alone.
+    var shaded = colour;
+    let water = max(rain.x, rain.y);
+    if (water > 0.0) {
+        let water_n = normalize(mix(normalize(in.world_normal), vec3<f32>(0.0, 1.0, 0.0), rain.y));
+        shaded += water * water_glints(
+            in.world_pos, water_n, wet_roughness(in.inst_cutoff_roughness.y, rain), vis, in.inst_emissive.w >= 0.0,
+#ifdef LOCAL_LIGHT_MAPS
+#ifndef LOCAL_SHADOW_TAP
+            surface_axes,
+#endif
+#endif
+        );
+    }
+
     // Vertex alpha multiplies through with the instance's and the texture's. It only reaches the
     // framebuffer on the blended (transparent) variant of this pipeline — the opaque variant
     // writes it to the HDR target's unread alpha channel, exactly as it did before.
     let fog = height_fog(in.world_pos, scene.camera_pos.xyz, scene.fog, scene.fog_shape);
-    return vec4<f32>(mix(colour, fog.rgb, fog.a), final_alpha);
+    return vec4<f32>(mix(shaded, fog.rgb, fog.a), final_alpha);
 }

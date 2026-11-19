@@ -309,7 +309,8 @@ fn fs_baked(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut 
     out.albedo_metallic  = vec4<f32>(base, 0.0);
     out.normal_roughness = vec4<f32>(N, wet_roughness(in.inst_pbr.x, rain));
     out.world_position   = vec4<f32>(in.world_position - scene.camera_pos.xyz, BAKED_SURFACE);
-    out.world_tangent    = vec4<f32>(baked, 0.0);
+    // `w`: how much water lies on it, which the lighting pass lights with the sun and the frame's lights.
+    out.world_tangent    = vec4<f32>(baked, max(rain.x, rain.y));
     out.velocity         = vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 0.0, 0.0);
     out.emissive         = vec4<f32>(in.baked_extra.xyz * base + max(in.inst_emissive.xyz, vec3<f32>(0.0)), select(f0, -f0, in.inst_emissive.w < 0.0));
     return out;

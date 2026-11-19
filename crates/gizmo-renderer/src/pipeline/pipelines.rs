@@ -299,11 +299,13 @@ pub(super) fn build_core_pipelines(
     #[cfg(gizmo_forward_only)]
     let unlit_shader = load_shader_composed_web(device, include_str!("../shaders/unlit.wgsl"), "Unlit Shader");
     #[cfg(gizmo_forward_only)]
+    // With the lit shader's lights (`SceneState::forward_lights`, `forward_local_light_maps`): what the water on
+    // a wet baked-lit surface reflects (`water_glints`).
     let baked_lit_shader = super::shaders::load_shader_composed_web_with(
         device,
         include_str!("../shaders/baked_lit.wgsl"),
         "Baked-Lit Shader",
-        &[sun_shadow],
+        &[sun_shadow, local_maps, local_lights, sized_lights, rect_lights],
     );
 
     #[cfg(not(gizmo_forward_only))]

@@ -50,6 +50,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The rain on a baked-lit surface glints with the sun and the lamps.** A baked surface's light is the bake's, which
+  holds no reflection of a lamp — a reflection depends on where it is seen from — so a wet baked road showed the
+  lamps over it only where the screen-space reflections found them, and a lamp's glint is not on screen. Now the
+  water on it reflects the sun (through its shadow) and the frame's clustered lights — point, spot, sphere, tube and
+  rectangle, with their cookies and shadows — at water's reflectance (`WATER_F0`, 0.02) and its roughness, weighted
+  by how much water lies there: `water_glints` in `baked_lit.wgsl` on the forward routes; on the G-buffer route the
+  baked branch of `deferred_lighting.wgsl`, which `fs_baked` now tells how much water there is (RT3's `w`), through
+  the lit path's light loop, taken out as `local_lighting`. On the forward-only path the baked-lit shader is now
+  built with the lit shader's light definitions (`SceneState::forward_lights`, `forward_local_light_maps`), so a
+  phone's wet road glints too. A dry baked surface is as it was: lit by its bake alone.
+  Seen low along a road the glint is a streak towards the viewer, as wet asphalt shows a lamp. Tests:
+  `a_wet_baked_road_glints_with_the_lamps_over_it` (a lamp changes nothing on a dry baked road; on a wet one it
+  brightens 1040 pixels in a streak 56 down and 23 across), and the routes' parity test, now with a lamp, wet and
+  dry. Leaving the glints out of either route, the lamps out of the G-buffer's, or weighting them by anything but
+  the water turns them red.
+
 - **The ground under cover stays dry in the rain: the rain map.** With `Renderer::wetness` on, a bridge's
   underside, a carport and the road under a parked car were as wet as the road in the open. Now, on the desktop, the
   scene's depth from straight above around the camera (`gizmo_renderer::rain_map`, 256 m a side, the camera at its

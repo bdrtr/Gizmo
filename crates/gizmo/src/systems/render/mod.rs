@@ -5009,8 +5009,8 @@ mod golden_render_tests {
     /// away, where the forward pass draws it with `baked_lit.wgsl`, and the targets say which route each
     /// frame took. The scene has what the formula has: vertex colours as the baked light, a texture, the
     /// sun's shadow falling on it (from a baked-lit caster), a surface that receives none, the ambient
-    /// and emissive knobs, a cut-out by vertex alpha, a double-sided wall seen from behind, and fog —
-    /// dry, and in the rain with puddles. The G-buffer holds the parts at other precisions (8 and 16
+    /// and emissive knobs, a cut-out by vertex alpha, a double-sided wall seen from behind, a lamp, and
+    /// fog — dry, and in the rain with puddles, where the water glints with the sun and the lamp. The G-buffer holds the parts at other precisions (8 and 16
     /// bits), so its frame may differ by a step or two of 255, and by more on a few silhouette pixels
     /// (see the assertion) — and no more.
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no G-buffer.
@@ -5146,6 +5146,15 @@ mod golden_render_tests {
                 world.add_component(d, GlobalTransform::default());
                 world.add_component(d, crate::renderer::components::Decal::new(checker.clone(), Vec4::new(1.0, 1.0, 1.0, 0.0)));
             }
+            // A lamp over it, which a baked-lit surface does not see dry and its water reflects wet
+            // (`water_glints`, and the baked branch of the lighting pass).
+            world.spawn_bundle(crate::bundles::PointLightBundle {
+                position: Vec3::new(1.5, 2.5, -1.0),
+                color: Vec3::new(1.0, 0.8, 0.5),
+                intensity: 12.0,
+                radius: 10.0,
+                ..Default::default()
+            });
             // Yaw 0 looks along +X: from −X, over the scene.
             world.spawn_bundle(CameraBundle { position: Vec3::new(-10.0, 4.0, 0.0), yaw: 0.0, pitch: -0.35, primary: true, ..Default::default() });
             world.spawn_bundle(DirectionalLightBundle::default());
@@ -5551,6 +5560,73 @@ mod golden_render_tests {
             }
             assert_eq!(under_changed, 0, "drawn forward, the floor under the roof is the dry frame's");
             assert!(open_darker > 200, "and the open floor is darker: {open_darker} pixels");
+        });
+    }
+
+    /// **A wet baked road glints with the lamps over it, and a dry one does not see them.** Baked-lit light
+    /// is the bake's alone, so a lamp over a dry baked road changes nothing on it. In the rain the water on
+    /// it reflects the lamp (`water_glints`): view-dependent, which no bake holds. Seen low along the road,
+    /// the glint is a streak towards the viewer — the water's lobe at a grazing angle — longer down the
+    /// screen than across it. On both paths.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_wet_baked_road_glints_with_the_lamps_over_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(wet: bool, lamp: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            renderer.fxaa = None;
+            renderer.smaa = None;
+            if wet {
+                renderer.wetness = Some(crate::renderer::Wetness::new(1.0));
+            }
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let road = world.spawn();
+            world.add_component(road, Transform::new(Vec3::new(30.0, -0.1, 0.0)).with_scale(Vec3::new(40.0, 0.1, 10.0)));
+            world.add_component(road, GlobalTransform::default());
+            world.add_component(road, AssetManager::create_cube(&renderer.device));
+            world.add_component(road, Material::new(white.clone()).with_baked_lit(Vec4::new(0.25, 0.25, 0.27, 1.0)));
+            world.add_component(road, MeshRenderer::new());
+            if lamp {
+                world.spawn_bundle(crate::bundles::PointLightBundle {
+                    position: Vec3::new(14.0, 4.0, 0.0),
+                    color: Vec3::new(1.0, 0.8, 0.5),
+                    intensity: 40.0,
+                    radius: 30.0,
+                    ..Default::default()
+                });
+            }
+            // Low, looking along +X down the road at the lamp.
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 1.2, 0.0), yaw: 0.0, pitch: -0.05, primary: true, ..Default::default() });
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            assert_eq!(frame(false, true).await, frame(false, false).await, "a dry baked road does not see the lamp");
+            let (lit, unlit) = (frame(true, true).await, frame(true, false).await);
+            let brightened: Vec<(usize, usize, i32)> = (0..128 * 128)
+                .filter_map(|i| {
+                    let gain: i32 = (0..3).map(|c| i32::from(lit[i * 4 + c]) - i32::from(unlit[i * 4 + c])).sum();
+                    (gain > 12).then_some((i % 128, i / 128, gain))
+                })
+                .collect();
+            let (xs, ys): (Vec<usize>, Vec<usize>) = brightened.iter().map(|&(x, y, _)| (x, y)).unzip();
+            let extent = |v: &[usize]| v.iter().max().zip(v.iter().min()).map_or(0, |(a, b)| a - b + 1);
+            let (across, down) = (extent(&xs), extent(&ys));
+            // 1040 pixels, 56 down and 23 across, when written.
+            assert!(brightened.len() > 40, "the wet road glints with the lamp: {} pixels", brightened.len());
+            assert!(down > across, "a streak down the screen: {down} px down, {across} across");
         });
     }
 

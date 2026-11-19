@@ -131,6 +131,9 @@ const WET_DARKENING: f32 = 0.6;
 const WET_ROUGHNESS: f32 = 0.2;
 // A puddle's: still water.
 const PUDDLE_ROUGHNESS: f32 = 0.03;
+// Water's reflectance at normal incidence: what the water on a surface reflects the sun and the lights
+// with (`water_glints` in `baked_lit.wgsl`, the baked branch of `deferred_lighting.wgsl`).
+const WATER_F0: f32 = 0.02;
 
 // How wet a fragment is: x = soaked (0 dry … 1), y = under a puddle (0 … 1). Only what faces up takes
 // rain: `up` is the geometric normal's height, so a wall stays near dry and a normal map does not

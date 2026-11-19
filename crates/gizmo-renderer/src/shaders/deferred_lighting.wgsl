@@ -7,7 +7,8 @@
 // fullscreen pass, the procedural environment/IBL and contact shadows. The shadow lookups — the
 // sun's and the local lights' — are common.wgsl's, handed the textures, so the forward shader takes
 // the same ones.
-#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cone, spot_cookie_uv, light_contact_length, gizmo_cluster_index, scene_environment, height_fog, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes, sun_shadow_visibility, shadow_distance_fade, BAKED_SUN_SHARE, is_baked_surface}
+#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cone, spot_cookie_uv, light_contact_length, gizmo_cluster_index, scene_environment, height_fog, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes, sun_shadow_visibility, shadow_distance_fade, BAKED_SUN_SHARE, is_baked_surface, ReceiverAxes}
+#import gizmo::surface::{WATER_F0}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -228,6 +229,133 @@ fn compute_height_fog(world_pos: vec3<f32>, camera_pos: vec3<f32>) -> vec4<f32> 
     return height_fog(world_pos, camera_pos, scene.fog, scene.fog_shape);
 }
 
+// The frame's local lights on a surface — the clustered loop the lit path shades with, taken out so that the
+// water on a baked-lit surface (its branch above) is lit by the same lights, the same way.
+fn local_lighting(
+    world_pos: vec3<f32>,
+    iuv: vec2<i32>,
+    N: vec3<f32>,
+    V: vec3<f32>,
+    T: vec3<f32>,
+    B: vec3<f32>,
+    albedo: vec3<f32>,
+    min_roughness: f32,
+    metallic: f32,
+    f0: vec3<f32>,
+    anisotropy: f32,
+    clear_coat: f32,
+    coat_roughness: f32,
+    receives_shadows: bool,
+    surface_axes: ReceiverAxes,
+) -> vec3<f32> {
+    var total = vec3<f32>(0.0);
+    let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, world_pos);
+    let cluster_range = cluster_table[cluster];
+    for (var ci = 0u; ci < cluster_range.y; ci++) {
+        let i = cluster_light_indices[cluster_range.x + ci];
+        let light      = scene.lights[i];
+        let light_type = u32(light.params.y);
+        let intensity  = light.position.w;
+        var L: vec3<f32>;
+        var atten: f32 = 1.0;
+        // The range falloff alone, without the inverse square — what a rectangle light takes.
+        var window: f32 = 1.0;
+        // A spot's cookie colour (white = none).
+        var cookie = vec3<f32>(1.0);
+
+        if (light_type == 2u) {
+            L = normalize(-light.direction.xyz);
+        } else {
+            let to_light = light.position.xyz - world_pos;
+            L = normalize(to_light);
+            let falloff = light_falloff(length(to_light), light.color.a);
+            atten = falloff.x;
+            window = falloff.y;
+
+            if (light_type == 3u) {
+                // A rectangle lights one side: nothing behind it, for the anisotropic and
+                // clear-coat terms below as much as for its own.
+                let emit = rotate_by_quat(light.direction, vec3<f32>(0.0, 0.0, -1.0));
+                if (dot(-L, emit) <= 0.0) {
+                    atten = 0.0;
+                    window = 0.0;
+                }
+            } else if (light_type == 1u) {
+                atten *= spot_cone(light, -L);
+                if (light.params.w > 0.0) {
+                    cookie = textureSampleLevel(
+                        t_cookie, s_cookie, spot_cookie_uv(light, world_pos), i32(light.params.w) - 1, 0.0
+                    ).rgb;
+                }
+            }
+            // The light's shadow, if it casts one (`gizmo_renderer::local_shadows`) and lights this
+            // point at all. On `window` as well as `atten`: a rectangle light is shaded from the
+            // window alone.
+            let shadow_layer = local_shadow_layer(scene.light_shadows[i / 4u][i % 4u], world_pos - light.position.xyz);
+            if (receives_shadows && shadow_layer >= 0 && max(atten, window) > 0.0) {
+                let lit = local_shadow_visibility(
+                    t_local_shadow, s_shadow, scene.local_shadow_layers[shadow_layer], shadow_layer,
+                    world_pos, N, surface_axes, light.position.xyz - world_pos, scene.shadow_bias.xy, light_source_radius(light),
+                );
+                atten *= lit;
+                window *= lit;
+            }
+        }
+        // Contact shadows toward this light (`contact_shadow_length`), as the sun's: what its map's bias
+        // and texels lose, and a shadow at all for a light that casts no map. Never past the light: a
+        // march beyond it would find what stands behind it.
+        let contact = light_contact_length(scene.light_shadows[i / 4u][i % 4u]);
+        if (receives_shadows && contact > 0.0 && max(atten, window) > 0.0) {
+            var reach = contact;
+            if (light_type != 2u) {
+                reach = min(contact, length(light.position.xyz - world_pos));
+            }
+            let lit = contact_shadow(iuv, L, reach);
+            atten *= lit;
+            window *= lit;
+        }
+
+        let light_rgb = light.color.rgb * cookie;
+        var light_color_contrib = vec3<f32>(0.0);
+        if (light_type == 3u) {
+            // A rectangle light.
+            light_color_contrib = compute_rect_lighting(
+                N, V, light.position.xyz - world_pos, light.direction, light.params.z, light.params.w,
+                albedo, min_roughness, metallic, f0, light_rgb, intensity, window
+            );
+        } else if (anisotropy > 0.0) {
+            light_color_contrib = compute_direct_lighting_anisotropic(
+                N, V, L, T, B, albedo, min_roughness, metallic, anisotropy, f0,
+                light_rgb, intensity, atten
+            );
+        } else if (light_type == 0u && light.params.w > 0.0) {
+            // A tube light.
+            light_color_contrib = compute_tube_lighting(
+                N, V, light.position.xyz - world_pos, light.direction.xyz, light.params.w, light.params.z,
+                albedo, min_roughness, metallic, f0, light_rgb, intensity, atten
+            );
+        } else if (light_type != 2u && light.params.z > 0.0) {
+            // A sphere-sourced point or spot light.
+            light_color_contrib = compute_sphere_lighting(
+                N, V, light.position.xyz - world_pos, light.params.z, albedo, min_roughness, metallic, f0,
+                light_rgb, intensity, atten
+            );
+        } else {
+            light_color_contrib = compute_direct_lighting(
+                N, V, L, albedo, min_roughness, metallic, f0,
+                light_rgb, intensity, atten
+            );
+        }
+
+        if (clear_coat > 0.0) {
+            light_color_contrib = layer_clear_coat(light_color_contrib, N, V, L, light_rgb, intensity, atten, clear_coat, coat_roughness);
+        }
+
+        total += light_color_contrib;
+    }
+    return total;
+}
+
 @fragment
 fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let uv = frag_coord.xy;
@@ -276,7 +404,27 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             );
         }
         let lit = tangent_sample.rgb * (1.0 - BAKED_SUN_SHARE + BAKED_SUN_SHARE * vis);
-        let colour = lit * albedo_metallic.rgb + rest.rgb;
+        var colour = lit * albedo_metallic.rgb + rest.rgb;
+        // The rain on it (RT3's `w`, `fs_baked`'s): the water reflects the sun and the frame's lights, which
+        // no bake holds — a reflection depends on where it is seen from. Its roughness is RT1's, the water's.
+        let water = tangent_sample.w;
+        if (water > 0.0) {
+            let V = normalize(scene.camera_pos.xyz - baked_pos);
+            let rough = max(abs(normal_roughness.w), 0.05);
+            let f0w = vec3<f32>(WATER_F0);
+            var glints = vec3<f32>(0.0);
+            if (scene.sun_direction.w > 0.5) {
+                glints += compute_direct_lighting(
+                    baked_n, V, normalize(-scene.sun_direction.xyz), vec3<f32>(0.0), rough, 0.0, f0w,
+                    scene.sun_color.rgb, scene.sun_color.w, vis,
+                );
+            }
+            glints += local_lighting(
+                baked_pos, iuv, baked_n, V, baked_n, baked_n, vec3<f32>(0.0), rough, 0.0, f0w, 0.0, 0.0, 0.08,
+                rest.w >= 0.0, receiver_axes(pos_dx, pos_dy, baked_n),
+            );
+            colour += glints * water;
+        }
         let fog = compute_height_fog(baked_pos, scene.camera_pos.xyz);
         return vec4<f32>(mix(colour, fog.rgb, fog.a), 1.0);
     }
@@ -425,110 +573,10 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // Only the lights assigned to THIS fragment's cluster, instead of every light in the frame.
     // `i` still holds the index into `scene.lights`, so everything below — including the
     // point-shadow caster comparison — reads exactly as it did when this looped over all of them.
-    let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, world_pos);
-    let cluster_range = cluster_table[cluster];
-    for (var ci = 0u; ci < cluster_range.y; ci++) {
-        let i = cluster_light_indices[cluster_range.x + ci];
-        let light      = scene.lights[i];
-        let light_type = u32(light.params.y);
-        let intensity  = light.position.w;
-        var L: vec3<f32>;
-        var atten: f32 = 1.0;
-        // The range falloff alone, without the inverse square — what a rectangle light takes.
-        var window: f32 = 1.0;
-        // A spot's cookie colour (white = none).
-        var cookie = vec3<f32>(1.0);
-
-        if (light_type == 2u) {
-            L = normalize(-light.direction.xyz);
-        } else {
-            let to_light = light.position.xyz - world_pos;
-            L = normalize(to_light);
-            let falloff = light_falloff(length(to_light), light.color.a);
-            atten = falloff.x;
-            window = falloff.y;
-
-            if (light_type == 3u) {
-                // A rectangle lights one side: nothing behind it, for the anisotropic and
-                // clear-coat terms below as much as for its own.
-                let emit = rotate_by_quat(light.direction, vec3<f32>(0.0, 0.0, -1.0));
-                if (dot(-L, emit) <= 0.0) {
-                    atten = 0.0;
-                    window = 0.0;
-                }
-            } else if (light_type == 1u) {
-                atten *= spot_cone(light, -L);
-                if (light.params.w > 0.0) {
-                    cookie = textureSampleLevel(
-                        t_cookie, s_cookie, spot_cookie_uv(light, world_pos), i32(light.params.w) - 1, 0.0
-                    ).rgb;
-                }
-            }
-            // The light's shadow, if it casts one (`gizmo_renderer::local_shadows`) and lights this
-            // point at all. On `window` as well as `atten`: a rectangle light is shaded from the
-            // window alone.
-            let shadow_layer = local_shadow_layer(scene.light_shadows[i / 4u][i % 4u], world_pos - light.position.xyz);
-            if (receives_shadows && shadow_layer >= 0 && max(atten, window) > 0.0) {
-                let lit = local_shadow_visibility(
-                    t_local_shadow, s_shadow, scene.local_shadow_layers[shadow_layer], shadow_layer,
-                    world_pos, N, surface_axes, light.position.xyz - world_pos, scene.shadow_bias.xy, light_source_radius(light),
-                );
-                atten *= lit;
-                window *= lit;
-            }
-        }
-        // Contact shadows toward this light (`contact_shadow_length`), as the sun's: what its map's bias
-        // and texels lose, and a shadow at all for a light that casts no map. Never past the light: a
-        // march beyond it would find what stands behind it.
-        let contact = light_contact_length(scene.light_shadows[i / 4u][i % 4u]);
-        if (receives_shadows && contact > 0.0 && max(atten, window) > 0.0) {
-            var reach = contact;
-            if (light_type != 2u) {
-                reach = min(contact, length(light.position.xyz - world_pos));
-            }
-            let lit = contact_shadow(iuv, L, reach);
-            atten *= lit;
-            window *= lit;
-        }
-
-        let light_rgb = light.color.rgb * cookie;
-        var light_color_contrib = vec3<f32>(0.0);
-        if (light_type == 3u) {
-            // A rectangle light.
-            light_color_contrib = compute_rect_lighting(
-                N, V, light.position.xyz - world_pos, light.direction, light.params.z, light.params.w,
-                albedo, min_roughness, metallic, f0, light_rgb, intensity, window
-            );
-        } else if (anisotropy > 0.0) {
-            light_color_contrib = compute_direct_lighting_anisotropic(
-                N, V, L, T, B, albedo, min_roughness, metallic, anisotropy, f0,
-                light_rgb, intensity, atten
-            );
-        } else if (light_type == 0u && light.params.w > 0.0) {
-            // A tube light.
-            light_color_contrib = compute_tube_lighting(
-                N, V, light.position.xyz - world_pos, light.direction.xyz, light.params.w, light.params.z,
-                albedo, min_roughness, metallic, f0, light_rgb, intensity, atten
-            );
-        } else if (light_type != 2u && light.params.z > 0.0) {
-            // A sphere-sourced point or spot light.
-            light_color_contrib = compute_sphere_lighting(
-                N, V, light.position.xyz - world_pos, light.params.z, albedo, min_roughness, metallic, f0,
-                light_rgb, intensity, atten
-            );
-        } else {
-            light_color_contrib = compute_direct_lighting(
-                N, V, L, albedo, min_roughness, metallic, f0,
-                light_rgb, intensity, atten
-            );
-        }
-
-        if (clear_coat > 0.0) {
-            light_color_contrib = layer_clear_coat(light_color_contrib, N, V, L, light_rgb, intensity, atten, clear_coat, coat_roughness);
-        }
-
-        total_lighting += light_color_contrib;
-    }
+    total_lighting += local_lighting(
+        world_pos, iuv, N, V, T, B, albedo, min_roughness, metallic, f0, anisotropy, clear_coat, coat_roughness,
+        receives_shadows, surface_axes,
+    );
 
     // Exposure is NOT applied here anymore — it is a single post-process knob applied over
     // the whole composited HDR (deferred + sky + unlit), so it can't compound or skip the
