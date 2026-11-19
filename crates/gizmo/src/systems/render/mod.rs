@@ -1498,6 +1498,8 @@ fn draw_camera_view_with(
     simple: bool,
 ) {
     let mut laps = Laps::start();
+    // Without a G-buffer, nothing that reads one (`Renderer::keep_gbuffer_readers`).
+    renderer.keep_gbuffer_readers();
     // The view's first GPU mark: what it times is the gap since the last view, not a part of this one.
     renderer.gpu_mark(encoder, "gpu.between");
     renderer.skip_mirrors = capture.is_some() || simple;
@@ -5627,6 +5629,58 @@ mod golden_render_tests {
             // 1040 pixels, 56 down and 23 across, when written.
             assert!(brightened.len() > 40, "the wet road glints with the lamp: {} pixels", brightened.len());
             assert!(down > across, "a streak down the screen: {down} px down, {across} across");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path never has a deferred path to take away.
+    /// **A desktop game can take the deferred path away and draw forward.** `Renderer::deferred` is a
+    /// field a game may set to `None`. Until 2026-11-19 the next lit surface failed validation — the lit
+    /// forward pipelines read the deferred path's irradiance group, which nothing bound — and SSAO,
+    /// reflections, GI, TAA and the volumetric light went on reading targets nothing drew. Now the lit
+    /// pipelines read an empty volume (`Renderer::irradiance_group`) and the G-buffer's readers go with it
+    /// (`Renderer::keep_gbuffer_readers`): a lit box on a lit floor, under the sun, every effect at its
+    /// default, draws — the box and the floor lit, the readers gone.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_desktop_view_without_the_deferred_path_draws_lit_surfaces_forward() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            assert!(renderer.ssr.is_some() && renderer.ssao.is_some() && renderer.taa.is_some(), "the setup: the effects are there");
+            renderer.deferred = None;
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            for (at, half, colour) in [
+                (Vec3::new(0.0, -1.1, 0.0), Vec3::new(6.0, 0.1, 6.0), Vec4::new(0.6, 0.6, 0.6, 1.0)),
+                (Vec3::new(0.0, 0.0, 0.0), Vec3::splat(0.8), Vec4::new(0.9, 0.2, 0.1, 1.0)),
+            ] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(white.clone()).with_pbr(colour, 0.6, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 1.5, 4.0), yaw: -std::f32::consts::FRAC_PI_2, pitch: -0.35, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            // Two frames: the second has a history for whatever keeps one.
+            render_world(&mut renderer, &mut world).await;
+            let pixels = render_world(&mut renderer, &mut world).await;
+            assert!(
+                renderer.ssr.is_none() && renderer.ssao.is_none() && renderer.ssgi.is_none() && renderer.taa.is_none() && renderer.volumetric.is_none() && renderer.decal.is_none(),
+                "the G-buffer's readers went with it"
+            );
+            let px = |x: usize, y: usize| [pixels[(y * 128 + x) * 4], pixels[(y * 128 + x) * 4 + 1], pixels[(y * 128 + x) * 4 + 2]];
+            let red = (0..128 * 128).filter(|&i| { let p = px(i % 128, i / 128); p[0] > 80 && p[0] > p[1] + 40 }).count();
+            let grey = (0..128 * 128).filter(|&i| { let p = px(i % 128, i / 128); p[0] > 60 && p[0].abs_diff(p[1]) < 10 && p[1].abs_diff(p[2]) < 12 }).count();
+            assert!(red > 400 && grey > 2000, "the lit box ({red} red pixels) and the lit floor ({grey} grey) are drawn");
         });
     }
 

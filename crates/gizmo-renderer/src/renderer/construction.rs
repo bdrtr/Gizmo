@@ -622,6 +622,9 @@ impl Renderer {
             .as_ref()
             .map(|def| crate::decal::DecalState::new(&device, &scene_state, def));
 
+        #[cfg(not(gizmo_forward_only))]
+        let empty_irradiance = crate::irradiance::IrradianceState::new(&device);
+
         let taa = if let Some(ref def) = deferred {
             Some(crate::taa::TaaState::new(
                 &device,
@@ -711,6 +714,8 @@ impl Renderer {
             scene: scene_state,
             post: post_state,
             deferred,
+            #[cfg(not(gizmo_forward_only))]
+            empty_irradiance,
             ssao,
             // Built below by `enable_ssr`, the one way to build it.
             ssr: None,

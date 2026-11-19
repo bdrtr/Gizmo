@@ -162,8 +162,15 @@ pub struct Renderer {
 
     // === DEFERRED RENDERING — G-Buffer + Lighting pass ===
     /// The G-buffer and the deferred lighting pass. `None` on the web profile, which renders
-    /// forward-only.
+    /// forward-only. A desktop game may take it away and draw forward: what reads the G-buffer goes
+    /// with it the next frame ([`keep_gbuffer_readers`](Self::keep_gbuffer_readers)), and the lit
+    /// forward pipelines read an empty irradiance volume in its place
+    /// ([`irradiance_group`](Self::irradiance_group)).
     pub deferred: Option<crate::deferred::DeferredState>,
+    /// The irradiance group the lit forward pipelines read where there is no deferred path's: no
+    /// probes, no volume. Desktop only — the forward-only path's lit pipelines have no such group.
+    #[cfg(not(gizmo_forward_only))]
+    empty_irradiance: crate::irradiance::IrradianceState,
 
     // === SSAO — Screen-Space Ambient Occlusion ===
     /// Screen-space ambient occlusion. Requires [`deferred`](Renderer::deferred).
@@ -1481,6 +1488,29 @@ impl Renderer {
         if let Some(ae) = self.auto_exposure.as_mut() {
             ae.update(&self.queue, dt);
         }
+    }
+
+    /// What reads the G-buffer — SSAO, screen-space reflections and GI, decals, TAA, the volumetric
+    /// light — exists only beside it: each is built with it, from its targets, and none on the
+    /// forward-only path. When a game takes the deferred path away ([`deferred`](Self::deferred)),
+    /// they would go on reading targets nothing draws any more; the frame drops them first.
+    pub fn keep_gbuffer_readers(&mut self) {
+        if self.deferred.is_none() {
+            self.ssao = None;
+            self.ssr = None;
+            self.ssgi = None;
+            self.decal = None;
+            self.taa = None;
+            self.volumetric = None;
+        }
+    }
+
+    /// The lit forward pipelines' group 5: the deferred path's irradiance volume and reflection
+    /// probes, or, without one, an empty volume (until 2026-11-19 nothing was bound, and a lit
+    /// surface drawn without the deferred path failed validation).
+    #[cfg(not(gizmo_forward_only))]
+    pub fn irradiance_group(&self) -> &wgpu::BindGroup {
+        self.deferred.as_ref().map_or(&self.empty_irradiance.bind_group, |def| &def.irradiance.bind_group)
     }
 
     /// A GPU timestamp: the end of the part called `label` (see [`crate::gpu_timer`]). Nothing

@@ -50,6 +50,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A desktop game can take the deferred path away and draw forward.** `Renderer::deferred` is a public field, and a
+  game that set it to `None` on the desktop failed validation at its next lit surface: the lit forward pipelines
+  read the deferred path's irradiance group (group 5), which only the deferred path bound. And SSAO, the
+  screen-space reflections and GI, decals, TAA and the volumetric light — each built from the G-buffer's targets,
+  and none on the forward-only path — went on drawing from them and failed validation too. Now the lit pipelines
+  read an empty irradiance volume in its place (`Renderer::irradiance_group`), and the frame drops the G-buffer's
+  readers with it (`Renderer::keep_gbuffer_readers`), as the renderer builds them only beside it. Test
+  `a_desktop_view_without_the_deferred_path_draws_lit_surfaces_forward`: a lit box on a lit floor under the sun,
+  every effect at its default, draws both lit; binding nothing at group 5, or keeping the readers, fails it.
+
 - **The rain on a baked-lit surface glints with the sun and the lamps.** A baked surface's light is the bake's, which
   holds no reflection of a lamp — a reflection depends on where it is seen from — so a wet baked road showed the
   lamps over it only where the screen-space reflections found them, and a lamp's glint is not on screen. Now the

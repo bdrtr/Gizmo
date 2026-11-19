@@ -308,12 +308,10 @@ fn begin_forward_pass<'e>(
     #[cfg(not(gizmo_forward_only))]
     render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
     render_pass.set_bind_group(BG_INSTANCE, renderer.scene.view_instance_bind_group(), &[]);
-    // Group 5 of the lit pipelines: the irradiance volume's group, for reflection probes.
-    // Bound once; it stays bound across the pipeline switches below.
+    // Group 5 of the lit pipelines: the irradiance volume's group, for reflection probes — an empty
+    // one without the deferred path. Bound once; it stays bound across the pipeline switches below.
     #[cfg(not(gizmo_forward_only))]
-    if let Some(def) = renderer.deferred.as_ref() {
-        render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
-    }
+    render_pass.set_bind_group(5, renderer.irradiance_group(), &[]);
     render_pass
 }
 
@@ -500,9 +498,7 @@ fn draw_forward_items(
             let _ = wire;
             item.plan_draw(&mut plan, inst_start..inst_end);
             #[cfg(not(gizmo_forward_only))]
-            if let Some(def) = renderer.deferred.as_ref() {
-                plan.set_bind_group(5, &def.irradiance.bind_group);
-            }
+            plan.set_bind_group(5, renderer.irradiance_group());
         }
     }
     plan.replay(render_pass, &renderer.device, renderer.multi_draw);
