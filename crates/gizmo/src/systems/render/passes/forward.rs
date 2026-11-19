@@ -16,7 +16,8 @@ const BG_INSTANCE: u32 = 3;
 
 pub fn record_forward_and_fluid(
     encoder: &mut wgpu::CommandEncoder,
-    renderer: &Renderer,
+    // `mut` for the GPU timer's marks between the parts (`gpu.forward`, `gpu.surface_effects`).
+    renderer: &mut Renderer,
     world: &World,
     draw_items: &[DrawItem],
     uploaded_instances: u32,
@@ -84,7 +85,9 @@ pub fn record_forward_and_fluid(
 
         // (GPU Particles artık AYRI bir pass'te — aşağıda — soft-particle derinlik örneklemesi için.)
         drop(render_pass);
+        renderer.gpu_mark(encoder, "gpu.forward");
         super::screen_space::record_surface_effects(encoder, renderer);
+        renderer.gpu_mark(encoder, "gpu.surface_effects");
         if volumetric {
             record_veil_depth(encoder, renderer, &draw_items[world_end..], uploaded_instances, simulations);
             super::screen_space::record_volumetric_march(encoder, renderer);

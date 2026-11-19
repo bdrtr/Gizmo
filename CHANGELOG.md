@@ -50,6 +50,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Screen-space reflections read their own half-resolution geometry: about a third cheaper.** The march read the
+  full-resolution G-buffer's position at every step and the glossy resolve its position and normal at every tap —
+  sixteen bytes scattered over four times the area of the pass that wanted them. A prepare pass (`ssr_prepare.wgsl`,
+  `SsrState::record_prepare`) now writes, once a half-resolution pixel, the distance of its surface and its normal
+  folded into two channels (`encode_octahedral` / `decode_octahedral`, new in `gizmo::common`); the march steps on
+  the distance, and the resolve rebuilds a tap's position from it along the pixel's ray. `nfsu2-gizmo`'s wet city,
+  Radeon 780M, three alternating pairs: 3.0 → 1.9, 4.0 → 2.6 and 4.3 → 2.6 ms for the reflections, the frame within
+  0.18 of 255 on average. The GPU timer marks them apart now: `gpu.forward` is the opaque forward draws,
+  `gpu.surface_effects` the reflections and the GI with the seen mask, `gpu.blended` glass, what blends, the forward
+  motion and the fluid, `gpu.volumetric` the volumetric apply, `gpu.taa` the rest (the split as first written
+  called the volumetric apply `gpu.screen_space` and counted the reflections as forward draws). Test
+  `a_glossy_floor_spreads_what_it_reflects_and_streaks_it` adds a floor sloping sideways, where the resolve's plane
+  test depends on the rebuilt positions: with the pixel's ray upside down — which leaves a level floor level, so the
+  level case could not see it — the rough floor stopped spreading the reflection (4.20 px against 6.11).
+
 - **For screen-space reflections a baked-lit surface stays forward and writes what they read beside its colour.**
   A baked-lit surface went through the G-buffer whenever reflections were on, and in `nfsu2-gizmo`'s wet city that
   route cost about twice the forward draw: six targets a pixel and the lighting pass, against one. Measured with new
@@ -67,8 +82,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     tint the G-buffer pass writes, never the motion (`velocity_read` named a temporal pass they do not have), and
     with them on, every surface drawn forward was drawn a second time into it.
   - The GPU timer's `gpu.geometry` is split into `gpu.prepass`, `gpu.gbuffer` and `gpu.lighting` (decals and the
-    lighting pass), and `gpu.forward` into `gpu.forward` (the forward draws, with the reflections, which run inside
-    them), `gpu.screen_space` and `gpu.taa` — the G-buffer's cost was hidden among the rest.
+    lighting pass) — the G-buffer's cost was hidden among the rest. (The forward stage's split, as first written,
+    called the volumetric apply `gpu.screen_space` and left the reflections inside `gpu.forward`; see the entry
+    above.)
   Tests: `a_baked_surface_draws_the_same_picture_on_each_of_its_routes` (renamed and extended) draws the baked scene
   — now with a double-sided wall seen from behind — on all three routes, dry and wet, against the forward path, and
   reads which route each took off the G-buffer (the reflective one writes RT2 and no albedo, the decal's both);

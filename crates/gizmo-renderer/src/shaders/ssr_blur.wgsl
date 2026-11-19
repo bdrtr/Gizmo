@@ -9,17 +9,20 @@
 // (width under half a pixel) is left as it is. Only pixels of the same surface are gathered: on its plane, and
 // facing its way.
 //
-// Half resolution, as the march is: the G-buffer is read at twice the coordinate.
+// Half resolution, as the march is, and reading only what is at that resolution: the march's result
+// and its geometry (`ssr_prepare.wgsl`), not the full-resolution G-buffer, which every tap read twice
+// until 2026-11-19.
 
-#import gizmo::common::{SceneUniforms}
+#import gizmo::common::{SceneUniforms, decode_octahedral}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
 // The march's result: rgb = what the pixel's reflection adds, a = the lobe's width in full-resolution
 // pixels, 0 where the pixel reflects nothing.
 @group(1) @binding(0) var t_src: texture_2d<f32>;
-@group(1) @binding(1) var t_normal_roughness: texture_2d<f32>;
-@group(1) @binding(2) var t_position_rel_camera: texture_2d<f32>;
+// The geometry at this resolution (`ssr_prepare.wgsl`): the distance from the camera in `x`, 0 for
+// nothing; the normal folded into `yz` (`encode_octahedral`).
+@group(1) @binding(1) var t_geometry: texture_2d<f32>;
 
 // Samples each side of the pixel.
 const TAPS: i32 = 7;
@@ -42,6 +45,15 @@ fn fs_across(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32>
     return resolve(frag_coord.xy, false);
 }
 
+// Where a pixel's surface is, relative to the camera: `distance` along the ray through the
+// full-resolution texel the march took for it, at twice its coordinate.
+fn surface_at(pixel: vec2<i32>, distance: f32, full_dim: vec2<f32>) -> vec3<f32> {
+    let uv = (vec2<f32>(pixel * 2) + 0.5) / full_dim;
+    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let through = scene.inv_view_proj * vec4<f32>(ndc, 0.5, 1.0);
+    return normalize(through.xyz / through.w - scene.camera_pos.xyz) * distance;
+}
+
 fn resolve(frag: vec2<f32>, along: bool) -> vec4<f32> {
     let dim = vec2<i32>(textureDimensions(t_src));
     let here = vec2<i32>(frag);
@@ -50,9 +62,14 @@ fn resolve(frag: vec2<f32>, along: bool) -> vec4<f32> {
     if (width < 0.5) {
         return centre;
     }
-    let normal = normalize(textureLoad(t_normal_roughness, here * 2, 0).xyz);
-    let position = textureLoad(t_position_rel_camera, here * 2, 0).xyz;
-    let dist = length(position);
+    let geometry = textureLoad(t_geometry, here, 0);
+    let dist = geometry.x;
+    if (dist <= 0.0) {
+        return centre;
+    }
+    let full_dim = vec2<f32>(textureDimensions(t_geometry)) * 2.0;
+    let normal = decode_octahedral(geometry.yz);
+    let position = surface_at(here, dist, full_dim);
     let n_dot_v = max(dot(-position / max(dist, 1e-4), normal), 0.0);
 
     // The axis the normal takes on screen, in pixels; straight up the screen where it points at the
@@ -90,9 +107,11 @@ fn resolve(frag: vec2<f32>, along: bool) -> vec4<f32> {
             if (found.a <= 0.0) {
                 continue;
             }
-            let there = textureLoad(t_position_rel_camera, at * 2, 0);
-            let facing = dot(normalize(textureLoad(t_normal_roughness, at * 2, 0).xyz), normal);
-            if (there.w < 0.5 || abs(dot(there.xyz - position, normal)) > tolerance || facing < 0.9) {
+            let there = textureLoad(t_geometry, at, 0);
+            if (there.x <= 0.0 || dot(decode_octahedral(there.yz), normal) < 0.9) {
+                continue;
+            }
+            if (abs(dot(surface_at(at, there.x, full_dim) - position, normal)) > tolerance) {
                 continue;
             }
             sum += found.rgb * w;

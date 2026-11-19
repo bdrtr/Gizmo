@@ -816,6 +816,25 @@ fn instance_keeps(packed: f32, alpha: f32, pixel: vec2<f32>) -> bool {
 
 // What `InstanceRaw.emissive.w` (and RT5's alpha, its copy) says about a non-metal's F0: the
 // magnitude, with 0 standing for "not set". Its sign is `receives_shadows`, tested by the callers.
+// A unit vector folded onto an octahedron and flattened to two numbers in [-1, 1] (Cigolle et al.,
+// "A Survey of Efficient Representations for Independent Unit Vectors", 2014): a normal in two
+// channels, where a target has no room for three.
+fn encode_octahedral(n: vec3<f32>) -> vec2<f32> {
+    let p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+    if (n.z >= 0.0) {
+        return p;
+    }
+    return (vec2<f32>(1.0) - abs(p.yx)) * select(vec2<f32>(-1.0), vec2<f32>(1.0), p >= vec2<f32>(0.0));
+}
+
+// `encode_octahedral`'s unit vector back.
+fn decode_octahedral(e: vec2<f32>) -> vec3<f32> {
+    var n = vec3<f32>(e, 1.0 - abs(e.x) - abs(e.y));
+    let t = max(-n.z, 0.0);
+    n = vec3<f32>(n.xy + select(vec2<f32>(t), vec2<f32>(-t), n.xy >= vec2<f32>(0.0)), n.z);
+    return normalize(n);
+}
+
 fn dielectric_f0(packed: f32) -> f32 {
     let m = abs(packed);
     return select(m, 0.04, m == 0.0);

@@ -31,6 +31,9 @@ struct SsrParams {
 @group(1) @binding(6) var t_albedo_metallic: texture_2d<f32>;
 // RT4: the specular tint's hue in `zw`, as `deferred_lighting.wgsl` reads it.
 @group(1) @binding(7) var t_velocity_gbuf: texture_2d<f32>;
+// The geometry at this pass's resolution (`ssr_prepare.wgsl`): `x` the distance from the camera, 0 for
+// nothing. What the march reads at every step.
+@group(1) @binding(8) var t_geometry: texture_2d<f32>;
 
 // The environment the lighting pass reflected, which this pass takes back wherever it finds what is
 // really there. The same expression as `deferred_lighting.wgsl`'s.
@@ -133,7 +136,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         }
     }
     on_screen = max(on_screen, 0.0);
-    let span_px = length(along * on_screen * tex_dim);
+    // In the geometry's pixels: a step a texel at the finest.
+    let geometry_dim = vec2<f32>(textureDimensions(t_geometry));
+    let span_px = length(along * on_screen * geometry_dim);
     let steps = clamp(i32(ceil(span_px)), 1, max(i32(params.max_steps), 1));
     let stride = on_screen / f32(steps);
     // Perspective-correct: `1/w` and `t/w` are linear across the screen, `t` (metres along R) is not.
@@ -149,12 +154,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     for (var i = 0; i < steps; i++) {
         let f = stride * (f32(i) + jitter);
         let ray_depth = march_depth(f, inv_w0, inv_w1, reach, origin, ray);
-        let scene_rel = textureLoad(t_position_rel_camera, uv_to_texel(mix(uv_origin, uv_end, f), tex_dim), 0);
-        // `>= 0.5`, not `> 0.5`: a written pixel of an ordinary material carries exactly 0.5 (see
-        // `gbuffer.wgsl`), and the strict form once made every hit a miss. An unwritten one is sky,
-        // which the ray passes over.
-        if (scene_rel.w >= 0.5) {
-            let scene_depth = length(scene_rel.xyz);
+        let scene_depth = textureLoad(t_geometry, uv_to_texel(mix(uv_origin, uv_end, f), geometry_dim), 0).x;
+        // Nothing there is sky, which the ray passes over.
+        if (scene_depth > 0.0) {
             // A hit is the ray passing the surface's depth during this step: behind it now, and
             // in front of its back (`thickness`) at the step's near end. A long step on a far
             // stretch of road is many metres, which a fixed thickness alone would step over.
@@ -164,8 +166,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 var hi = f;
                 for (var k = 0; k < 5; k++) {
                     let mid = 0.5 * (lo + hi);
-                    let mid_rel = textureLoad(t_position_rel_camera, uv_to_texel(mix(uv_origin, uv_end, mid), tex_dim), 0);
-                    if (mid_rel.w >= 0.5 && march_depth(mid, inv_w0, inv_w1, reach, origin, ray) >= length(mid_rel.xyz)) {
+                    let mid_depth = textureLoad(t_geometry, uv_to_texel(mix(uv_origin, uv_end, mid), geometry_dim), 0).x;
+                    if (mid_depth > 0.0 && march_depth(mid, inv_w0, inv_w1, reach, origin, ray) >= mid_depth) {
                         hi = mid;
                     } else {
                         lo = mid;

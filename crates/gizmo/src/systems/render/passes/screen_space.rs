@@ -19,6 +19,7 @@ pub fn record_surface_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Ren
         // The shaping numbers go up every frame — 48 bytes, no rebuild.
         let frame = renderer.taa.as_ref().filter(|t| t.enabled).map_or(0, |t| t.frame_index);
         ssr.upload(&renderer.queue, frame);
+        ssr.record_prepare(encoder);
 
         // Pass 1: SSR Raymarch
         {

@@ -1953,14 +1953,16 @@ fn draw_camera_view_with(
         encoder, renderer, world, &draw_items, uploaded_instances, simulations,
         inv_view_proj, clear_color, velocity_read, baked,
     );
-    renderer.gpu_mark(encoder, "gpu.forward");
+    // The opaque forward draws (`gpu.forward`) and the screen-space reflections and GI over them
+    // (`gpu.surface_effects`, the seen mask with them) are marked inside; this is the rest — glass, what
+    // blends, the forward surfaces' motion, the particles and the fluid.
+    renderer.gpu_mark(encoder, "gpu.blended");
     passes::record_screen_space_effects(encoder, renderer);
     // Advance SSGI temporal ping-pong / frame counter after its passes have run.
     if let Some(ref mut ssgi) = renderer.ssgi {
         ssgi.advance_frame();
     }
-    // Screen-space reflections and GI, apart from the draws: what they cost is a setting's.
-    renderer.gpu_mark(encoder, "gpu.screen_space");
+    renderer.gpu_mark(encoder, "gpu.volumetric");
     passes::record_taa_and_overlays(encoder, renderer, world, capture.is_none());
     laps.draw_lap(renderer, "view.forward");
     renderer.gpu_mark(encoder, "gpu.taa");
@@ -6397,7 +6399,8 @@ mod golden_render_tests {
     /// long down the floor and thin across it (N·V): a small red block floating over a rough metal floor
     /// shows as a tall smear, over a polished one as a sharp spot, as a lamp does on a wet road. Without
     /// the resolve, roughness made the reflection fainter (`fade_start`/`fade_end`, off here) and never
-    /// wider. No TAA, so nothing here leans on frames gathered over time.
+    /// wider. The same on a floor sloping sideways. No TAA, so nothing here leans on frames gathered
+    /// over time.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn a_glossy_floor_spreads_what_it_reflects_and_streaks_it() {
@@ -6408,7 +6411,8 @@ mod golden_render_tests {
             eprintln!("skipping: no usable GPU adapter");
             return;
         }
-        async fn frame(roughness: f32, reflections: bool) -> Vec<u8> {
+        // `tilt`: the floor's sideways slope, radians about the view's axis.
+        async fn frame(roughness: f32, reflections: bool, tilt: f32) -> Vec<u8> {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
             renderer.ssgi = None;
@@ -6427,12 +6431,16 @@ mod golden_render_tests {
             let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
             let mut world = World::new();
             // `create_cube` is ±1: a scale is a half extent.
-            for (at, half, material) in [
+            for (i, (at, half, material)) in [
                 (Vec3::new(10.0, -0.1, 0.0), Vec3::new(20.0, 0.1, 20.0), Material::new(white.clone()).with_pbr(Vec4::new(0.7, 0.7, 0.7, 1.0), roughness, 1.0)),
                 (Vec3::new(8.0, 1.5, 0.0), Vec3::new(0.2, 0.2, 0.2), Material::new(white.clone()).with_pbr(Vec4::new(1.0, 0.05, 0.02, 1.0), 1.0, 0.0).with_emissive(Vec3::new(4.0, 0.2, 0.1))),
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 let e = world.spawn();
-                world.add_component(e, Transform::new(at).with_scale(half));
+                let tilted = if i == 0 { gizmo_math::Quat::from_rotation_x(tilt) } else { gizmo_math::Quat::IDENTITY };
+                world.add_component(e, Transform::new(at).with_scale(half).with_rotation(tilted));
                 world.add_component(e, GlobalTransform::default());
                 world.add_component(e, AssetManager::create_cube(&renderer.device));
                 world.add_component(e, material);
@@ -6465,12 +6473,20 @@ mod golden_render_tests {
                 let t = total.max(1) as f64;
                 (across as f64 / t, down as f64 / t, total)
             };
-            let (_, p_down, p_total) = spread(&frame(0.02, true).await, &frame(0.02, false).await);
-            let (r_across, r_down, r_total) = spread(&frame(0.3, true).await, &frame(0.3, false).await);
+            let (_, p_down, p_total) = spread(&frame(0.02, true, 0.0).await, &frame(0.02, false, 0.0).await);
+            let (r_across, r_down, r_total) = spread(&frame(0.3, true, 0.0).await, &frame(0.3, false, 0.0).await);
             // When written: polished 2.13 across and 4.04 down, rough 2.81 and 6.64.
             assert!(p_total > 5_000 && r_total > 5_000, "both floors show the block: {p_total}, {r_total}");
             assert!(r_down > 1.4 * p_down, "the rough floor spreads the block {r_down:.2} px down the screen, the polished one {p_down:.2}");
             assert!(r_down > 2.0 * r_across, "and streaks it: {r_down:.2} px down, {r_across:.2} across");
+            // On a floor sloping sideways too — a cambered road: the resolve gathers over the surface's
+            // plane, which it rebuilds from the half-resolution geometry along each pixel's ray
+            // (`ssr_blur.wgsl`'s `surface_at`). 4.02 and 6.11 px when written; with that ray upside down,
+            // which leaves a level floor level, the slope's taps fell off its plane and the rough floor
+            // spread 4.20.
+            let (_, p_slope, _) = spread(&frame(0.02, true, 0.25).await, &frame(0.02, false, 0.25).await);
+            let (_, r_slope, _) = spread(&frame(0.3, true, 0.25).await, &frame(0.3, false, 0.25).await);
+            assert!(r_slope > 1.3 * p_slope, "on a slope the rough floor spreads the block {r_slope:.2} px down, the polished one {p_slope:.2}");
         });
     }
 

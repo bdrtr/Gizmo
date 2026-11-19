@@ -88,6 +88,14 @@ pub struct SsrState {
 
     nearest_sampler: wgpu::Sampler,
 
+    // The geometry at the march's resolution (`ssr_prepare.wgsl`): distance and folded normal, what
+    // the march and the resolve read at every step and tap instead of the full-resolution G-buffer.
+    geometry_texture: wgpu::Texture,
+    geometry_view: wgpu::TextureView,
+    prepare_bgl: wgpu::BindGroupLayout,
+    prepare_bind_group: wgpu::BindGroup,
+    prepare_pipeline: wgpu::RenderPipeline,
+
     // The glossy resolve (`ssr_blur.wgsl`): along the axis the surface's normal takes on screen,
     // from `ssr_texture` into this one, then across it, back into `ssr_texture`.
     blur_texture: wgpu::Texture,
@@ -163,6 +171,10 @@ impl SsrState {
 
         let ssr_bgl = Self::mk_ssr_bgl(device);
         let apply_bgl = Self::mk_apply_bgl(device);
+        let (geometry_texture, geometry_view) = Self::mk_ssr_tex(device, half_w, half_h);
+        let prepare_bgl = Self::mk_blur_bgl(device, "ssr_prepare_bgl");
+        let prepare_bind_group = Self::mk_textures_bg(device, &prepare_bgl, &deferred.normal_roughness_view, &deferred.world_position_view);
+        let prepare_pipeline = Self::mk_prepare_pipeline(device, &prepare_bgl);
 
         let params = SsrParams::default();
         let params_buffer = wgpu::util::DeviceExt::create_buffer_init(
@@ -183,6 +195,7 @@ impl SsrState {
             &deferred.emissive_view,
             &deferred.albedo_metallic_view,
             &deferred.velocity_view,
+            &geometry_view,
             &linear_sampler,
             &params_buffer,
         );
@@ -193,9 +206,9 @@ impl SsrState {
         let apply_pipeline = Self::mk_apply_pipeline(device, &apply_bgl);
 
         let (blur_texture, blur_view) = Self::mk_ssr_tex(device, half_w, half_h);
-        let blur_bgl = Self::mk_blur_bgl(device);
-        let blur_along_bind_group = Self::mk_blur_bg(device, &blur_bgl, &ssr_view, deferred);
-        let blur_across_bind_group = Self::mk_blur_bg(device, &blur_bgl, &blur_view, deferred);
+        let blur_bgl = Self::mk_blur_bgl(device, "ssr_blur_bgl");
+        let blur_along_bind_group = Self::mk_textures_bg(device, &blur_bgl, &ssr_view, &geometry_view);
+        let blur_across_bind_group = Self::mk_textures_bg(device, &blur_bgl, &blur_view, &geometry_view);
         let blur_along_pipeline = Self::mk_blur_pipeline(device, scene, &blur_bgl, "fs_along");
         let blur_across_pipeline = Self::mk_blur_pipeline(device, scene, &blur_bgl, "fs_across");
 
@@ -212,6 +225,11 @@ impl SsrState {
             apply_bgl,
             apply_bind_group,
             nearest_sampler: linear_sampler,
+            geometry_texture,
+            geometry_view,
+            prepare_bgl,
+            prepare_bind_group,
+            prepare_pipeline,
             blur_texture,
             blur_view,
             blur_bgl,
@@ -222,6 +240,26 @@ impl SsrState {
             width,
             height,
         }
+    }
+
+    /// Records the geometry the march and the resolve read (`ssr_prepare.wgsl`): before the march.
+    pub fn record_prepare(&self, encoder: &mut wgpu::CommandEncoder) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("SSR Prepare"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.geometry_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.prepare_pipeline);
+        pass.set_bind_group(0, &self.prepare_bind_group, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     /// Records the glossy resolve: the march's result in [`ssr_view`](Self::ssr_view) spread over each
@@ -266,6 +304,9 @@ impl SsrState {
         let half_w = (width / 2).max(1);
         let half_h = (height / 2).max(1);
         let (ssr_texture, ssr_view) = Self::mk_ssr_tex(device, half_w, half_h);
+        let (geometry_texture, geometry_view) = Self::mk_ssr_tex(device, half_w, half_h);
+        self.prepare_bind_group =
+            Self::mk_textures_bg(device, &self.prepare_bgl, &deferred.normal_roughness_view, &deferred.world_position_view);
 
         self.ssr_bind_group = Self::mk_ssr_bg(
             device,
@@ -276,16 +317,19 @@ impl SsrState {
             &deferred.emissive_view,
             &deferred.albedo_metallic_view,
             &deferred.velocity_view,
+            &geometry_view,
             &self.nearest_sampler,
             &self.params_buffer,
         );
         self.apply_bind_group =
             Self::mk_apply_bg(device, &self.apply_bgl, &ssr_view, &self.nearest_sampler, &deferred.seen_view);
         let (blur_texture, blur_view) = Self::mk_ssr_tex(device, half_w, half_h);
-        self.blur_along_bind_group = Self::mk_blur_bg(device, &self.blur_bgl, &ssr_view, deferred);
-        self.blur_across_bind_group = Self::mk_blur_bg(device, &self.blur_bgl, &blur_view, deferred);
+        self.blur_along_bind_group = Self::mk_textures_bg(device, &self.blur_bgl, &ssr_view, &geometry_view);
+        self.blur_across_bind_group = Self::mk_textures_bg(device, &self.blur_bgl, &blur_view, &geometry_view);
         self.blur_texture = blur_texture;
         self.blur_view = blur_view;
+        self.geometry_texture = geometry_texture;
+        self.geometry_view = geometry_view;
 
         self.ssr_texture = ssr_texture;
         self.ssr_view = ssr_view;
@@ -400,11 +444,24 @@ impl SsrState {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    // The geometry at the march's resolution (`ssr_prepare.wgsl`).
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    },
+                    count: None,
+                },
             ],
         })
     }
 
-    fn mk_blur_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    /// Two unfilterable textures: the resolve's source and the geometry, or the prepare pass's normals
+    /// and positions.
+    fn mk_blur_bgl(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
         let texture = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -416,32 +473,64 @@ impl SsrState {
             count: None,
         };
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("ssr_blur_bgl"),
-            // The pass's source, and the G-buffer's normals and positions.
-            entries: &[texture(0), texture(1), texture(2)],
+            label: Some(label),
+            entries: &[texture(0), texture(1)],
         })
     }
 
-    fn mk_blur_bg(
+    fn mk_textures_bg(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        source: &wgpu::TextureView,
-        deferred: &DeferredState,
+        first: &wgpu::TextureView,
+        second: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ssr_blur_bg"),
+            label: Some("ssr_textures_bg"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(source) },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&deferred.normal_roughness_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&deferred.world_position_view),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(first) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(second) },
             ],
+        })
+    }
+
+    fn mk_prepare_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu::RenderPipeline {
+        let shader = crate::pipeline::shaders::load_shader_composed_with(
+            device,
+            "demo/assets/shaders/ssr_prepare.wgsl",
+            include_str!("shaders/ssr_prepare.wgsl"),
+            "SSR Prepare Shader",
+            &[],
+        );
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ssr_prepare_layout"),
+            bind_group_layouts: &[Some(bgl)],
+            immediate_size: 0,
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ssr_prepare_pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
         })
     }
 
@@ -539,6 +628,7 @@ impl SsrState {
         emissive_view: &wgpu::TextureView,
         albedo_metallic_view: &wgpu::TextureView,
         velocity_view: &wgpu::TextureView,
+        geometry_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         params: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
@@ -577,6 +667,10 @@ impl SsrState {
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: wgpu::BindingResource::TextureView(velocity_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(geometry_view),
                 },
             ],
         })
