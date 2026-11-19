@@ -14,6 +14,22 @@ pub const CASCADE_COUNT: usize = 4;
 /// 3×3, as the desktop does, took a game from 105 fps to 39 (2026-11-12).
 pub const CASCADES_DRAWN: usize = if cfg!(gizmo_forward_only) { 1 } else { CASCADE_COUNT };
 
+/// The sun's array's layer past the cascades on the desktop: the rain map (`crate::rain_map`), the
+/// scene's depth seen from straight above, which keeps what is under cover dry. In the cascades' array so
+/// that it takes no binding of its own — the desktop's lit layout has two sampled textures to spare — and
+/// is read through their comparison sampler. None on the forward-only path.
+pub const RAIN_LAYER: usize = CASCADE_COUNT;
+
+/// The layers of the sun's array on this build's path: a cascade drawn each, and the rain map's on the
+/// desktop while it is drawn (`rain`) — a layer of the cascades' size, which a dry scene does not hold.
+pub const fn shadow_array_layers(rain: bool) -> usize {
+    if !cfg!(gizmo_forward_only) && rain {
+        CASCADES_DRAWN + 1
+    } else {
+        CASCADES_DRAWN
+    }
+}
+
 /// Resolution (width = height) of each cascade depth map, on this build's path. 3072 on the desktop
 /// (was 2048) so a crisp ~1-texel PCF edge doesn't read as blocky on close-up geometry; the four
 /// layers are 144 MiB, which a desktop GPU holds. **2048 on the forward-only path** — a browser's, a

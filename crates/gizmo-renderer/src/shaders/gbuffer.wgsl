@@ -9,6 +9,9 @@
 // The scene block is the one `common.wgsl` declares, all of it: a partial copy here stopped at
 // `num_lights`, and the scene's rain (`wetness`) lies past it.
 #import gizmo::common::{SceneUniforms, instance_keeps, dielectric_f0, BAKED_SURFACE}
+#ifdef RAIN_MAP
+#import gizmo::common::{rain_exposure}
+#endif
 #import gizmo::surface::{Surface, tangent_frame, surface_lobes, rain_on, wet_surface, wet_darkening, wet_roughness}
 #ifdef CUSTOM_SURFACE
 #import gizmo::surface::{SurfaceInput}
@@ -89,6 +92,24 @@ struct VertexOutput {
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
+#ifdef RAIN_MAP
+// The sun's array, for its rain map layer (`rain_exposure`): the shadow group, which this pass binds.
+@group(#{SUN_SHADOW_GROUP}) @binding(#{SUN_SHADOW_TEXTURE_BINDING}) var t_shadow: texture_depth_2d_array;
+@group(#{SUN_SHADOW_GROUP}) @binding(#{SUN_SHADOW_SAMPLER_BINDING}) var s_shadow: sampler_comparison;
+#endif
+
+// The scene's rain on a fragment (`rain_on`), kept off what is under cover where there is a rain map —
+// looked up only on what faces up enough to take rain at all.
+fn rain_at(world_position: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
+    let up = normalize(normal).y;
+    var exposure = 1.0;
+#ifdef RAIN_MAP
+    if (scene.wetness.x > 0.0 && up > 0.2) {
+        exposure = rain_exposure(t_shadow, s_shadow, i32(#{RAIN_LAYER}), scene.rain_view_proj, scene.rain_params, world_position);
+    }
+#endif
+    return rain_on(scene.wetness, world_position, up, exposure);
+}
 @group(3) @binding(0) var<uniform> skeleton: SkeletonData;
 @group(4) @binding(0) var<storage, read> instances: array<InstanceData>;
 
@@ -272,7 +293,7 @@ fn fs_baked(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut 
         discard;
     }
     // The scene's rain (`Renderer::wetness`): darker, smoother, and flat in a puddle.
-    let rain = rain_on(scene.wetness, in.world_position, normalize(in.normal).y);
+    let rain = rain_at(in.world_position, in.normal);
     let base = in.inst_albedo.rgb * tex.rgb * wet_darkening(rain);
     var baked = in.color;
     let lightmap = baked_light(in.tex_coords.zw);
@@ -301,7 +322,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     if (in.inst_pbr.z > 0.5) { discard; }
 
     // The scene's rain (`Renderer::wetness`), on the engine's surface and on a game's alike.
-    let surface = wet_surface(fragment_surface(in, front), rain_on(scene.wetness, in.world_position, normalize(in.normal).y));
+    let surface = wet_surface(fragment_surface(in, front), rain_at(in.world_position, in.normal));
     // glTF AlphaMode::Mask cutout: hard per-texel discard at alphaCutoff.
     // cutoff == 0 → no cutout (Opaque / Blend materials), so this is a no-op for them.
     if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }

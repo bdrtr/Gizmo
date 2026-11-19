@@ -143,6 +143,8 @@ fn scene_layout() -> Vec<(&'static str, u32)> {
         ("sky_horizon", offset_of!(SceneUniforms, sky_horizon) as u32),
         ("sky_ground", offset_of!(SceneUniforms, sky_ground) as u32),
         ("wetness", offset_of!(SceneUniforms, wetness) as u32),
+        ("rain_view_proj", offset_of!(SceneUniforms, rain_view_proj) as u32),
+        ("rain_params", offset_of!(SceneUniforms, rain_params) as u32),
         ("local_shadow_layers", offset_of!(SceneUniforms, local_shadow_layers) as u32),
         ("light_shadows", offset_of!(SceneUniforms, light_shadows) as u32),
     ]

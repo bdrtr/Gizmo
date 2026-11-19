@@ -117,6 +117,34 @@ fn record_caster_pass(
     drawn
 }
 
+/// The rain map (`gizmo_renderer::rain_map`): the scene's depth from straight above, `view_proj`'s, into
+/// the sun array's layer past the cascades, through its pass group (`SceneState::rain_map`, written
+/// before). Every caster by both faces, as a local light's layer: a bridge's deck is often a sheet, and
+/// one face of it would let the rain through. Returns the instances it drew: none while the array has no
+/// layer for it (`SceneState::shadow_rain_layer_view`).
+pub fn record_rain_map(
+    encoder: &mut wgpu::CommandEncoder,
+    renderer: &Renderer,
+    draw_items: &[DrawItem],
+    uploaded_instances: u32,
+    view_proj: Mat4,
+) -> u32 {
+    let Some(target) = renderer.scene.shadow_rain_layer_view.as_ref() else {
+        return 0;
+    };
+    record_caster_pass(
+        encoder,
+        renderer,
+        draw_items,
+        uploaded_instances,
+        "Rain Map Pass",
+        target,
+        &renderer.scene.rain_map.bind_group,
+        view_proj,
+        true,
+    )
+}
+
 /// The frame's shadow maps: one depth pass per cascade when `cascades` holds their matrices
 /// (`SceneSetup::draws_cascades` — the frame has a sun), then one per local shadow layer the frame
 /// planned (`SceneSetup::local_shadows`), each matrix already written to its pass's buffer. A frame

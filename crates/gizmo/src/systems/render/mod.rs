@@ -1742,6 +1742,13 @@ fn draw_camera_view_with(
     // Cookies a spot names by path are read from disk the first frame they are needed.
     #[cfg(not(target_arch = "wasm32"))]
     renderer.sync_light_cookies(world);
+    // The rain map (`gizmo_renderer::rain_map`): the scene's depth from straight above, around this
+    // camera, so that what is under cover stays dry. Drawn every frame the scene is wet — what covers
+    // moves, and what streams in arrives — on the desktop, by a view that draws shadow maps.
+    let rain_map = (!cfg!(gizmo_forward_only) && !simple && renderer.wetness.is_some_and(|w| w.level > 0.0)).then(|| {
+        let res = renderer.shadow_settings.resolution.max(1);
+        (crate::renderer::rain_map::RainMap::view_proj(cam_pos, res), res)
+    });
     let setup = collect_scene_setup(
         world,
         &SceneSetupInputs {
@@ -1758,6 +1765,7 @@ fn draw_camera_view_with(
                 fog: renderer.fog,
                 sky: renderer.sky,
                 wetness: renderer.wetness,
+                rain_map,
             },
             // The forward-only path draws the sun's cascade and the local lights' layers unless a game
             // says not to (`ShadowSettings::forward_only`).
@@ -1775,7 +1783,7 @@ fn draw_camera_view_with(
     // The local lights' shadow layers: the array grown to hold them, each layer's matrix where its
     // pass reads it.
     let local_shadow_layers = setup.local_shadows.layers();
-    renderer.scene.ensure_sun_shadow_maps(&renderer.device, setup.draws_cascades(), renderer.shadow_settings.resolution);
+    renderer.scene.ensure_sun_shadow_maps(&renderer.device, setup.draws_cascades(), renderer.shadow_settings.resolution, rain_map.is_some());
     renderer.scene.ensure_local_shadow_layers(&renderer.device, local_shadow_layers.len());
     // The forward-only path's lit pipelines read the sun's shadow only while there is one to read, and
     // the local lights' layers and cookies only while a frame draws a layer or lights a spot through a
@@ -1853,7 +1861,12 @@ fn draw_camera_view_with(
     // every local light's layers.
     laps.draw_lap(renderer, "view.setup");
     let (draw_items, uploaded_instances) =
-        batching::collect_draw_items(world, renderer, unjittered_view_proj, &setup.shadow_view_projs(), cam_pos, velocity_read);
+        {
+            // What casts into the rain map is gathered as a shadow map's casters are: off screen too.
+            let mut casters = setup.shadow_view_projs();
+            casters.extend(rain_map.map(|(m, _)| m));
+            batching::collect_draw_items(world, renderer, unjittered_view_proj, &casters, cam_pos, velocity_read)
+        };
     record_render_stats(renderer, &draw_items, elapsed_time);
     laps.draw_lap(renderer, "view.batch");
 
@@ -1914,9 +1927,16 @@ fn draw_camera_view_with(
             setup.draws_cascades().then_some(&setup.cascade_view_projs),
             setup.local_shadows.layers(),
         );
+        let (rain_passes, rain_instances) = match rain_map {
+            Some((view_proj, _)) => {
+                renderer.scene.rain_map.write(&renderer.queue, view_proj, cam_pos, elapsed_time);
+                (1, passes::record_rain_map(encoder, renderer, &draw_items, uploaded_instances, view_proj))
+            }
+            None => (0, 0),
+        };
         if let Some(stats) = renderer.render_stats.as_mut() {
-            stats.shadow_passes = shadow_passes;
-            stats.shadow_instances = shadow_instances;
+            stats.shadow_passes = shadow_passes + rain_passes;
+            stats.shadow_instances = shadow_instances + rain_instances;
         }
     }
     laps.draw_lap(renderer, "view.shadows");
@@ -5414,6 +5434,123 @@ mod golden_render_tests {
             // 0.190 and 0.472 when written.
             assert!((fifth - 0.2).abs() < 0.05, "puddles at 0.2 cover {fifth:.3} of the floor");
             assert!((half - 0.5).abs() < 0.05, "puddles at 0.5 cover {half:.3} of the floor");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no rain map.
+    /// **The ground under cover stays dry in the rain.** A carport's roof over part of a floor, seen from
+    /// low down so that the floor under it shows: in the rain the open floor soaks (its G-buffer roughness
+    /// falls to the water's 0.2) and the floor under the roof keeps its own 0.8 — the rain map
+    /// (`gizmo_renderer::rain_map`), the scene's depth from straight above, has the roof over it. Baked-lit
+    /// and drawn forward, as a wet city without its reflections is, the floor under the roof is the dry
+    /// frame's to the byte, and the open floor darker.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_ground_under_cover_stays_dry_in_the_rain() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        /// A frame, and on the deferred path each texel's roughness and position (RT1's `w`, RT2's `xyz`
+        /// plus the camera).
+        struct Drawn {
+            pixels: Vec<u8>,
+            texels: Vec<(f32, Vec3)>,
+        }
+        // `baked`: the floor and roof baked-lit, which the deferred path draws forward when nothing reads
+        // them (`BakedRoute::Forward`) — the wet city without its reflections.
+        async fn frame(baked: bool, wet: bool) -> Drawn {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            // No antialiasing pass: it blends the floor under the roof's far edge with the wet floor
+            // beyond it, beside it on screen.
+            renderer.fxaa = None;
+            renderer.smaa = None;
+            if wet {
+                renderer.wetness = Some(crate::renderer::Wetness::new(1.0));
+            }
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            // `create_cube` is ±1: a scale is a half extent. The floor, a roof 3 m up over x 5 – 9, and a
+            // ramp out in the open beyond it, sloping 14° (a slope is what a bias is for: without one its
+            // uphill texels are above it in the map).
+            for (at, half, tilt) in [
+                (Vec3::new(10.0, -0.1, 0.0), Vec3::new(20.0, 0.1, 20.0), 0.0),
+                (Vec3::new(7.0, 3.0, 0.0), Vec3::new(2.0, 0.1, 4.0), 0.0),
+                (Vec3::new(13.0, 0.4, -4.5), Vec3::new(2.0, 0.1, 1.5), 0.25),
+            ] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half).with_rotation(gizmo_math::Quat::from_rotation_z(tilt)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                let material = Material::new(white.clone());
+                world.add_component(e, if baked { material.with_baked_lit(Vec4::new(0.6, 0.6, 0.6, 1.0)) } else { material.with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.8, 0.0) });
+                world.add_component(e, MeshRenderer::new());
+            }
+            // Low, looking along +X under the roof.
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 1.2, 0.0), yaw: 0.0, pitch: -0.12, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            let pixels = render_world(&mut renderer, &mut world).await;
+            let Some(def) = renderer.deferred.as_ref() else {
+                return Drawn { pixels, texels: Vec::new() };
+            };
+            let half = |t: &[u8], i: usize| f16_bits_to_f32(u16::from_le_bytes([t[2 * i], t[2 * i + 1]]));
+            let rough = read_target(&renderer, &def.normal_roughness_tex, 128).await;
+            let place = read_target(&renderer, &def.world_position_tex, 128).await;
+            let camera = Vec3::new(0.0, 1.2, 0.0);
+            let texels = rough
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .zip(place.as_chunks::<8>().0)
+                .map(|(r, p)| (half(r, 3).abs(), Vec3::new(half(p, 0), half(p, 1), half(p, 2)) + camera))
+                .collect();
+            Drawn { pixels, texels }
+        }
+        // Where a texel's surface is: the floor's top under the roof (well inside its edges), or out in
+        // the open, or neither.
+        let under = |p: Vec3| p.y.abs() < 0.05 && (5.4..8.6).contains(&p.x) && p.z.abs() < 3.4;
+        // (Not under the ramp, whose raised end covers the floor below it.)
+        let open = |p: Vec3| p.y.abs() < 0.05 && (p.x < 4.0 || p.x > 10.0) && !((10.5..15.5).contains(&p.x) && (p.z + 4.5).abs() < 1.8);
+        let ramp = |p: Vec3| p.y > 0.2 && (11.5..14.5).contains(&p.x) && (p.z + 4.5).abs() < 1.2;
+        pollster::block_on(async {
+            let wet = frame(false, true).await;
+            let count = |region: &dyn Fn(Vec3) -> bool, roughness: &dyn Fn(f32) -> bool| {
+                wet.texels.iter().filter(|(r, p)| region(*p) && roughness(*r)).count()
+            };
+            let (under_dry, under_wet) = (count(&under, &|r| r > 0.7), count(&under, &|r| r < 0.7));
+            let (open_wet, open_dry) = (count(&open, &|r| r < 0.3), count(&open, &|r| r > 0.3));
+            // 1000 dry and 6912 wet texels when written, none the other way.
+            assert!(under_dry > 200 && under_wet == 0, "under the roof the floor is dry: {under_dry} texels dry, {under_wet} wet");
+            assert!(open_wet > 200 && open_dry == 0, "out in the open it is soaked: {open_wet} texels wet, {open_dry} dry");
+            let (ramp_wet, ramp_dry) = (count(&ramp, &|r| r < 0.3), count(&ramp, &|r| r > 0.3));
+            // 143 wet when written; without the map's bias, its uphill texels lie above it.
+            assert!(ramp_wet > 30 && ramp_dry == 0, "and so is the ramp: {ramp_wet} texels wet, {ramp_dry} dry");
+
+            // Drawn forward (baked-lit), the same: the floor under the roof is the dry frame's, the open
+            // floor darker.
+            let (forward_wet, forward_dry) = (frame(true, true).await.pixels, frame(true, false).await.pixels);
+            let mut under_changed = 0;
+            let mut open_darker = 0;
+            for (i, (_, p)) in wet.texels.iter().enumerate() {
+                let sum = |f: &[u8]| (0..3).map(|c| u32::from(f[i * 4 + c])).sum::<u32>();
+                if under(*p) && forward_wet[i * 4..i * 4 + 3] != forward_dry[i * 4..i * 4 + 3] {
+                    under_changed += 1;
+                }
+                if open(*p) && sum(&forward_wet) + 6 < sum(&forward_dry) {
+                    open_darker += 1;
+                }
+            }
+            assert_eq!(under_changed, 0, "drawn forward, the floor under the roof is the dry frame's");
+            assert!(open_darker > 200, "and the open floor is darker: {open_darker} pixels");
         });
     }
 

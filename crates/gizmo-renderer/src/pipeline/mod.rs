@@ -190,6 +190,10 @@ pub struct SceneState {
     pub shadow_texture_view: wgpu::TextureView,
     /// One 2D depth view per cascade for shadow map rendering passes.
     pub shadow_cascade_layer_views: [wgpu::TextureView; 4],
+    /// The rain map's layer of that array (`csm::RAIN_LAYER`), for its pass (`crate::rain_map`): `None`
+    /// while the array has no such layer, which is every frame `ensure_sun_shadow_maps` was not told of
+    /// rain.
+    pub shadow_rain_layer_view: Option<wgpu::TextureView>,
     /// The cascade depth texture itself — a depth array, one layer per cascade.
     pub shadow_depth_texture: wgpu::Texture,
     /// The light-cookie array the shadow group carries at bindings 3 and 4. See [`crate::cookies`].
@@ -199,6 +203,8 @@ pub struct SceneState {
     pub local_shadow_maps: crate::local_shadows::LocalShadowMaps,
     /// Layout of the shadow pass's own group, holding just its light-view-projection.
     pub shadow_pass_bind_group_layout: wgpu::BindGroupLayout,
+    /// The rain map's pass group (`crate::rain_map`): its matrix, in that layout.
+    pub rain_map: crate::rain_map::RainMap,
     /// One uniform buffer + bind group per CSM cascade (avoids per-pass overwrite races on the queue).
     pub shadow_cascade_uniform_buffers: [wgpu::Buffer; 4],
     /// The matching bind groups, one per cascade.
@@ -922,15 +928,24 @@ impl SceneState {
     /// and returns whether it did. Until then they are a texel a layer (`build_shadow_resources`), so a
     /// scene with no sun, and a path that draws no shadow maps, holds none of their memory (144 MiB at
     /// 3072). They are kept from then on, as the local layers are.
-    pub fn ensure_sun_shadow_maps(&mut self, device: &wgpu::Device, draws: bool, res: u32) -> bool {
+    ///
+    /// `rain`: the frame has a rain map (`crate::rain_map`), which is a layer of the same array past the
+    /// cascades (`csm::RAIN_LAYER`), and needs it whether or not there is a sun. The array is built again
+    /// when the rain comes, and when it has gone and the cascades are drawn, so that a dry scene with a
+    /// sun holds no layer for it (36 MiB at 3072); the cascades come with it, and the next shadow pass
+    /// draws them anyway.
+    pub fn ensure_sun_shadow_maps(&mut self, device: &wgpu::Device, draws: bool, res: u32, rain: bool) -> bool {
         let res = res.max(1);
-        if !draws || self.shadow_depth_texture.size().width == res {
+        let layers = crate::csm::shadow_array_layers(rain) as u32;
+        let size = self.shadow_depth_texture.size();
+        if !(draws || rain) || (size.width == res && size.depth_or_array_layers == layers) {
             return false;
         }
-        let (texture, view, layers, sampler) = build_shadow_resources(device, res);
+        let (texture, view, layers, rain, sampler) = build_shadow_resources(device, res, rain);
         self.shadow_depth_texture = texture;
         self.shadow_texture_view = view;
         self.shadow_cascade_layer_views = layers;
+        self.shadow_rain_layer_view = rain;
         self.shadow_sampler = sampler;
         // The shadow group, and every view's group 0, which holds them too (bindings 9 and 10).
         self.rebuild_light_map_groups(device);
@@ -1104,8 +1119,8 @@ impl SceneState {
 pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let global_uniform_buffer = build_global_uniforms(device);
     // A texel a cascade until a frame draws them (`ensure_sun_shadow_maps`).
-    let (shadow_depth_texture, shadow_texture_view, shadow_cascade_layer_views, shadow_sampler) =
-        build_shadow_resources(device, 1);
+    let (shadow_depth_texture, shadow_texture_view, shadow_cascade_layer_views, shadow_rain_layer_view, shadow_sampler) =
+        build_shadow_resources(device, 1, false);
     // A texel each until a frame draws a local light's shadow, or a game registers a cookie
     // (`ensure_local_shadow_layers`, `ensure_cookies`).
     let local_shadow_maps = crate::local_shadows::LocalShadowMaps::placeholder(device);
@@ -1333,9 +1348,11 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         shadow_sampler,
         shadow_texture_view,
         shadow_cascade_layer_views,
+        shadow_rain_layer_view,
         shadow_depth_texture,
         cookies,
         local_shadow_maps,
+        rain_map: crate::rain_map::RainMap::new(device, &layouts.shadow_pass),
         shadow_pass_bind_group_layout: layouts.shadow_pass,
         shadow_cascade_uniform_buffers,
         shadow_pass_bind_groups,

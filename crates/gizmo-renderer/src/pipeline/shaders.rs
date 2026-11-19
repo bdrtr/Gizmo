@@ -46,6 +46,10 @@ pub(crate) fn native_render_defs() -> HashMap<String, ShaderDefValue> {
         ("SUN_SHADOW_GROUP".to_string(), ShaderDefValue::UInt(2)),
         ("SUN_SHADOW_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(0)),
         ("SUN_SHADOW_SAMPLER_BINDING".to_string(), ShaderDefValue::UInt(1)),
+        // The rain map, the same array's layer past the cascades (`crate::rain_map`): what keeps the
+        // ground under cover dry.
+        ("RAIN_MAP".to_string(), ShaderDefValue::Bool(true)),
+        ("RAIN_LAYER".to_string(), ShaderDefValue::UInt(crate::csm::RAIN_LAYER as u32)),
         // The local lights' shadow layers and cookies, in the same group, filtered as the deferred pass
         // filters them (`local_shadow_visibility`).
         ("LOCAL_LIGHT_MAPS".to_string(), ShaderDefValue::Bool(true)),

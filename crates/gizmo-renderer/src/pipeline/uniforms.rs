@@ -22,9 +22,11 @@ pub(super) fn build_global_uniforms(device: &wgpu::Device) -> wgpu::Buffer {
 pub(super) fn build_shadow_resources(
     device: &wgpu::Device,
     res: u32,
-) -> (wgpu::Texture, wgpu::TextureView, [wgpu::TextureView; 4], wgpu::Sampler) {
-    // A layer a cascade drawn (`CASCADES_DRAWN`): one on the forward-only path.
-    let layers = crate::csm::CASCADES_DRAWN as u32;
+    rain: bool,
+) -> (wgpu::Texture, wgpu::TextureView, [wgpu::TextureView; 4], Option<wgpu::TextureView>, wgpu::Sampler) {
+    // A layer a cascade drawn (`CASCADES_DRAWN`: one on the forward-only path), and the rain map's on the
+    // desktop while there is one (`csm::shadow_array_layers`).
+    let layers = crate::csm::shadow_array_layers(rain) as u32;
     let shadow_depth_texture = device.create_texture(&wgpu::TextureDescriptor {
         size: wgpu::Extent3d {
             width: res,
@@ -67,6 +69,22 @@ pub(super) fn build_shadow_resources(
         })
     });
 
+    // The rain map's layer (`csm::RAIN_LAYER`), when the array has one. None otherwise — not a view of
+    // a cascade's layer, which a rain pass would draw over.
+    let rain_layer_view = (layers as usize > crate::csm::RAIN_LAYER).then(|| {
+        shadow_depth_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("shadow_rain_layer"),
+            format: None,
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            usage: None,
+            aspect: wgpu::TextureAspect::DepthOnly,
+            base_mip_level: 0,
+            mip_level_count: None,
+            base_array_layer: crate::csm::RAIN_LAYER as u32,
+            array_layer_count: Some(1),
+        })
+    });
+
     let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::ClampToEdge,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
@@ -78,5 +96,5 @@ pub(super) fn build_shadow_resources(
         ..Default::default()
     });
 
-    (shadow_depth_texture, shadow_texture_view, shadow_cascade_layer_views, shadow_sampler)
+    (shadow_depth_texture, shadow_texture_view, shadow_cascade_layer_views, rain_layer_view, shadow_sampler)
 }

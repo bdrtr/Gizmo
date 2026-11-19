@@ -50,6 +50,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The ground under cover stays dry in the rain: the rain map.** With `Renderer::wetness` on, a bridge's
+  underside, a carport and the road under a parked car were as wet as the road in the open. Now, on the desktop, the
+  scene's depth from straight above around the camera (`gizmo_renderer::rain_map`, 256 m a side, the camera at its
+  middle snapped to whole texels) is drawn every frame the scene is wet — by the shadow pass's pipelines, every
+  caster by both faces, gathered off screen as a shadow map's are — and a fragment that something lies over by more
+  than a bias (`RAIN_MAP_BIAS`, 25 cm) takes no rain: `common.wgsl`'s `rain_exposure`, 3×3 comparisons, handed to
+  `gizmo::surface::rain_on` as its new `exposure`, by the G-buffer, the lit forward shader and the baked-lit one
+  alike, and looked up only on what faces up enough to take rain at all. The map is a layer of the sun's shadow
+  array past the cascades (`csm::RAIN_LAYER`), so it takes no binding of its own — the desktop's lit layout has two
+  sampled textures to spare — and the array holds that layer only while there is rain
+  (`SceneState::ensure_sun_shadow_maps`'s `rain`; `shadow_rain_layer_view` is `None` otherwise, so a rain pass can
+  never draw over a cascade). The scene block grew by its matrix and parameters (`rain_view_proj`, `rain_params`:
+  3 312 B fixed; the light ceiling is 915). `nfsu2-gizmo`'s wet city: about 0.2 ms of GPU a frame. A second view far
+  from the camera sees open sky past the map's edge, and the forward-only path has no map. Test
+  `the_ground_under_cover_stays_dry_in_the_rain`: under a carport's roof the floor keeps its dry roughness (1000
+  texels, none wet), the open floor and a sloped ramp beside it soak (6912 and 143 texels, none dry), and baked-lit
+  and drawn forward the floor under the roof is the dry frame's to the byte. Ignoring the exposure, dropping the
+  bias (the ramp's uphill texels then lie above it) or leaving the array without its layer each turns it red.
+
 - **Screen-space reflections read their own half-resolution geometry: about a third cheaper.** The march read the
   full-resolution G-buffer's position at every step and the glossy resolve its position and normal at every tap —
   sixteen bytes scattered over four times the area of the pass that wanted them. A prepare pass (`ssr_prepare.wgsl`,
@@ -108,8 +127,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `rain_darkens_what_faces_up_and_leaves_a_wall_dry` (both paths: a wet floor keeps 0.84 of its light, a wall
   0.999, and a wetness of 0 is the dry frame to the byte), `puddles_cover_the_share_of_the_ground_they_are_asked_to`,
   and the baked forward/G-buffer parity test, now also in the rain. Leaving out the darkening, the facing-up test
-  or the coverage fit turns them red. One for the whole scene: a bridge's underside is as wet as the road beside
-  it — keeping what is under cover dry is a rain-occlusion map's work, not yet written.
+  or the coverage fit turns them red. (What is under cover: see the rain map, below.)
 
 - **Screen-space reflections are glossy: a rough surface spreads what it reflects over its lobe, streaked
   towards the viewer.** The march found one mirror-direction hit per pixel, and roughness only faded it

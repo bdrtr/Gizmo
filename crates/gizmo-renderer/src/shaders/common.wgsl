@@ -84,6 +84,10 @@ struct SceneUniforms {
     // `Renderer::wetness`: x = level, y = puddles, z = 1 / puddle size (m); zeros = dry. Read through
     // `gizmo::surface::rain_on`.
     wetness: vec4<f32>,
+    // The rain map (`gizmo_renderer::rain_map`): its matrix, and x = 1 while there is one, y = a texel's
+    // width in its coordinates, z = the bias in its depth. Read through `rain_exposure`.
+    rain_view_proj: mat4x4<f32>,
+    rain_params: vec4<f32>,
     // The local lights' shadow layers, and each light slot's entry in them, four to a row:
     // `local_shadow_layer` reads an entry. See `gizmo_renderer::local_shadows`.
     local_shadow_layers: array<LocalShadowLayer, 32>,
@@ -816,6 +820,37 @@ fn instance_keeps(packed: f32, alpha: f32, pixel: vec2<f32>) -> bool {
 
 // What `InstanceRaw.emissive.w` (and RT5's alpha, its copy) says about a non-metal's F0: the
 // magnitude, with 0 standing for "not set". Its sign is `receives_shadows`, tested by the callers.
+// How much rain reaches `world_pos` (`Renderer::wetness`): 1 out in the open, 0 under cover. The rain
+// map (`gizmo_renderer::rain_map`, `rain_view_proj` and `rain_params` of the scene block) is the scene's
+// depth from straight above, in layer `layer` of the sun's array: a fragment that something lies above by
+// more than the bias is under cover. 3×3 comparisons, so cover's edge is a texel or two soft. With no
+// map, and outside it, open sky.
+fn rain_exposure(
+    t: texture_depth_2d_array,
+    s: sampler_comparison,
+    layer: i32,
+    view_proj: mat4x4<f32>,
+    params: vec4<f32>,
+    world_pos: vec3<f32>,
+) -> f32 {
+    if (params.x < 0.5) {
+        return 1.0;
+    }
+    let clip = view_proj * vec4<f32>(world_pos, 1.0);
+    let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
+    if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || clip.z < 0.0 || clip.z > 1.0) {
+        return 1.0;
+    }
+    let depth = clip.z - params.z;
+    var open = 0.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            open += textureSampleCompareLevel(t, s, uv + vec2<f32>(f32(x), f32(y)) * params.y, layer, depth);
+        }
+    }
+    return open / 9.0;
+}
+
 // A unit vector folded onto an octahedron and flattened to two numbers in [-1, 1] (Cigolle et al.,
 // "A Survey of Efficient Representations for Independent Unit Vectors", 2014): a normal in two
 // channels, where a target has no room for three.

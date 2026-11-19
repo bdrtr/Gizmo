@@ -14,6 +14,6 @@ mod taa;
 pub(super) use self::forward::record_forward_and_fluid;
 pub(super) use self::geometry::record_deferred_geometry;
 pub(super) use self::screen_space::record_screen_space_effects;
-pub(super) use self::shadow::record_shadow_passes;
+pub(super) use self::shadow::{record_rain_map, record_shadow_passes};
 pub(super) use self::ssao::record_ssao;
 pub(super) use self::taa::record_taa_and_overlays;

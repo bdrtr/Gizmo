@@ -501,6 +501,11 @@ pub struct SceneUniforms {
     pub sky_ground: [f32; 4],
     /// `Renderer::wetness`: x = level, y = puddles, z = 1 / puddle size (m); zeros = dry.
     pub wetness: [f32; 4],
+    /// The rain map's world → clip matrix (`crate::rain_map`), its layer the sun array's past the cascades.
+    pub rain_view_proj: [[f32; 4]; 4],
+    /// [`RainMap::params`](crate::rain_map::RainMap::params): x = 1 while there is a map, y = a texel's
+    /// width in its coordinates, z = the bias in its depth; zeros = no map, the rain falls everywhere.
+    pub rain_params: [f32; 4],
     /// The local lights' shadow layers ([`crate::local_shadows`]): what each was drawn through, and
     /// its depth range. The first `ShadowFrame::local.layers().len()` are live.
     pub local_shadow_layers: [LocalShadowLayerRaw; crate::local_shadows::MAX_LOCAL_SHADOW_LAYERS],
@@ -508,7 +513,7 @@ pub struct SceneUniforms {
     /// gives it: 0 = none, else its first layer + 1, with `LOCAL_SHADOW_CUBE` set for six layers.
     /// Four slots to a row — a uniform array's elements sit 16 bytes apart.
     pub light_shadows: [[u32; 4]; crate::frame_uniforms::MAX_LIGHTS / 4],
-    // Total: 3 232 + 68·MAX_LIGHTS bytes (20 640 at MAX_LIGHTS = 256). The 64 KiB uniform floor
+    // Total: 3 312 + 68·MAX_LIGHTS bytes (20 720 at MAX_LIGHTS = 256). The 64 KiB uniform floor
     // caps this layout at 916 lights — checked by `frame_uniforms`'s
     // `the_scene_block_fits_the_uniform_binding_floor_…`.
 }
@@ -948,15 +953,15 @@ mod tests {
         assert_eq!(std::mem::size_of::<InstanceRaw>(), 160, "InstanceRaw");
         assert_eq!(std::mem::size_of::<MaterialParams>(), 48, "MaterialParams = 3×vec4");
         assert_eq!(std::mem::size_of::<LocalShadowLayerRaw>(), 80, "LocalShadowLayerRaw = mat4 + vec4");
-        // The fixed part is 3 232 bytes (560 until `fog` / `fog_shape` and `shadow_bias` were
+        // The fixed part is 3 312 bytes (560 until `fog` / `fog_shape` and `shadow_bias` were
         // appended, 2026-11-02; 608 until the three `sky_*` rows, 2026-11-03; 656 until the local
-        // shadow layers, 2026-11-11; 3 216 until `wetness`, 2026-11-19); each light slot is 64 bytes of `LightData` and 4 of
+        // shadow layers, 2026-11-11; 3 216 until `wetness`, 3 232 until the rain map, 2026-11-19); each light slot is 64 bytes of `LightData` and 4 of
         // `light_shadows`. Expressed against MAX_LIGHTS so raising the light ceiling does not
         // require editing three literals in three files (and so that forgetting one is not how the
         // layout drifts).
         assert_eq!(
             std::mem::size_of::<SceneUniforms>(),
-            3232 + crate::frame_uniforms::MAX_LIGHTS * 68,
+            3312 + crate::frame_uniforms::MAX_LIGHTS * 68,
             "SceneUniforms total"
         );
     }

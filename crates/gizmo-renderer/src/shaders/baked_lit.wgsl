@@ -12,6 +12,9 @@
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
 #import gizmo::common::{SceneUniforms, height_fog, instance_keeps, BAKED_SUN_SHARE}
 #import gizmo::surface::{rain_on, wet_darkening}
+#ifdef RAIN_MAP
+#import gizmo::common::{rain_exposure}
+#endif
 #ifdef REFLECTION_INPUTS
 #import gizmo::common::{BAKED_SURFACE, dielectric_f0}
 #import gizmo::surface::{wet_roughness}
@@ -208,7 +211,20 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, axes: ReceiverA
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return shade(in, rain_on(scene.wetness, in.world_pos, normalize(in.world_normal).y));
+    return shade(in, rain_at(in.world_pos, in.world_normal));
+}
+
+// The scene's rain on a fragment (`rain_on`), kept off what is under cover where there is a rain map —
+// looked up only on what faces up enough to take rain at all.
+fn rain_at(world_position: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
+    let up = normalize(normal).y;
+    var exposure = 1.0;
+#ifdef RAIN_MAP
+    if (scene.wetness.x > 0.0 && up > 0.2) {
+        exposure = rain_exposure(t_shadow, s_shadow, i32(#{RAIN_LAYER}), scene.rain_view_proj, scene.rain_params, world_position);
+    }
+#endif
+    return rain_on(scene.wetness, world_position, up, exposure);
 }
 
 #ifdef REFLECTION_INPUTS
@@ -226,7 +242,7 @@ struct ReflectionInputs {
 
 @fragment
 fn fs_reflective(in: VertexOutput, @builtin(front_facing) front: bool) -> ReflectionInputs {
-    let rain = rain_on(scene.wetness, in.world_pos, normalize(in.world_normal).y);
+    let rain = rain_at(in.world_pos, in.world_normal);
     var out: ReflectionInputs;
     out.colour = shade(in, rain);
     let n = normalize(select(-in.world_normal, in.world_normal, front));

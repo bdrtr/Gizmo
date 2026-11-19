@@ -134,9 +134,10 @@ const PUDDLE_ROUGHNESS: f32 = 0.03;
 
 // How wet a fragment is: x = soaked (0 dry … 1), y = under a puddle (0 … 1). Only what faces up takes
 // rain: `up` is the geometric normal's height, so a wall stays near dry and a normal map does not
-// speckle a road; puddles stand only on the flat.
-fn rain_on(wetness: vec4<f32>, world_position: vec3<f32>, up: f32) -> vec2<f32> {
-    let level = clamp(wetness.x, 0.0, 1.0);
+// speckle a road; puddles stand only on the flat. `exposure`: how much of the rain reaches it, 0 under
+// cover (`gizmo::common::rain_exposure`, on a path with a rain map; 1 where there is none).
+fn rain_on(wetness: vec4<f32>, world_position: vec3<f32>, up: f32, exposure: f32) -> vec2<f32> {
+    let level = clamp(wetness.x, 0.0, 1.0) * clamp(exposure, 0.0, 1.0);
     if (level <= 0.0) {
         return vec2<f32>(0.0);
     }

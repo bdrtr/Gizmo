@@ -1729,13 +1729,13 @@ mod tests {
     #[test]
     fn test_gpu_uniform_struct_sizes() {
         // Extremely critical alignment checks to prevent runtime pipeline crashes on GPU
-        // 64 bytes a light of `LightData` and 4 of its shadow's entry, 3 232 fixed (656 until the
-        // local shadow layers, 2026-11-11; 3 216 until the wetness, 2026-11-19).
-        let expect_scene = 3232 + crate::frame_uniforms::MAX_LIGHTS * 68;
+        // 64 bytes a light of `LightData` and 4 of its shadow's entry, 3 312 fixed (656 until the
+        // local shadow layers, 2026-11-11; 3 216 until the wetness, 3 232 until the rain map, 2026-11-19).
+        let expect_scene = 3312 + crate::frame_uniforms::MAX_LIGHTS * 68;
         assert_eq!(
             std::mem::size_of::<crate::gpu_types::SceneUniforms>(),
             expect_scene,
-            "SceneUniforms size shifted from 3232 + 68*MAX_LIGHTS bytes!"
+            "SceneUniforms size shifted from 3312 + 68*MAX_LIGHTS bytes!"
         );
         assert_eq!(std::mem::size_of::<crate::gpu_types::LightData>(), 64, "LightData size shifted from target 64 bytes!");
         // 80 since 2026-08-24: the tone-mapping pair (curve + white point) is a fifth vec4. It was

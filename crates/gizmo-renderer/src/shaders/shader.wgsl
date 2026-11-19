@@ -16,6 +16,9 @@
 // `SceneState::lit_pipeline`.
 #ifdef DETAILS
 #import gizmo::common::{dielectric_f0, instance_keeps}
+#ifdef RAIN_MAP
+#import gizmo::common::{rain_exposure}
+#endif
 #endif
 #import gizmo::common::{SceneUniforms, compute_direct_lighting, scene_environment, height_fog}
 // The local lights, in tiers on the forward-only path as the material is (`LightShape`): their loop only
@@ -368,7 +371,15 @@ fn rain_here(in: VertexOutput) -> vec2<f32> {
         return vec2<f32>(0.0);
     }
 #endif
-    return rain_on(scene.wetness, in.world_position, normalize(in.normal).y);
+    let up = normalize(in.normal).y;
+    var exposure = 1.0;
+#ifdef RAIN_MAP
+    // Kept off what is under cover (`rain_exposure`), on what faces up enough to take rain at all.
+    if (scene.wetness.x > 0.0 && up > 0.2) {
+        exposure = rain_exposure(t_shadow, s_shadow, i32(#{RAIN_LAYER}), scene.rain_view_proj, scene.rain_params, in.world_position);
+    }
+#endif
+    return rain_on(scene.wetness, in.world_position, up, exposure);
 }
 
 fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
