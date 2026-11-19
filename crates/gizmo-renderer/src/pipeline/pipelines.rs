@@ -52,6 +52,7 @@ pub(super) struct CorePipelines {
     /// See [`SceneState::unlit_blended_pipeline`](super::SceneState::unlit_blended_pipeline).
     pub(super) unlit_blended: wgpu::RenderPipeline,
     pub(super) baked_lit: wgpu::RenderPipeline,
+    pub(super) baked_lit_double_sided: wgpu::RenderPipeline,
     pub(super) baked_lit_transparent: wgpu::RenderPipeline,
     pub(super) sky: wgpu::RenderPipeline,
     /// The mesh's own painted sky/panorama — see `crate::backdrop`.
@@ -618,6 +619,16 @@ pub(super) fn build_core_pipelines(
             "Baked-Lit Pipeline",
             opaque_state.depth_write,
             opaque_state.cull,
+            opaque_state.blend,
+            wgpu::PolygonMode::Fill,
+        ),
+        // A double-sided baked-lit material's: the same, culling nothing.
+        baked_lit_double_sided: create_main(
+            &render_pipeline_layout,
+            &baked_lit_shader,
+            "Baked-Lit TwoSided Pipeline",
+            opaque_state.depth_write,
+            None,
             opaque_state.blend,
             wgpu::PolygonMode::Fill,
         ),

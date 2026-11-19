@@ -198,6 +198,23 @@ pub(crate) fn draw_layer(is_backdrop: bool, is_transmissive: bool, is_transparen
     }
 }
 
+/// Where a view draws its opaque baked-lit surfaces, decided once a view by what reads them there
+/// (`systems::render`, beside `velocity_read`), so that every pass takes the same decision. Pay for
+/// what is used: the G-buffer costs a baked-lit city twice the forward draw (`nfsu2-gizmo`, a Radeon
+/// 780M, 2026-11-19), and the reflections need only three of its targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BakedRoute {
+    /// Forward, the colour alone: nothing reads them anywhere else.
+    Forward,
+    /// Forward, with what screen-space reflections read of them written beside the colour (RT1, RT2,
+    /// RT5's `w` — `DeferredState::baked_reflective_pipelines`): the reflections are on and nothing
+    /// else reads them.
+    Reflective,
+    /// Into the G-buffer (`gbuffer.wgsl`'s `fs_baked`), finished by the lighting pass: a decal, which is
+    /// projected onto the G-buffer, reads them there.
+    GBuffer,
+}
+
 /// Draw-order comparator for correct compositing. Backdrops come first, then the opaque world
 /// (whose relative order is irrelevant — the depth buffer resolves it), then transparent
 /// batches back-to-front (farthest first) because the transparent pipeline disables
@@ -427,13 +444,23 @@ pub struct DrawItem {
 
 impl DrawItem {
     /// Whether the item is drawn into the G-buffer on a path that has one: what the deferred path
-    /// lights (everything not `unlit`), and — `baked`, when the view has a reader for it there
-    /// (screen-space reflections, a decal) — an opaque baked-lit surface, which the lighting pass
-    /// finishes as `baked_lit.wgsl` would (`gbuffer.wgsl`'s `fs_baked`). A blended baked-lit layer
-    /// stays forward, where it composites in order; on the forward-only path there is no G-buffer and
-    /// every one of them is drawn forward.
-    pub(super) fn in_gbuffer(&self, baked: bool) -> bool {
-        !self.unlit || (baked && self.baked_lit && !self.is_transparent)
+    /// lights (everything not `unlit`), and — on [`BakedRoute::GBuffer`] — an opaque baked-lit
+    /// surface, which the lighting pass finishes as `baked_lit.wgsl` would (`gbuffer.wgsl`'s
+    /// `fs_baked`). A blended baked-lit layer stays forward, where it composites in order; on the
+    /// forward-only path there is no G-buffer and every one of them is drawn forward.
+    pub(super) fn in_gbuffer(&self, baked: BakedRoute) -> bool {
+        !self.unlit || (baked == BakedRoute::GBuffer && self.opaque_baked())
+    }
+
+    /// Whether the item is drawn by the forward pass's reflective baked-lit draw
+    /// (`passes::record_baked_reflective`) rather than with the rest of the forward world: an opaque
+    /// baked-lit surface on [`BakedRoute::Reflective`].
+    pub(super) fn drawn_reflective(&self, baked: BakedRoute) -> bool {
+        baked == BakedRoute::Reflective && self.opaque_baked()
+    }
+
+    fn opaque_baked(&self) -> bool {
+        self.baked_lit && !self.is_transparent
     }
 
     /// Draws `instances` of this item into a [`PassPlan`](super::passes::plan::PassPlan): its

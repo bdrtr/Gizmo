@@ -50,6 +50,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **For screen-space reflections a baked-lit surface stays forward and writes what they read beside its colour.**
+  A baked-lit surface went through the G-buffer whenever reflections were on, and in `nfsu2-gizmo`'s wet city that
+  route cost about twice the forward draw: six targets a pixel and the lighting pass, against one. Measured with new
+  GPU marks, it was neither overdraw (a depth prepass left it as it was), nor the vertex stage, nor the `discard`; it
+  is what the route writes. The reflections need only the surface's normal and roughness (RT1), where it is with the
+  baked mark (RT2) and its reflectance (RT5's `w`). Now the route is chosen once a view by what reads the surfaces
+  (`BakedRoute`): a decal, which is projected onto the G-buffer, still sends them through it; reflections alone have
+  them drawn forward by `baked_lit.wgsl`'s new `fs_reflective`, which writes those three beside the colour, as
+  `fs_baked` writes them (`DeferredState::baked_reflective_pipelines`, a pass before the forward world's); nothing
+  draws them forward alone. Wet city, Radeon 780M: 14.3 ms a frame to 12.0, the picture within 0.4 of 255 on
+  average. Found on the way, fixed with it:
+  - The forward path drew a double-sided opaque baked-lit surface with the culling pipeline, so it lost its back
+    faces there and kept them through the G-buffer. `SceneState::baked_lit_double_sided_pipeline`.
+  - Screen-space reflections no longer count as a reader of the velocity target: they read its `zw`, the specular
+    tint the G-buffer pass writes, never the motion (`velocity_read` named a temporal pass they do not have), and
+    with them on, every surface drawn forward was drawn a second time into it.
+  - The GPU timer's `gpu.geometry` is split into `gpu.prepass`, `gpu.gbuffer` and `gpu.lighting` (decals and the
+    lighting pass), and `gpu.forward` into `gpu.forward` (the forward draws, with the reflections, which run inside
+    them), `gpu.screen_space` and `gpu.taa` — the G-buffer's cost was hidden among the rest.
+  Tests: `a_baked_surface_draws_the_same_picture_on_each_of_its_routes` (renamed and extended) draws the baked scene
+  — now with a double-sided wall seen from behind — on all three routes, dry and wet, against the forward path, and
+  reads which route each took off the G-buffer (the reflective one writes RT2 and no albedo, the decal's both);
+  `a_baked_floor_reflects_what_stands_on_it_and_the_sky_and_is_never_darkened` adds a matte floor that reflects
+  nothing until the rain smooths it (1127 pixels redden), and now asserts no pixel at all darkens: the 2 to 7 it had
+  allowed were the antialiasing pass blending the box's silhouette with the brighter floor beside it, off there.
+  Culling the double-sided wall forward, sending the reflections through the G-buffer, leaving the reflective
+  roughness dry or its position unwritten each turns them red.
+
 - **Rain: `Renderer::wetness`.** A scene can be wet: `Wetness::new(level).with_puddles(share)`. What faces up —
   a road, a roof, a car's bonnet, by the geometric normal, so a wall stays near dry and a normal map does not
   speckle a road — darkens (soaked, its colour is 0.6 of the dry) and smooths (roughness at most 0.2), and puddles
@@ -109,7 +137,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   route is +2 ms that way, +4.5 ms through the prepass). Without a reader the forward pass draws it as before — the
   route costs nothing a game does not use. The G-buffer's vertex stage passes the clear coat's roughness and the
   instance's cut-out in one location now: with the front-facing flag, the desktop's sixteen were all taken. Test
-  `a_baked_surface_in_the_gbuffer_draws_what_the_forward_pass_drew`: a baked scene with the sun's shadow on it, a
+  `a_baked_surface_in_the_gbuffer_draws_what_the_forward_pass_drew` (now `a_baked_surface_draws_the_same_picture_on_each_of_its_routes`): a baked scene with the sun's shadow on it, a
   surface that receives none, the ambient and emissive knobs, a cut-out by vertex alpha and fog, drawn through the
   G-buffer and forward, agree to 2 steps of 255 but on a few silhouette pixels; the G-buffer holds them, and holds
   none with nothing reading them. Leaving out the shadow, the ambient, the fog or the cut-out's vertex alpha, or

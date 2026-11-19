@@ -102,9 +102,15 @@ pub struct DeferredState {
     pub gbuffer_double_sided_pipeline: wgpu::RenderPipeline,
     /// An opaque baked-lit surface into the G-buffer (`gbuffer.wgsl`'s `fs_baked`), single-sided then
     /// double-sided: the lighting pass finishes it as `baked_lit.wgsl` draws it, and what reads the
-    /// G-buffer — screen-space reflections, decals — sees it. The forward path keeps drawing it with
-    /// `baked_lit.wgsl` where there is no G-buffer.
+    /// G-buffer — decals — sees it. The forward path keeps drawing it with `baked_lit.wgsl` where there
+    /// is no G-buffer.
     pub gbuffer_baked_pipelines: [wgpu::RenderPipeline; 2],
+    /// An opaque baked-lit surface drawn forward (`baked_lit.wgsl`'s `fs_reflective`), single-sided then
+    /// double-sided, writing beside its colour what screen-space reflections read of it — RT1, RT2 and
+    /// RT5's `w`, as `fs_baked` would: the route when reflections are the only reader. Four targets
+    /// against the G-buffer's six and no lighting pass to finish it — in `nfsu2-gizmo`'s wet city the
+    /// G-buffer's route cost twice the forward draw.
+    pub baked_reflective_pipelines: [wgpu::RenderPipeline; 2],
 
     // Z-Prepass (Depth only)
     /// The depth-only prepass, so the geometry pass shades each pixel once rather than once per
@@ -177,6 +183,8 @@ struct GeometryPipelines {
     gbuffer: [wgpu::RenderPipeline; 2],
     /// `fs_baked`'s, likewise.
     gbuffer_baked: [wgpu::RenderPipeline; 2],
+    /// `baked_lit.wgsl`'s `fs_reflective`, likewise.
+    baked_reflective: [wgpu::RenderPipeline; 2],
     /// The prepass with no fragment stage: single-sided, then double-sided.
     z_prepass: [wgpu::RenderPipeline; 2],
     /// The prepass that cuts what its surface cuts, likewise.
@@ -236,6 +244,7 @@ impl DeferredState {
         let GeometryPipelines {
             gbuffer: [gbuffer_pipeline, gbuffer_double_sided_pipeline],
             gbuffer_baked: gbuffer_baked_pipelines,
+            baked_reflective: baked_reflective_pipelines,
             z_prepass: [z_prepass_pipeline, z_prepass_double_sided_pipeline],
             z_prepass_discard: z_prepass_discard_pipelines,
             environment_sky: environment_sky_pipeline,
@@ -268,6 +277,7 @@ impl DeferredState {
             gbuffer_pipeline,
             gbuffer_double_sided_pipeline,
             gbuffer_baked_pipelines,
+            baked_reflective_pipelines,
             z_prepass_pipeline,
             z_prepass_double_sided_pipeline,
             z_prepass_discard_pipelines,
@@ -318,6 +328,19 @@ impl DeferredState {
                 Self::create_gbuffer_pipeline(device, scene, motion_layout, &geometry, "fs_baked", true, back, "GBuffer Baked Pipeline"),
                 Self::create_gbuffer_pipeline(device, scene, motion_layout, &geometry, "fs_baked", true, None, "GBuffer Baked TwoSided Pipeline"),
             ],
+            baked_reflective: {
+                let baked = crate::pipeline::shaders::load_shader_composed_with(
+                    device,
+                    "demo/assets/shaders/baked_lit.wgsl",
+                    include_str!("shaders/baked_lit.wgsl"),
+                    "Baked-Lit Reflective Shader",
+                    &[("REFLECTION_INPUTS", naga_oil::compose::ShaderDefValue::Bool(true))],
+                );
+                [
+                    Self::create_baked_reflective_pipeline(device, scene, &baked, back, "Baked-Lit Reflective Pipeline"),
+                    Self::create_baked_reflective_pipeline(device, scene, &baked, None, "Baked-Lit Reflective TwoSided Pipeline"),
+                ]
+            },
             z_prepass: [
                 prepass(back, false, "Z-Prepass Pipeline"),
                 prepass(None, false, "Z-Prepass TwoSided Pipeline"),
@@ -340,7 +363,7 @@ impl DeferredState {
     /// 2026-11-11, so a hot-reloaded copy of any of the three changed nothing in a running studio,
     /// while the skill that describes hot reload names `deferred_lighting` as what it is for.
     pub fn rebuild_pipelines(&mut self, device: &wgpu::Device, scene: &SceneState) {
-        let GeometryPipelines { gbuffer, gbuffer_baked, z_prepass, z_prepass_discard, environment_sky, lighting, seen, motion } = Self::create_pipelines(
+        let GeometryPipelines { gbuffer, gbuffer_baked, baked_reflective, z_prepass, z_prepass_discard, environment_sky, lighting, seen, motion } = Self::create_pipelines(
             device,
             scene,
             &self.motion.layout,
@@ -350,6 +373,7 @@ impl DeferredState {
         );
         [self.gbuffer_pipeline, self.gbuffer_double_sided_pipeline] = gbuffer;
         self.gbuffer_baked_pipelines = gbuffer_baked;
+        self.baked_reflective_pipelines = baked_reflective;
         [self.z_prepass_pipeline, self.z_prepass_double_sided_pipeline] = z_prepass;
         self.z_prepass_discard_pipelines = z_prepass_discard;
         self.environment_sky_pipeline = environment_sky;
@@ -866,6 +890,68 @@ impl DeferredState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(writes_depth),
                 depth_compare: Some(if writes_depth { wgpu::CompareFunction::Less } else { wgpu::CompareFunction::LessEqual }),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
+    /// `baked_lit.wgsl`'s `fs_reflective` over the forward pass's layout and depth: the HDR target, then
+    /// RT1, RT2 and RT5, which it writes as `fs_baked` does for the reflections to read.
+    fn create_baked_reflective_pipeline(
+        device: &wgpu::Device,
+        scene: &SceneState,
+        shader: &wgpu::ShaderModule,
+        cull_mode: Option<wgpu::Face>,
+        label: &str,
+    ) -> wgpu::RenderPipeline {
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Baked-Lit Reflective Pipeline Layout"),
+            // The forward pass's: what `baked_lit.wgsl` is bound with there.
+            bind_group_layouts: &[
+                Some(&scene.global_bind_group_layout),
+                Some(&scene.texture_bind_group_layout),
+                Some(&scene.shadow_bind_group_layout),
+                Some(&scene.skeleton_bind_group_layout),
+                Some(&scene.instance_bind_group_layout),
+            ],
+            immediate_size: 0,
+        });
+        let target = |format| Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(crate::gpu_types::GpuVertex::desc())],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_reflective"),
+                compilation_options: Default::default(),
+                targets: &[
+                    target(wgpu::TextureFormat::Rgba16Float),
+                    target(GBUFFER_NORMAL_ROUGHNESS_FORMAT),
+                    target(GBUFFER_WORLD_POSITION_FORMAT),
+                    target(GBUFFER_EMISSIVE_FORMAT),
+                ],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode,
+                ..Default::default()
+            },
+            // As the forward pass's opaque baked-lit pipeline: its own depth, against the frame's.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),

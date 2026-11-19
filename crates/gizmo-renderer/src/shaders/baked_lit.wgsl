@@ -12,6 +12,10 @@
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
 #import gizmo::common::{SceneUniforms, height_fog, instance_keeps, BAKED_SUN_SHARE}
 #import gizmo::surface::{rain_on, wet_darkening}
+#ifdef REFLECTION_INPUTS
+#import gizmo::common::{BAKED_SURFACE, dielectric_f0}
+#import gizmo::surface::{wet_roughness}
+#endif
 #ifdef SUN_SHADOWS
 #ifdef SUN_SHADOW_PER_VERTEX
 #import gizmo::common::{sun_shadow_coord, sun_shadow_lean, sun_shadow_tap, shadow_distance_fade}
@@ -110,7 +114,9 @@ struct VertexOutput {
     @location(4) world_normal: vec3<f32>,
     @location(5) inst_ambient: vec3<f32>,
     @location(6) inst_emissive: vec4<f32>,  // w < 0: receives no shadows
-    @location(7) inst_cutoff: f32,
+    // x: the cut-out threshold (`instance_keeps`); y: the roughness, which `fs_reflective` hands the
+    // screen-space reflections. One location for both, on a path that counts them (WebGL2's fifteen).
+    @location(7) inst_cutoff_roughness: vec2<f32>,
     // Where the base colour is (`InstanceRaw::texture.x`, `base_colour`).
     @location(9) @interpolate(flat) base_layer: u32,
 #ifdef SUN_SHADOWS
@@ -140,7 +146,7 @@ fn vs_main(input: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput 
     out.inst_albedo = inst.albedo_color;
     out.inst_ambient = inst.ambient.rgb;
     out.inst_emissive = inst.emissive;
-    out.inst_cutoff = inst.ambient.w;
+    out.inst_cutoff_roughness = vec2<f32>(inst.ambient.w, inst.pbr.x);
     out.base_layer = u32(inst.texture.x);
     // Only for the shadow's normal offset — nothing here shades with it.
     out.world_normal = normalize((model * vec4<f32>(input.normal, 0.0)).xyz);
@@ -202,6 +208,41 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, axes: ReceiverA
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(in, rain_on(scene.wetness, in.world_pos, normalize(in.world_normal).y));
+}
+
+#ifdef REFLECTION_INPUTS
+// What screen-space reflections read of a surface, written beside its colour when they are on and
+// nothing else wants this surface in the G-buffer (`DeferredState::baked_reflective_pipelines`): its
+// normal and roughness (RT1), where it is with the baked mark (RT2), and its reflectance (RT5's `w`) —
+// as `gbuffer.wgsl`'s `fs_baked` writes them, so the reflections cannot tell the two routes apart. The
+// lighting pass has been by now, so RT5's colour is nobody's, and stays black.
+struct ReflectionInputs {
+    @location(0) colour: vec4<f32>,
+    @location(1) normal_roughness: vec4<f32>,
+    @location(2) position_rel_camera: vec4<f32>,
+    @location(3) reflectance: vec4<f32>,
+};
+
+@fragment
+fn fs_reflective(in: VertexOutput, @builtin(front_facing) front: bool) -> ReflectionInputs {
+    let rain = rain_on(scene.wetness, in.world_pos, normalize(in.world_normal).y);
+    var out: ReflectionInputs;
+    out.colour = shade(in, rain);
+    let n = normalize(select(-in.world_normal, in.world_normal, front));
+    out.normal_roughness = vec4<f32>(
+        normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), rain.y)),
+        wet_roughness(in.inst_cutoff_roughness.y, rain),
+    );
+    out.position_rel_camera = vec4<f32>(in.world_pos - scene.camera_pos.xyz, BAKED_SURFACE);
+    let f0 = dielectric_f0(in.inst_emissive.w);
+    out.reflectance = vec4<f32>(0.0, 0.0, 0.0, select(f0, -f0, in.inst_emissive.w < 0.0));
+    return out;
+}
+#endif
+
+// The surface's colour, fogged, with its alpha; `rain` is `rain_on`'s.
+fn shade(in: VertexOutput, rain: vec2<f32>) -> vec4<f32> {
     // The surface's normal and how it runs across neighbouring pixels, for the sun's shadow
     // (`receiver_axes`) — taken first, before any pixel of the quad discards.
 #ifdef SUN_SHADOWS
@@ -218,13 +259,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // because the sorted pass cannot hold a decal against its own surface. Same threshold and
     // same test as `gbuffer.wgsl`; zero disables it, which is every material that does not ask.
     let final_alpha = in.color.a * in.inst_albedo.a * tex.a;
-    if (!instance_keeps(in.inst_cutoff, final_alpha, in.clip_position.xy)) {
+    if (!instance_keeps(in.inst_cutoff_roughness.x, final_alpha, in.clip_position.xy)) {
         discard;
     }
 
-    // The scene's rain (`Renderer::wetness`) darkens what it soaks; its smoothness shows only in what
-    // reflects it, which on this path is nothing — the G-buffer's route (`fs_baked`) has the reflections.
-    let base = in.inst_albedo.rgb * tex.rgb * wet_darkening(rain_on(scene.wetness, in.world_pos, normalize(in.world_normal).y));
+    // The scene's rain (`Renderer::wetness`) darkens what it soaks; its smoothness shows in what reflects
+    // it — the screen-space reflections, which `fs_reflective` hands it to.
+    let base = in.inst_albedo.rgb * tex.rgb * wet_darkening(rain);
 
     // The vertex colour is taken at face value. It used to be second-guessed here — a
     // near-zero length was rewritten to white, so that an importer which never set the

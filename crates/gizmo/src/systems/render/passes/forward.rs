@@ -33,9 +33,9 @@ pub fn record_forward_and_fluid(
     // Whether anything reads the G-buffer's velocity this frame (TAA, motion blur, SSR). Without a
     // reader the forward-drawn surfaces are not drawn into it a second time.
     velocity_read: bool,
-    // Whether the opaque baked-lit surfaces went into the G-buffer this view (`DrawItem::in_gbuffer`):
-    // then not drawn here.
-    baked_in_gbuffer: bool,
+    // Where the opaque baked-lit surfaces are drawn this view: not here when they went into the
+    // G-buffer (`DrawItem::in_gbuffer`) or are drawn with their reflection inputs (`drawn_reflective`).
+    baked: BakedRoute,
 ) {
     // ── Forward pass (unlit / skybox / GPU subsystems; PBR skipped if deferred) ──
     {
@@ -66,9 +66,10 @@ pub fn record_forward_and_fluid(
         } else {
             draw_items.len()
         };
+        record_baked_reflective(encoder, renderer, &draw_items[..world_end], uploaded_instances, baked);
         let mut render_pass = begin_forward_pass(encoder, renderer, hdr_load, depth_load);
         draw_environment_sky(&mut render_pass, renderer);
-        draw_forward_items(&mut render_pass, renderer, &draw_items[..world_end], uploaded_instances, baked_in_gbuffer);
+        draw_forward_items(&mut render_pass, renderer, &draw_items[..world_end], uploaded_instances, baked);
 
         // Draw GPU Physics Spheres!
         if let Some(physics) = &renderer.gpu_physics {
@@ -93,7 +94,7 @@ pub fn record_forward_and_fluid(
         }
         if world_end < draw_items.len() {
             let mut render_pass = begin_forward_pass(encoder, renderer, wgpu::LoadOp::Load, wgpu::LoadOp::Load);
-            draw_forward_items(&mut render_pass, renderer, &draw_items[world_end..], uploaded_instances, baked_in_gbuffer);
+            draw_forward_items(&mut render_pass, renderer, &draw_items[world_end..], uploaded_instances, baked);
         }
     }
 
@@ -101,7 +102,7 @@ pub fn record_forward_and_fluid(
     // — when either, or SSR, reads it. It is every forward-drawn surface drawn again: in a baked-lit
     // city, as many draws as the frame itself.
     if velocity_read {
-        record_forward_motion(encoder, renderer, draw_items, uploaded_instances, baked_in_gbuffer);
+        record_forward_motion(encoder, renderer, draw_items, uploaded_instances, baked);
     }
 
     // ── GPU particles (soft: a pass of their own, see `record_gpu_particles`) and the fluid's
@@ -139,13 +140,13 @@ pub fn record_forward_and_fluid(
 /// object as if it stood still, and motion blur left it sharp. Not a sky, a backdrop, the grid, water
 /// (its waves move its vertices, which this pass would not), a mirror, or a game's own pipeline (its own
 /// vertex stage); nothing that blends, whose pixels are what stands behind as much as they are its own.
-fn record_forward_motion(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer, draw_items: &[DrawItem], uploaded_instances: u32, baked_in_gbuffer: bool) {
+fn record_forward_motion(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer, draw_items: &[DrawItem], uploaded_instances: u32, baked: BakedRoute) {
     let Some(def) = renderer.deferred.as_ref() else {
         return;
     };
     let moving = |item: &&DrawItem| {
         item.visible_in_camera
-            && !item.in_gbuffer(baked_in_gbuffer)
+            && !item.in_gbuffer(baked)
             && !item.is_transparent
             && !item.is_skybox
             && !item.is_backdrop
@@ -321,7 +322,7 @@ fn draw_forward_items(
     renderer: &Renderer,
     draw_items: &[DrawItem],
     uploaded_instances: u32,
-    baked_in_gbuffer: bool,
+    baked: BakedRoute,
 ) {
     let mut plan = super::plan::PassPlan::default();
     for item in draw_items {
@@ -340,7 +341,9 @@ fn draw_forward_items(
 
         // Forward: what the G-buffer does not hold (`DrawItem::in_gbuffer` — a baked-lit surface is in it
         // where there is one), and everything where there is none.
-        if item.is_skybox || !item.in_gbuffer(baked_in_gbuffer) || renderer.deferred.is_none() || item.is_transparent {
+        if (item.is_skybox || !item.in_gbuffer(baked) || renderer.deferred.is_none() || item.is_transparent)
+            && !item.drawn_reflective(baked)
+        {
             draw_solid = true;
         }
 
@@ -423,6 +426,8 @@ fn draw_forward_items(
                 // discarded the fragment alpha with it.
                 if item.is_transparent {
                     &renderer.scene.baked_lit_transparent_pipeline
+                } else if item.is_double_sided {
+                    &renderer.scene.baked_lit_double_sided_pipeline
                 } else {
                     &renderer.scene.baked_lit_pipeline
                 }
@@ -498,6 +503,72 @@ fn draw_forward_items(
         }
     }
     plan.replay(render_pass, &renderer.device, renderer.multi_draw);
+}
+
+/// The opaque baked-lit surfaces on [`BakedRoute::Reflective`]: drawn forward (`baked_lit.wgsl`'s
+/// `fs_reflective`) into the frame and, beside it, into the G-buffer's RT1, RT2 and RT5, which is what
+/// screen-space reflections read of them — rather than through the G-buffer's six targets and the
+/// lighting pass, which cost a baked-lit city twice this draw. After the lighting pass, which wrote the
+/// background where they stand: their depth decides what shows, as in the forward pass.
+fn record_baked_reflective(
+    encoder: &mut wgpu::CommandEncoder,
+    renderer: &Renderer,
+    draw_items: &[DrawItem],
+    uploaded_instances: u32,
+    baked: BakedRoute,
+) {
+    let Some(def) = renderer.deferred.as_ref() else {
+        return;
+    };
+    let drawn = |item: &&DrawItem| item.drawn_reflective(baked) && item.visible_in_camera && item.camera_count > 0;
+    if !draw_items.iter().any(|item| drawn(&item)) {
+        return;
+    }
+    let load = |view| {
+        Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+        })
+    };
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Baked-Lit Reflective Pass"),
+        color_attachments: &[
+            load(&renderer.post.hdr_texture_view),
+            load(&def.normal_roughness_view),
+            load(&def.world_position_view),
+            load(&def.emissive_view),
+        ],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: &renderer.depth_texture_view,
+            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+            stencil_ops: None,
+        }),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
+    #[cfg(not(gizmo_forward_only))]
+    pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+    pass.set_bind_group(BG_INSTANCE, renderer.scene.view_instance_bind_group(), &[]);
+    let mut plan = super::plan::PassPlan::default();
+    for item in draw_items.iter().filter(drawn) {
+        let inst_start = item.first_instance;
+        let inst_end = (item.first_instance + item.camera_count).min(uploaded_instances).max(item.first_instance);
+        if inst_end <= inst_start {
+            continue;
+        }
+        plan.set_pipeline(&def.baked_reflective_pipelines[usize::from(item.is_double_sided)]);
+        plan.set_bind_group(1, &item.bind_group);
+        plan.set_bind_group(
+            BG_SKELETON,
+            item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group),
+        );
+        item.plan_draw(&mut plan, inst_start..inst_end);
+    }
+    plan.replay(&mut pass, &renderer.device, renderer.multi_draw);
 }
 
 /// An [`EnvironmentMap`](crate::renderer::environment::EnvironmentMap) behind the scene: at the far

@@ -1693,11 +1693,12 @@ fn draw_camera_view_with(
         None => Mat4::IDENTITY,
     };
     // Whether this frame reads the G-buffer's velocity at all: TAA reprojects by it, the camera's
-    // motion blur smears along it, SSR's temporal pass reprojects by it. Nothing else does, and
-    // without them the forward-drawn surfaces are not drawn a second time into it, and no
-    // instance's last-frame model is looked up, kept or uploaded (`collect_draw_items`).
-    let velocity_read =
-        post.motion_blur > 0.0 || renderer.taa.as_ref().is_some_and(|t| t.enabled) || renderer.ssr.is_some();
+    // motion blur smears along it. Nothing else does — screen-space reflections read the target's
+    // `zw`, the specular tint the G-buffer pass writes, and never the motion (they were counted until
+    // 2026-11-19, for a temporal pass they do not have) — and without them the forward-drawn surfaces
+    // are not drawn a second time into it, and no instance's last-frame model is looked up, kept or
+    // uploaded (`collect_draw_items`).
+    let velocity_read = post.motion_blur > 0.0 || renderer.taa.as_ref().is_some_and(|t| t.enabled);
     // The G-buffer's velocity needs the same pair, before the history moves on — and whether the
     // instances' last models come with it.
     if let Some(def) = renderer.deferred.as_ref() {
@@ -1705,14 +1706,21 @@ fn draw_camera_view_with(
         def.motion.set_view_projs(&renderer.queue, now, renderer.previous_view_proj.unwrap_or(now), velocity_read);
     }
     renderer.previous_view_proj = Some(unjittered_view_proj.to_cols_array_2d());
-    // Whether the opaque baked-lit surfaces go through the G-buffer this view (`gbuffer.wgsl`'s
-    // `fs_baked`): when something reads them there — screen-space reflections, which they show and
-    // are shown in, or a decal, which is projected onto the G-buffer. Without a reader the forward
-    // pass draws them for less (`baked_lit.wgsl`, the same picture): measured in `nfsu2-gizmo`'s city,
-    // the G-buffer route is 2 ms more on a Radeon 780M and 1.4 ms on an RTX 3050 (2026-11-19).
-    let baked_in_gbuffer = renderer.deferred.is_some()
-        && (renderer.ssr.as_ref().is_some_and(|s| s.enabled)
-            || world.query::<&crate::renderer::components::Decal>().iter().next().is_some());
+    // Where the opaque baked-lit surfaces are drawn this view (`BakedRoute`), by what reads them: a
+    // decal, projected onto the G-buffer, needs them there (`gbuffer.wgsl`'s `fs_baked`, finished by
+    // the lighting pass); screen-space reflections need only their normal, roughness, position and
+    // reflectance, written beside the forward draw (`baked_lit.wgsl`'s `fs_reflective`); nothing else
+    // reads them, and the forward draw alone is the same picture for less. In `nfsu2-gizmo`'s wet city
+    // (Radeon 780M, 2026-11-19) the G-buffer's route cost about twice the forward draw.
+    let baked = if renderer.deferred.is_none() {
+        BakedRoute::Forward
+    } else if world.query::<&crate::renderer::components::Decal>().iter().next().is_some() {
+        BakedRoute::GBuffer
+    } else if renderer.ssr.as_ref().is_some_and(|s| s.enabled) {
+        BakedRoute::Reflective
+    } else {
+        BakedRoute::Forward
+    };
     let post = crate::renderer::PostProcessUniforms {
         reproject: reproject.to_cols_array_2d(),
         ..post
@@ -1920,9 +1928,11 @@ fn draw_camera_view_with(
         &draw_items,
         uploaded_instances,
         cam_pos,
-        baked_in_gbuffer,
+        baked,
     );
-    renderer.gpu_mark(encoder, "gpu.geometry");
+    // The decals and the lighting pass; the depth prepass and the G-buffer are marked inside
+    // (`gpu.prepass`, `gpu.gbuffer`).
+    renderer.gpu_mark(encoder, "gpu.lighting");
     passes::record_ssao(encoder, renderer);
     laps.draw_lap(renderer, "view.geometry");
     renderer.gpu_mark(encoder, "gpu.ssao");
@@ -1941,16 +1951,19 @@ fn draw_camera_view_with(
     }
     passes::record_forward_and_fluid(
         encoder, renderer, world, &draw_items, uploaded_instances, simulations,
-        inv_view_proj, clear_color, velocity_read, baked_in_gbuffer,
+        inv_view_proj, clear_color, velocity_read, baked,
     );
+    renderer.gpu_mark(encoder, "gpu.forward");
     passes::record_screen_space_effects(encoder, renderer);
     // Advance SSGI temporal ping-pong / frame counter after its passes have run.
     if let Some(ref mut ssgi) = renderer.ssgi {
         ssgi.advance_frame();
     }
+    // Screen-space reflections and GI, apart from the draws: what they cost is a setting's.
+    renderer.gpu_mark(encoder, "gpu.screen_space");
     passes::record_taa_and_overlays(encoder, renderer, world, capture.is_none());
     laps.draw_lap(renderer, "view.forward");
-    renderer.gpu_mark(encoder, "gpu.forward");
+    renderer.gpu_mark(encoder, "gpu.taa");
     // After the overlays and before post-processing: sprites and text are overlays too, and the
     // ones whose smear a temporal resolve makes most obvious. Sprites first, so a HUD label lands
     // on its HUD image; with the UNJITTERED matrix, so a sprite drawn past TAA does not shimmer.
@@ -2007,6 +2020,7 @@ impl<'a> RenderContextExt for crate::renderer::RenderContext<'a> {
 
 mod batching;
 pub use batching::{clear_render_cache, draws_blended, DrawItem, RenderCache};
+use batching::BakedRoute;
 mod kept;
 
 pub mod visibility_index;
@@ -4965,20 +4979,22 @@ mod golden_render_tests {
         });
     }
 
-    /// **A baked-lit surface in the G-buffer draws what the forward pass drew.** On the deferred path an
-    /// opaque baked-lit surface goes into the G-buffer (`gbuffer.wgsl`'s `fs_baked`) and the lighting
-    /// pass finishes it as `baked_lit.wgsl` does — so that screen-space reflections and decals can see a
-    /// baked world. The oracle is the same scene with the deferred path taken away, where the forward
-    /// pass draws it with `baked_lit.wgsl`. The scene has what the formula has: vertex colours as the
-    /// baked light, a texture, the sun's shadow falling on it (from a baked-lit caster), a surface that
-    /// receives none, the ambient and emissive knobs, a cut-out by vertex alpha, and fog. The two
-    /// frames hold the parts at different precisions (the G-buffer's targets are 8 and 16 bits), so
-    /// they may differ by a step or two of 255, and by more on a few silhouette pixels (see the
-    /// assertion) — and no more.
+    /// **A baked-lit surface draws the same picture on each of its routes.** On the deferred path an
+    /// opaque baked-lit surface goes where what reads it needs it (`BakedRoute`): into the G-buffer
+    /// (`gbuffer.wgsl`'s `fs_baked`), finished by the lighting pass as `baked_lit.wgsl` does, for a
+    /// decal; forward with its reflection inputs beside it (`fs_reflective`) for screen-space
+    /// reflections; forward alone for nothing. The oracle is the same scene with the deferred path taken
+    /// away, where the forward pass draws it with `baked_lit.wgsl`, and the targets say which route each
+    /// frame took. The scene has what the formula has: vertex colours as the baked light, a texture, the
+    /// sun's shadow falling on it (from a baked-lit caster), a surface that receives none, the ambient
+    /// and emissive knobs, a cut-out by vertex alpha, a double-sided wall seen from behind, and fog —
+    /// dry, and in the rain with puddles. The G-buffer holds the parts at other precisions (8 and 16
+    /// bits), so its frame may differ by a step or two of 255, and by more on a few silhouette pixels
+    /// (see the assertion) — and no more.
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no G-buffer.
     #[test]
     #[ignore = "requires a GPU adapter"]
-    fn a_baked_surface_in_the_gbuffer_draws_what_the_forward_pass_drew() {
+    fn a_baked_surface_draws_the_same_picture_on_each_of_its_routes() {
         let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available())
             || pollster::block_on(Renderer::headless_adapter_is_software())
@@ -5006,10 +5022,24 @@ mod golden_render_tests {
                 })
                 .collect()
         };
-        // `deferred`: the G-buffer path, or the forward one; `reader`: screen-space reflections on, the
-        // reader that sends the baked surfaces through the G-buffer (`baked_in_gbuffer`); `wet`: rain,
-        // with puddles (`Renderer::wetness`).
-        async fn frame(deferred: bool, reader: bool, wet: bool, shaded: &dyn Fn(Vec3, Vec3, bool, f32) -> Vec<Vertex>) -> (Vec<u8>, usize) {
+        /// What reads the baked-lit surfaces, and with it their route (`BakedRoute`).
+        #[derive(Clone, Copy, PartialEq)]
+        enum Reader {
+            Nothing,
+            Reflections,
+            Decal,
+        }
+        /// A frame and what its G-buffer holds: texels of RT2 that say a baked-lit surface
+        /// (`BAKED_SURFACE`), and texels of RT0 (albedo) written at all — the G-buffer's route writes
+        /// both, the reflective one RT2 alone.
+        struct Drawn {
+            pixels: Vec<u8>,
+            baked: usize,
+            albedo: usize,
+        }
+        // `deferred`: the G-buffer path, or the forward one; `reader`: what reads the baked surfaces;
+        // `wet`: rain, with puddles (`Renderer::wetness`).
+        async fn frame(deferred: bool, reader: Reader, wet: bool, shaded: &dyn Fn(Vec3, Vec3, bool, f32) -> Vec<Vertex>) -> Drawn {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
             renderer.fog = Some(crate::renderer::Fog::new([0.2, 0.25, 0.35], 0.02));
@@ -5019,7 +5049,7 @@ mod golden_render_tests {
             // The screen-space passes read the G-buffer, which the forward frame has none of; off, but
             // for the reflections that make the baked surfaces' reader — over matte surfaces (below),
             // where they add nothing.
-            if reader {
+            if reader == Reader::Reflections {
                 let ssr = renderer.ssr.as_mut().expect("the deferred path has screen-space reflections");
                 ssr.enabled = true;
                 // In the rain the surfaces are smooth, and reflect: what the forward route has nothing
@@ -5078,66 +5108,77 @@ mod golden_render_tests {
                 baked(Vec4::ONE).with_alpha_cutoff(0.5),
                 MeshRenderer::new(),
             );
+            // A wall facing away, double-sided: its back is what the camera sees (the cube's +X face).
+            let facing_away: Vec<Vertex> = shaded(Vec3::new(3.0, 1.0, 2.6), Vec3::new(0.05, 1.0, 1.0), false, 1.0)
+                .as_chunks::<6>()
+                .0
+                .iter()
+                .find(|face| face[0].normal[0] > 0.5)
+                .expect("the cube has a +X face")
+                .to_vec();
+            spawn(facing_away, baked(Vec4::new(1.0, 0.8, 0.8, 1.0)).with_double_sided(true), MeshRenderer::new());
+            if reader == Reader::Decal {
+                // Far below and see-through: there only to be a decal in the world.
+                let d = world.spawn();
+                world.add_component(d, Transform::new(Vec3::new(0.0, -200.0, 0.0)));
+                world.add_component(d, GlobalTransform::default());
+                world.add_component(d, crate::renderer::components::Decal::new(checker.clone(), Vec4::new(1.0, 1.0, 1.0, 0.0)));
+            }
             // Yaw 0 looks along +X: from −X, over the scene.
             world.spawn_bundle(CameraBundle { position: Vec3::new(-10.0, 4.0, 0.0), yaw: 0.0, pitch: -0.35, primary: true, ..Default::default() });
             world.spawn_bundle(DirectionalLightBundle::default());
             super::batching::clear_render_cache();
             let pixels = render_world(&mut renderer, &mut world).await;
             super::batching::clear_render_cache();
-            // How many of RT2's texels say a baked-lit surface (`BAKED_SURFACE`, its `.w`): where the
-            // deferred frame's baked light came from, or nothing came through the G-buffer at all.
-            let baked = match renderer.deferred.as_ref() {
-                Some(def) => read_target(&renderer, &def.world_position_tex, 128)
-                    .await
-                    .as_chunks::<8>()
-                    .0
-                    .iter()
-                    .filter(|t| f16_bits_to_f32(u16::from_le_bytes([t[6], t[7]])) > 150.0)
-                    .count(),
-                None => 0,
+            let Some(def) = renderer.deferred.as_ref() else {
+                return Drawn { pixels, baked: 0, albedo: 0 };
             };
-            (pixels, baked)
+            let baked = read_target(&renderer, &def.world_position_tex, 128)
+                .await
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .filter(|t| f16_bits_to_f32(u16::from_le_bytes([t[6], t[7]])) > 150.0)
+                .count();
+            let albedo = read_target(&renderer, &def.albedo_metallic_tex, 128).await.as_chunks::<4>().0.iter().filter(|t| t[..3] != [0, 0, 0]).count();
+            Drawn { pixels, baked, albedo }
         }
         pollster::block_on(async {
-            let (forward, _) = frame(false, false, false, &shaded).await;
-            let (deferred, baked_texels) = frame(true, true, false, &shaded).await;
-            // With no reader the deferred path draws them forward, for less.
-            let (_, unread) = frame(true, false, false, &shaded).await;
-            assert_eq!(unread, 0, "with nothing reading them, the baked surfaces stay out of the G-buffer");
-            // 1 458 of the 16 384 when written: the five boxes, the rest is fogged background.
-            assert!(baked_texels > 1000, "the deferred frame's baked surfaces are in the G-buffer: {baked_texels} texels");
-            let lit = forward.as_chunks::<4>().0.iter().filter(|p| p[0].max(p[1]).max(p[2]) > 30).count();
-            assert!(lit > 4000, "the setup: the scene is in the frame ({lit} lit pixels)");
-            // Apart by a step or two, from the precision the G-buffer holds the parts at; and, at an
-            // object's silhouette, by more on a few pixels: the lighting pass takes the sun shadow's
-            // filter axes from the G-buffer's neighbouring pixels, which there are another surface's,
-            // where the forward shader takes them from its own triangle (the deferred PBR path's
-            // shadows do the same). 47 bytes of 65 536 when written. A term left out of the baked
-            // formula moves thousands.
-            let off = forward.iter().zip(&deferred).filter(|(a, b)| a.abs_diff(**b) > 2).count();
-            let mean = forward.iter().zip(&deferred).map(|(a, b)| f64::from(a.abs_diff(*b))).sum::<f64>() / forward.len() as f64;
-            assert!(
-                off * 400 <= forward.len() && mean < 0.2,
-                "the deferred frame is not the forward one: {off} bytes more than 2 apart, {mean:.3} apart on average"
-            );
-
-            // In the rain, too: both routes darken what it soaks alike, puddles and all (the
-            // reflections over matte surfaces add nothing here either).
-            let (wet_forward, _) = frame(false, false, true, &shaded).await;
-            let (wet_deferred, _) = frame(true, true, true, &shaded).await;
-            let brightness = |f: &[u8]| f.iter().map(|&b| f64::from(b)).sum::<f64>();
-            assert!(
-                brightness(&wet_forward) < 0.95 * brightness(&forward),
-                "the rain darkens the baked scene: {:.0} of {:.0}",
-                brightness(&wet_forward),
-                brightness(&forward)
-            );
-            let off = wet_forward.iter().zip(&wet_deferred).filter(|(a, b)| a.abs_diff(**b) > 2).count();
-            let mean = wet_forward.iter().zip(&wet_deferred).map(|(a, b)| f64::from(a.abs_diff(*b))).sum::<f64>() / wet_forward.len() as f64;
-            assert!(
-                off * 400 <= wet_forward.len() && mean < 0.2,
-                "in the rain the deferred frame is not the forward one: {off} bytes more than 2 apart, {mean:.3} apart on average"
-            );
+            // How far apart two frames are: bytes more than 2 apart, and the mean difference.
+            let apart = |a: &[u8], b: &[u8]| {
+                let off = a.iter().zip(b).filter(|(x, y)| x.abs_diff(**y) > 2).count();
+                (off, a.iter().zip(b).map(|(x, y)| f64::from(x.abs_diff(*y))).sum::<f64>() / a.len() as f64)
+            };
+            for wet in [false, true] {
+                let forward = frame(false, Reader::Nothing, wet, &shaded).await;
+                let reflective = frame(true, Reader::Reflections, wet, &shaded).await;
+                let gbuffer = frame(true, Reader::Decal, wet, &shaded).await;
+                let unread = frame(true, Reader::Nothing, wet, &shaded).await;
+                // 1 458 of the 16 384 texels when written (dry): the boxes, the rest fogged background.
+                assert!(reflective.baked > 1000, "for the reflections the baked surfaces write RT2: {} texels", reflective.baked);
+                assert_eq!(reflective.albedo, 0, "and nothing else of the G-buffer: {} albedo texels", reflective.albedo);
+                assert!(gbuffer.baked > 1000 && gbuffer.albedo > 1000, "for a decal they are in the G-buffer: {} RT2 and {} albedo texels", gbuffer.baked, gbuffer.albedo);
+                assert_eq!(unread.baked, 0, "with nothing reading them, they stay out of the G-buffer");
+                let lit = forward.pixels.as_chunks::<4>().0.iter().filter(|p| p[0].max(p[1]).max(p[2]) > 30).count();
+                assert!(lit > 4000, "the setup: the scene is in the frame ({lit} lit pixels)");
+                // The reflective route draws with the forward pass's shader: the forward frame, to the byte
+                // but for the silhouettes' antialiasing order.
+                let (off, mean) = apart(&forward.pixels, &reflective.pixels);
+                assert!(off * 2000 <= forward.pixels.len() && mean < 0.05, "wet {wet}: the reflective frame is not the forward one: {off} bytes more than 2 apart, {mean:.3} apart on average");
+                // Through the G-buffer, apart by a step or two, from the precision it holds the parts at;
+                // and, at an object's silhouette, by more on a few pixels: the lighting pass takes the sun
+                // shadow's filter axes from the G-buffer's neighbouring pixels, which there are another
+                // surface's, where the forward shader takes them from its own triangle (the deferred PBR
+                // path's shadows do the same). 47 bytes of 65 536 when written. A term left out of the baked
+                // formula moves thousands.
+                let (off, mean) = apart(&forward.pixels, &gbuffer.pixels);
+                assert!(off * 400 <= forward.pixels.len() && mean < 0.2, "wet {wet}: the G-buffer's frame is not the forward one: {off} bytes more than 2 apart, {mean:.3} apart on average");
+                if wet {
+                    let brightness = |f: &[u8]| f.iter().map(|&b| f64::from(b)).sum::<f64>();
+                    let dry = frame(false, Reader::Nothing, false, &shaded).await;
+                    assert!(brightness(&forward.pixels) < 0.95 * brightness(&dry.pixels), "the rain darkens the baked scene");
+                }
+            }
         });
     }
 
@@ -5149,8 +5190,9 @@ mod golden_render_tests {
     /// environment it would have replaced on a lit surface took the sky out of a floor that never had
     /// it, and darkened it where something stood. A red box on a smooth grey baked floor, under a day
     /// sky, from low down: with reflections the floor in front of the box turns red, the rest of it
-    /// brightens with the sky, and the frame is nowhere darker than without them but on a few
-    /// silhouette pixels.
+    /// brightens with the sky, and the frame is nowhere darker than without them. Matte, the floor
+    /// reflects nothing — until the rain smooths it (`wet_roughness`, which the reflective route
+    /// writes beside the colour).
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no G-buffer.
     #[test]
     #[ignore = "requires a GPU adapter"]
@@ -5173,12 +5215,20 @@ mod golden_render_tests {
                 })
                 .collect()
         };
-        async fn frame(reflections: bool, box_of: &dyn Fn(Vec3, Vec3, [f32; 4]) -> Vec<Vertex>) -> Vec<u8> {
+        // `floor`: the floor's roughness; `wet`: in the rain (`Renderer::wetness`), puddles aside.
+        async fn frame(reflections: bool, floor: f32, wet: bool, box_of: &dyn Fn(Vec3, Vec3, [f32; 4]) -> Vec<Vertex>) -> Vec<u8> {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
+            if wet {
+                renderer.wetness = Some(crate::renderer::Wetness::new(1.0));
+            }
             renderer.ssgi = None;
             renderer.ssao = None;
             renderer.volumetric = None;
+            // No antialiasing pass either: it blends an edge pixel with its neighbours, so a reflection
+            // brightening the floor beside the box moves the box's own silhouette.
+            renderer.fxaa = None;
+            renderer.smaa = None;
             if reflections {
                 renderer.ssr.as_mut().expect("the deferred path has screen-space reflections").enabled = true;
             } else {
@@ -5197,7 +5247,7 @@ mod golden_render_tests {
                 world.add_component(e, material);
                 world.add_component(e, MeshRenderer::new().with_shadows(crate::renderer::components::ShadowCasting::Off));
             };
-            spawn(box_of(Vec3::new(0.0, -0.05, 0.0), Vec3::new(12.0, 0.05, 12.0), [0.3, 0.3, 0.3, 1.0]), 0.05);
+            spawn(box_of(Vec3::new(0.0, -0.05, 0.0), Vec3::new(12.0, 0.05, 12.0), [0.3, 0.3, 0.3, 1.0]), floor);
             spawn(box_of(Vec3::new(0.0, 0.6, 0.0), Vec3::new(0.6, 0.6, 1.2), [1.0, 0.1, 0.05, 1.0]), 1.0);
             // Yaw 0 looks along +X: low, towards the box, so the floor between shows it.
             world.spawn_bundle(CameraBundle { position: Vec3::new(-6.0, 0.7, 0.0), yaw: 0.0, pitch: -0.12, primary: true, ..Default::default() });
@@ -5208,15 +5258,18 @@ mod golden_render_tests {
             pixels
         }
         pollster::block_on(async {
-            let without = frame(false, &box_of).await;
-            let with = frame(true, &box_of).await;
+            let without = frame(false, 0.05, false, &box_of).await;
+            let with = frame(true, 0.05, false, &box_of).await;
             let px = |f: &[u8], i: usize| [f[i * 4], f[i * 4 + 1], f[i * 4 + 2]].map(i32::from);
-            let reddened = (0..128 * 128)
-                .filter(|&i| {
-                    let (a, b) = (px(&with, i), px(&without, i));
-                    a[0] - b[0] > 12 && (a[0] - a[1]) > (b[0] - b[1]) + 12
-                })
-                .count();
+            let reddening = |with: &[u8], without: &[u8]| {
+                (0..128 * 128)
+                    .filter(|&i| {
+                        let (a, b) = (px(with, i), px(without, i));
+                        a[0] - b[0] > 12 && (a[0] - a[1]) > (b[0] - b[1]) + 12
+                    })
+                    .count()
+            };
+            let reddened = reddening(&with, &without);
             let darkened = (0..128 * 128).filter(|&i| (0..3).any(|c| px(&without, i)[c] - px(&with, i)[c] > 4)).count();
             assert!(reddened > 60, "the floor shows the red box: {reddened} pixels reddened");
             // Where the ray finds nothing, the floor shows the sky: it had no reflection of it from the
@@ -5224,11 +5277,17 @@ mod golden_render_tests {
             // the box's reflection alone, with the sky left out.
             let brightened = (0..128 * 128).filter(|&i| (0..3).all(|c| px(&with, i)[c] - px(&without, i)[c] > 4)).count();
             assert!(brightened > 1000, "the floor shows the sky where nothing stands: {brightened} pixels brightened");
-            // Two when written, at the box's silhouette, where the frame with reflections draws the floor
-            // through the G-buffer and the one without draws it forward (see
-            // `a_baked_surface_in_the_gbuffer_draws_what_the_forward_pass_drew`). Subtracting the
-            // environment from the baked floor darkened 253.
-            assert!(darkened <= 8, "{darkened} pixels darker with reflections than without");
+            // None. Subtracting the environment from the baked floor darkened 253; the 2 to 7 the test
+            // allowed for since were the antialiasing pass blending the box's silhouette with the
+            // brighter floor beside it, off here.
+            assert!(darkened == 0, "{darkened} pixels darker with reflections than without");
+            // A matte floor reflects nothing — and the rain makes it reflect: soaked, its roughness is
+            // the water's (`wet_roughness`), which the reflections read from what the floor wrote beside
+            // its colour (`fs_reflective`).
+            let matte = reddening(&frame(true, 1.0, false, &box_of).await, &frame(false, 1.0, false, &box_of).await);
+            let soaked = reddening(&frame(true, 1.0, true, &box_of).await, &frame(false, 1.0, true, &box_of).await);
+            assert!(matte == 0, "a matte floor reflects nothing: {matte} pixels reddened");
+            assert!(soaked > 60, "the rain makes it reflect the box: {soaked} pixels reddened");
         });
     }
 
@@ -10560,12 +10619,18 @@ mod golden_render_tests {
             let still = cube(-1.2);
             let moving = cube(1.0);
             world.spawn_bundle(DirectionalLightBundle { intensity: 3.0, ..Default::default() });
-            world.spawn_bundle(CameraBundle {
+            let cam = world.spawn_bundle(CameraBundle {
                 position: Vec3::new(0.0, 0.0, 6.0),
                 yaw: -std::f32::consts::FRAC_PI_2,
                 primary: true,
                 ..Default::default()
             });
+            // Something has to read the velocity for it to be written as motion (`velocity_read`): the
+            // camera's motion blur, with TAA off for its jitter. Screen-space reflections stood in for it
+            // here until they stopped counting as a reader (2026-11-19).
+            let mut grade = crate::renderer::components::PostProcess::default();
+            grade.motion_blur = 0.5;
+            world.add_component(cam, grade);
             render_world(&mut renderer, &mut world).await;
             // The first frame has no last frame: every velocity is zero, not a streak from
             // wherever an unseen entity is assumed to have been.
@@ -12649,7 +12714,8 @@ mod golden_render_tests {
 
     /// **The GPU timer reads back what each part of a frame took on the GPU.** After a few frames —
     /// the timestamps are read back without waiting, so they arrive late — the draw's laps hold the
-    /// view's parts (`gpu.shadows`, `gpu.geometry`, `gpu.post`), and the whole is not nothing. Skipped
+    /// view's parts (`gpu.shadows`, the deferred path's `gpu.prepass` / `gpu.gbuffer` / `gpu.lighting`,
+    /// `gpu.post`), and the whole is not nothing. Skipped
     /// where the device has no timestamp queries.
     #[test]
     #[ignore = "needs a GPU adapter"]
@@ -12676,7 +12742,12 @@ mod golden_render_tests {
                 seen.extend(renderer.draw_laps.drain(..).filter(|(name, _)| name.starts_with("gpu.")));
             }
             let names: std::collections::BTreeSet<&str> = seen.iter().map(|(n, _)| *n).collect();
-            for part in ["gpu.shadows", "gpu.geometry", "gpu.post"] {
+            let parts: &[&str] = if cfg!(gizmo_forward_only) {
+                &["gpu.shadows", "gpu.post"]
+            } else {
+                &["gpu.shadows", "gpu.prepass", "gpu.gbuffer", "gpu.lighting", "gpu.post"]
+            };
+            for part in parts {
                 assert!(names.contains(part), "{part} was not read back: {names:?}");
             }
             let total: std::time::Duration = seen.iter().map(|(_, d)| *d).sum();

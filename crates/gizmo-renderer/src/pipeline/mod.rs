@@ -54,6 +54,11 @@ pub struct SceneState {
     pub unlit_blended_pipeline: wgpu::RenderPipeline,
     /// Baked lighting × texture, with the sun's cascade term. See `shaders/baked_lit.wgsl`.
     pub baked_lit_pipeline: wgpu::RenderPipeline,
+    /// The same, culling nothing, for a double-sided baked-lit material (`Material::double_sided`). The
+    /// forward path drew every opaque baked-lit surface with the culling pipeline until 2026-11-19, so a
+    /// double-sided one lost its back faces there — and kept them through the G-buffer
+    /// (`DeferredState::gbuffer_baked_pipelines`), which had both.
+    pub baked_lit_double_sided_pipeline: wgpu::RenderPipeline,
     /// The same shader with alpha blending and no depth write, for a `BakedLit` material
     /// marked transparent — a decal or skid-mark layer, which the opaque variant would paint
     /// over the road as solid geometry no matter what alpha the shader produced.
@@ -1285,6 +1290,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         unlit_pipeline: core_pipelines.unlit,
         unlit_blended_pipeline: core_pipelines.unlit_blended,
         baked_lit_pipeline: core_pipelines.baked_lit,
+        baked_lit_double_sided_pipeline: core_pipelines.baked_lit_double_sided,
         baked_lit_transparent_pipeline: core_pipelines.baked_lit_transparent,
         sky_pipeline: core_pipelines.sky,
         backdrop_pipeline: core_pipelines.backdrop,
@@ -1426,6 +1432,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.unlit_pipeline = core_pipelines.unlit;
     renderer.scene.unlit_blended_pipeline = core_pipelines.unlit_blended;
     renderer.scene.baked_lit_pipeline = core_pipelines.baked_lit;
+    renderer.scene.baked_lit_double_sided_pipeline = core_pipelines.baked_lit_double_sided;
     renderer.scene.baked_lit_transparent_pipeline = core_pipelines.baked_lit_transparent;
     renderer.scene.sky_pipeline = core_pipelines.sky;
     renderer.scene.backdrop_pipeline = core_pipelines.backdrop;

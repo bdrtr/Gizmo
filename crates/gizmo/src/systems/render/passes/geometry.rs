@@ -2,13 +2,14 @@ use super::super::*;
 
 pub fn record_deferred_geometry(
     encoder: &mut wgpu::CommandEncoder,
-    renderer: &Renderer,
+    // `mut` for the GPU timer's marks between the passes (`gpu.prepass`, `gpu.gbuffer`).
+    renderer: &mut Renderer,
     world: &World,
     draw_items: &[DrawItem],
     uploaded_instances: u32,
     cam_pos: gizmo_math::Vec3,
-    // Whether the opaque baked-lit surfaces go into the G-buffer this view (`DrawItem::in_gbuffer`).
-    baked_in_gbuffer: bool,
+    // Where the opaque baked-lit surfaces are drawn this view (`DrawItem::in_gbuffer`).
+    baked: BakedRoute,
 ) {
 
     // ── Z-Prepass (Depth Only) ────────────────────────────────────────────────
@@ -48,7 +49,7 @@ pub fn record_deferred_geometry(
             }
             // Not a baked-lit surface either: it writes its own depth in the G-buffer pass (`fs_baked`'s
             // pipelines), where shading it again on an overlap costs less than drawing it twice.
-            if !item.in_gbuffer(baked_in_gbuffer) || item.baked_lit || item.is_skybox || item.is_transparent {
+            if !item.in_gbuffer(baked) || item.baked_lit || item.is_skybox || item.is_transparent {
                 continue;
             }
             let key = (item.surface, item.is_double_sided, item.discards);
@@ -88,6 +89,9 @@ pub fn record_deferred_geometry(
             item.plan_draw(&mut plan, item.camera_instance_range(uploaded_instances));
         }
         plan.replay(&mut z_pass, &renderer.device, renderer.multi_draw);
+    }
+    if renderer.deferred.is_some() {
+        renderer.gpu_mark(encoder, "gpu.prepass");
     }
 
     // ── G-buffer pass (PBR geometry → albedo / normal / world-position) ─────
@@ -179,7 +183,7 @@ pub fn record_deferred_geometry(
             if !item.visible_in_camera {
                 continue; // ShadowCasting::Only
             }
-            if !item.in_gbuffer(baked_in_gbuffer) || item.is_transparent {
+            if !item.in_gbuffer(baked) || item.is_transparent {
                 continue;
             }
             let key = (item.surface, item.is_double_sided, item.baked_lit);
@@ -208,6 +212,9 @@ pub fn record_deferred_geometry(
             item.plan_draw(&mut plan, item.camera_instance_range(uploaded_instances));
         }
         plan.replay(&mut gbuf_pass, &renderer.device, renderer.multi_draw);
+    }
+    if renderer.deferred.is_some() {
+        renderer.gpu_mark(encoder, "gpu.gbuffer");
     }
 
     // ── Decal Pass (Blend into G-buffer) ──────────────────────────
