@@ -270,6 +270,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`Renderer::exposure` is gone: nothing read it.** The frame's exposure is the camera's (`Camera::exposure`, applied
+  once in the composite over the whole HDR frame); the renderer's field, 1.15 by default and documented as "applied
+  before tone mapping", was read by no path. A game setting it got the same frame — `nfsu2-gizmo` set it to darken its
+  night and measured the median unmoved at 0.75 and 0.6 alike, and `demo/src/bin/anisotropy.rs` had found the same
+  thing before and moved its slider to the camera, leaving the field where the next caller would find it.
+
 - **A spot light is culled, ranked and clustered by the sphere around its cone, and a light gives nothing where it
   cannot reach.** A spot was bounded by its whole reach, so a car's headlights (45 m) were listed in every cluster
   within 45 m of the car, the road behind it too, and every fragment there sampled the beam's cookie before finding

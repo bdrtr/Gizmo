@@ -28,8 +28,8 @@ pub struct DemoState {
     pub light_mode: LightMode,
     /// Pozlama. **`Camera`'nın alanı, `Renderer`'ınki değil** — bu kaydırak eskiden
     /// `renderer.exposure`'a bağlıydı ve hiçbir şey yapmıyordu: oyun çizim yolu pozlamayı
-    /// `cam.exposure`'dan okuyor, `Renderer::exposure` alanını hiç okumuyor. Değer artık burada
-    /// duruyor ve `camera_orbit` her kare kameraya yazıyor.
+    /// `cam.exposure`'dan okuyor, `Renderer::exposure` alanını hiç okumuyordu (alan 2026-11-20'de
+    /// kaldırıldı). Değer artık burada duruyor ve `camera_orbit` her kare kameraya yazıyor.
     pub exposure: f32,
 }
 

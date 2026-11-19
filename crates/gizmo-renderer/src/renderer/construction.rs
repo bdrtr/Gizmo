@@ -776,7 +776,6 @@ impl Renderer {
             skip_sky: false,
             draw_laps: Vec::new(),
             gpu_timer,
-            exposure: 1.15,
             // Depth of field is an opt-in artistic effect, not a default: with it
             // ON, any scene whose subject isn't near `dof_focus_dist` (4.5 m) is
             // uniformly blurred — e.g. 3d_scene's camera sits ~10 m out, so

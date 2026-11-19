@@ -380,8 +380,6 @@ pub struct Renderer {
     /// The GPU's half: timestamps between the draw's parts (`gpu.*`), read back a few frames late
     /// into [`draw_laps`](Self::draw_laps). `None` where the device has no timestamp queries.
     pub gpu_timer: Option<crate::gpu_timer::GpuTimer>,
-    /// Linear exposure multiplier applied before tone mapping.
-    pub exposure: f32,
     /// Whether depth of field runs.
     pub dof_enabled: bool,
     /// The distance that is perfectly in focus, in metres.
