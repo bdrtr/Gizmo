@@ -455,9 +455,10 @@ pub struct SceneUniforms {
     pub environment_blend_t: f32,
     /// The active sky/environment preset.
     pub environment_preset: u32,
-    /// Padding. `point_shadows_enabled` until 2026-11-11, when every local light came to say for
-    /// itself whether it casts ([`Self::light_shadows`]); kept so no offset after it moves.
-    pub _pad_shadow_flag: u32,
+    /// How many of the first [`Self::lights`] a baked-lit surface takes direct light from: those not
+    /// `in_bake` (`PointLight::in_bake`), ranked first so that a cluster's list starts with them. The
+    /// slot was padding (`point_shadows_enabled` until 2026-11-11), so no offset moved.
+    pub unbaked_lights: u32,
     /// The preset being blended towards. Called `environment_preset_b` on the WGSL side — only
     /// the offset has to agree, not the name.
     pub environment_preset_2: u32,

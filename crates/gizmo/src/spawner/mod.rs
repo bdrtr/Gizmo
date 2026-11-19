@@ -289,13 +289,7 @@ impl<'a> Commands<'a> {
         self.world.add_component(id, trans);
         self.world.add_component(
             id,
-            DirectionalLight {
-                color: Vec3::new(color.0.x, color.0.y, color.0.z),
-                intensity,
-                role: crate::renderer::components::LightRole::Sun,
-                angular_radius: 0.0,
-                contact_shadow_length: 0.0,
-            },
+            DirectionalLight::new(Vec3::new(color.0.x, color.0.y, color.0.z), intensity, crate::renderer::components::LightRole::Sun),
         );
         EntityBuilder {
             commands: self,

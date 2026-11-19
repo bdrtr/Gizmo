@@ -81,6 +81,7 @@ pub fn draw_point_light_section(
                             .on_hover_text("Floresan tüp gibi uzun bir kaynak: varlığın yerel X ekseni boyunca bu uzunlukta. 0 = küre.");
                     });
                     ui.checkbox(&mut light.casts_shadows, "Cast shadows").on_hover_text("Işık, gölge düşürmesi istenen nesnelerin gölgesini düşürür. Kapalıyken (varsayılan) gölge haritası çizilmez.");
+                    ui.checkbox(&mut light.in_bake, "In the bake").on_hover_text("Bu ışığın doğrudan ışığı baked-lit yüzeylerin bake'inde zaten var (bir şehrin sokak lambaları): o yüzeyler ondan yalnız yağmurdaki yansımasını alır. Kapalıyken (varsayılan) baked-lit yüzey de onunla aydınlanır — bir arabanın farları.");
                     contact_shadow_row(ui, key, &mut light.contact_shadow_length);
                 });
             ui.separator();
@@ -143,6 +144,9 @@ pub fn draw_directional_light_section(
                         light.angular_radius = degrees.to_radians().clamp(0.0, 0.5);
                     }
                 });
+                // The scene's sun is always the bake's: the box is there, and off for it.
+                let generic = light.role != LightRole::Sun;
+                ui.add_enabled(generic, egui::Checkbox::new(&mut light.in_bake, "In the bake")).on_hover_text("Güneş dışındaki bir yönlü ışık için: Bu ışığın doğrudan ışığı baked-lit yüzeylerin bake'inde zaten var (bir şehrin sokak lambaları): o yüzeyler ondan yalnız yağmurdaki yansımasını alır. Kapalıyken (varsayılan) baked-lit yüzey de onunla aydınlanır — bir arabanın farları. Sahnenin güneşi her zaman bake'tedir.");
                 contact_shadow_row(ui, key, &mut light.contact_shadow_length);
                 ui.label(egui::RichText::new("Güneşin açısını (gölge yönünü) değiştirmek için üst kısımdaki 'Transform' altından Rotasyon X, Y, Z değerlerini döndürün.").weak().small());
             });
@@ -247,6 +251,7 @@ pub fn draw_spot_light_section(
                     }
                 });
                 ui.checkbox(&mut light.casts_shadows, "Cast shadows").on_hover_text("Işık, gölge düşürmesi istenen nesnelerin gölgesini düşürür. Kapalıyken (varsayılan) gölge haritası çizilmez.");
+                ui.checkbox(&mut light.in_bake, "In the bake").on_hover_text("Bu ışığın doğrudan ışığı baked-lit yüzeylerin bake'inde zaten var (bir şehrin sokak lambaları): o yüzeyler ondan yalnız yağmurdaki yansımasını alır. Kapalıyken (varsayılan) baked-lit yüzey de onunla aydınlanır — bir arabanın farları.");
                 contact_shadow_row(ui, key, &mut light.contact_shadow_length);
                 ui.label(egui::RichText::new("Koninin baktığı yön varlığın 'Transform' rotasyonundan gelir.").weak().small());
             });
@@ -315,6 +320,7 @@ pub fn draw_rect_light_section(
                     );
                 });
                 ui.checkbox(&mut light.casts_shadows, "Cast shadows").on_hover_text("Işık, gölge düşürmesi istenen nesnelerin gölgesini düşürür. Kapalıyken (varsayılan) gölge haritası çizilmez.");
+                ui.checkbox(&mut light.in_bake, "In the bake").on_hover_text("Bu ışığın doğrudan ışığı baked-lit yüzeylerin bake'inde zaten var (bir şehrin sokak lambaları): o yüzeyler ondan yalnız yağmurdaki yansımasını alır. Kapalıyken (varsayılan) baked-lit yüzey de onunla aydınlanır — bir arabanın farları.");
                 contact_shadow_row(ui, key, &mut light.contact_shadow_length);
                 ui.label(egui::RichText::new("Panel, varlığın 'Transform' rotasyonunun ileri ekseni (−Z) yönünde, tek yüzünden ışık verir.").weak().small());
             });
@@ -379,6 +385,7 @@ mod tests {
                 "role" => "Rol:",
                 "angular_radius" => "Açısal yarıçap:",
                 "contact_shadow_length" => "Temas gölgesi:",
+                "in_bake" => "In the bake",
                 _ => return None,
             })
         };

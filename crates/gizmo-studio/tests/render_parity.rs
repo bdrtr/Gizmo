@@ -79,7 +79,7 @@ fn sunlit_scene() -> World {
     world.add_component(sun, GlobalTransform::default());
     world.add_component(
         sun,
-        DirectionalLight { color: Vec3::new(1.0, 0.95, 0.9), intensity: 3.0, role: LightRole::Sun, angular_radius: 0.0, contact_shadow_length: 0.0 },
+        DirectionalLight::new(Vec3::new(1.0, 0.95, 0.9), 3.0, LightRole::Sun),
     );
     let lamp = world.spawn();
     world.add_component(lamp, GlobalTransform::default());
@@ -165,7 +165,7 @@ fn the_two_paths_agree_on_everything_the_world_decides() {
 
     // And nothing else. Every field of the block is either compared above or named here.
     assert_eq!(g._pre_align_pad, e._pre_align_pad);
-    assert_eq!(g._pad_shadow_flag, e._pad_shadow_flag);
+    assert_eq!(g.unbaked_lights, e.unbaked_lights);
     assert_eq!(g.wireframe_color, e.wireframe_color);
     // Neither asks for a fog of its own, so each stands in its preset's, and the presets are a declared
     // difference above: the editor's is preset 0, the game's halfway from 2 to 3.

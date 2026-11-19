@@ -694,6 +694,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             sun: SunFrame { direction: Vec3::NEG_Y, color: [0.0; 4], present: false, angular_radius: 0.0, contact_shadow_length: 0.0 },
             lights: [LightData::default(); crate::frame_uniforms::MAX_LIGHTS],
             num_lights: 0,
+            unbaked_lights: 0,
             shadows: ShadowFrame {
                 cascade_view_projs: [Mat4::IDENTITY; 4],
                 cascade_splits: [0.0; 4],

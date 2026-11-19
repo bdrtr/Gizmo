@@ -12,15 +12,15 @@
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
 #import gizmo::common::{SceneUniforms, height_fog, instance_keeps, BAKED_SUN_SHARE}
 #import gizmo::surface::{rain_on, wet_darkening, wet_roughness, WATER_F0}
-#import gizmo::common::{compute_direct_lighting}
+#import gizmo::common::{compute_direct_lighting, dielectric_f0}
 #ifdef RAIN_MAP
 #import gizmo::common::{rain_exposure}
 #endif
 #ifdef REFLECTION_INPUTS
-#import gizmo::common::{BAKED_SURFACE, dielectric_f0}
+#import gizmo::common::{BAKED_SURFACE}
 #endif
 #ifdef LOCAL_LIGHTS
-#import gizmo::common::{light_falloff, spot_cone, spot_cookie_uv, gizmo_cluster_index}
+#import gizmo::common::{LightData, light_falloff, spot_cone, spot_cookie_uv, gizmo_cluster_index}
 #endif
 #ifdef SIZED_LIGHTS
 #import gizmo::common::{compute_sphere_lighting, compute_tube_lighting}
@@ -48,7 +48,7 @@ var<uniform> scene: SceneUniforms;
 
 #ifdef LOCAL_LIGHTS
 // The clustered light lists (`gizmo_renderer::clustered`), on the global group as the lit shader has them:
-// what the water on a baked-lit surface reflects (`water_glints`).
+// what the water on a baked-lit surface reflects, and the lights its bake does not hold (`baked_surface_lights`).
 @group(0) @binding(1)
 var<storage, read> cluster_table: array<vec2<u32>>;
 @group(0) @binding(2)
@@ -249,8 +249,8 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, axes: ReceiverA
 #endif
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return shade(in, rain_at(in.world_pos, in.world_normal));
+fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return shade(in, rain_at(in.world_pos, in.world_normal), front);
 }
 
 // The scene's rain on a fragment (`rain_on`), kept off what is under cover where there is a rain map —
@@ -283,7 +283,7 @@ struct ReflectionInputs {
 fn fs_reflective(in: VertexOutput, @builtin(front_facing) front: bool) -> ReflectionInputs {
     let rain = rain_at(in.world_pos, in.world_normal);
     var out: ReflectionInputs;
-    out.colour = shade(in, rain);
+    out.colour = shade(in, rain, front);
     let n = normalize(select(-in.world_normal, in.world_normal, front));
     out.normal_roughness = vec4<f32>(
         normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), rain.y)),
@@ -296,14 +296,24 @@ fn fs_reflective(in: VertexOutput, @builtin(front_facing) front: bool) -> Reflec
 }
 #endif
 
-// What the water on a surface reflects of the sun and the frame's lights: water's reflectance
+// What the frame's lights add to a baked-lit surface, which its bake does not hold.
+//
+// The water on it (`water` of it, `rain_on`'s) reflects the sun and every light: water's reflectance
 // (`WATER_F0`) at its roughness, view-dependent, so no bake holds it — the lit shader's lights, the same
-// way, with no colour of its own beneath. `sun`: the sun's visibility here; `receives_shadows`: whether the
-// local lights' shadows fall on it.
-fn water_glints(
+// way, with no colour of its own beneath. And a light that is not `in_bake` lights the surface itself as a
+// lit surface is lit — a car's headlights on a baked street: the first `scene.unbaked_lights` of the
+// frame's lights, which every cluster's list (ascending) starts with, so the loop stops at the first light
+// past them on a dry surface. `sun`: the sun's visibility here; `receives_shadows`: whether the local
+// lights' shadows fall on it.
+fn baked_surface_lights(
     world_pos: vec3<f32>,
     N: vec3<f32>,
+    base: vec3<f32>,
     roughness: f32,
+    f0: vec3<f32>,
+    water: f32,
+    water_n: vec3<f32>,
+    water_roughness: f32,
     sun: f32,
     receives_shadows: bool,
 #ifdef LOCAL_LIGHT_MAPS
@@ -313,12 +323,12 @@ fn water_glints(
 #endif
 ) -> vec3<f32> {
     let V = normalize(scene.camera_pos.xyz - world_pos);
-    let f0 = vec3<f32>(WATER_F0);
-    let r = max(roughness, 0.05);
+    let f0w = vec3<f32>(WATER_F0);
+    let rw = max(water_roughness, 0.05);
     var total = vec3<f32>(0.0);
-    if (scene.sun_direction.w > 0.5) {
-        total += compute_direct_lighting(
-            N, V, normalize(-scene.sun_direction.xyz), vec3<f32>(0.0), r, 0.0, f0, scene.sun_color.rgb, scene.sun_color.w, sun,
+    if (water > 0.0 && scene.sun_direction.w > 0.5) {
+        total += water * compute_direct_lighting(
+            water_n, V, normalize(-scene.sun_direction.xyz), vec3<f32>(0.0), rw, 0.0, f0w, scene.sun_color.rgb, scene.sun_color.w, sun,
         );
     }
 #ifdef LOCAL_LIGHTS
@@ -326,6 +336,10 @@ fn water_glints(
     let cluster_range = cluster_table[cluster];
     for (var ci = 0u; ci < cluster_range.y; ci++) {
         let i = cluster_light_indices[cluster_range.x + ci];
+        let unbaked = i < scene.unbaked_lights;
+        if (!unbaked && water <= 0.0) {
+            break;
+        }
         let light = scene.lights[i];
         let light_type = u32(light.params.y);
         let intensity = light.position.w;
@@ -343,12 +357,18 @@ fn water_glints(
             window = falloff.y;
             if (light_type == 1u) {
                 attenuation *= spot_cone(light, -L);
-#ifdef LOCAL_LIGHT_MAPS
-                if (light.params.w > 0.0) {
-                    cookie = textureSampleLevel(t_cookie, s_cookie, spot_cookie_uv(light, world_pos), i32(light.params.w) - 1, 0.0).rgb;
-                }
-#endif
             }
+            // Past its reach, or outside its cone, it gives nothing here: no cookie to read, no shadow to
+            // look up. A rectangle is lit by its window alone. A clustered light is in every cluster its
+            // sphere touches, behind a car's headlights as much as in front of them.
+            if (select(attenuation, window, light_type == 3u) <= 0.0) {
+                continue;
+            }
+#ifdef LOCAL_LIGHT_MAPS
+            if (light_type == 1u && light.params.w > 0.0) {
+                cookie = textureSampleLevel(t_cookie, s_cookie, spot_cookie_uv(light, world_pos), i32(light.params.w) - 1, 0.0).rgb;
+            }
+#endif
 #ifdef LOCAL_LIGHT_MAPS
             let shadow_layer = local_shadow_layer(scene.light_shadows[i / 4u][i % 4u], world_pos - light.position.xyz);
             if (receives_shadows && shadow_layer >= 0 && max(attenuation, window) > 0.0) {
@@ -371,38 +391,64 @@ fn water_glints(
 #endif
         }
         let light_rgb = light.color.rgb * cookie;
-#ifdef RECT_LIGHTS
-        if (light_type == 3u) {
-            total += compute_rect_lighting(
-                N, V, light.position.xyz - world_pos, light.direction, light.params.z, light.params.w,
-                vec3<f32>(0.0), r, 0.0, f0, light_rgb, intensity, window,
-            );
-            continue;
+        if (water > 0.0) {
+            total += water * baked_light_term(light, light_type, world_pos, water_n, V, L, vec3<f32>(0.0), rw, f0w, light_rgb, intensity, attenuation, window);
         }
-#endif
-#ifdef SIZED_LIGHTS
-        if (light_type == 0u && light.params.w > 0.0) {
-            total += compute_tube_lighting(
-                N, V, light.position.xyz - world_pos, light.direction.xyz, light.params.w, light.params.z,
-                vec3<f32>(0.0), r, 0.0, f0, light_rgb, intensity, attenuation,
-            );
-            continue;
+        if (unbaked) {
+            total += baked_light_term(light, light_type, world_pos, N, V, L, base, roughness, f0, light_rgb, intensity, attenuation, window);
         }
-        if (light_type != 2u && light.params.z > 0.0) {
-            total += compute_sphere_lighting(
-                N, V, light.position.xyz - world_pos, light.params.z, vec3<f32>(0.0), r, 0.0, f0, light_rgb, intensity, attenuation,
-            );
-            continue;
-        }
-#endif
-        total += compute_direct_lighting(N, V, L, vec3<f32>(0.0), r, 0.0, f0, light_rgb, intensity, attenuation);
     }
 #endif
     return total;
 }
 
+#ifdef LOCAL_LIGHTS
+// One light on a surface of `albedo` (black for the water's reflection alone), by its kind: a rectangle,
+// a tube, a sphere, or a point.
+fn baked_light_term(
+    light: LightData,
+    light_type: u32,
+    world_pos: vec3<f32>,
+    N: vec3<f32>,
+    V: vec3<f32>,
+    L: vec3<f32>,
+    albedo: vec3<f32>,
+    roughness: f32,
+    f0: vec3<f32>,
+    light_rgb: vec3<f32>,
+    intensity: f32,
+    attenuation: f32,
+    window: f32,
+) -> vec3<f32> {
+#ifdef RECT_LIGHTS
+    if (light_type == 3u) {
+        return compute_rect_lighting(
+            N, V, light.position.xyz - world_pos, light.direction, light.params.z, light.params.w,
+            albedo, roughness, 0.0, f0, light_rgb, intensity, window,
+        );
+    }
+#endif
+#ifdef SIZED_LIGHTS
+    if (light_type == 0u && light.params.w > 0.0) {
+        return compute_tube_lighting(
+            N, V, light.position.xyz - world_pos, light.direction.xyz, light.params.w, light.params.z,
+            albedo, roughness, 0.0, f0, light_rgb, intensity, attenuation,
+        );
+    }
+    if (light_type != 2u && light.params.z > 0.0) {
+        return compute_sphere_lighting(
+            N, V, light.position.xyz - world_pos, light.params.z, albedo, roughness, 0.0, f0, light_rgb, intensity, attenuation,
+        );
+    }
+#endif
+    return compute_direct_lighting(N, V, L, albedo, roughness, 0.0, f0, light_rgb, intensity, attenuation);
+}
+#endif
+
 // The surface's colour, fogged, with its alpha; `rain` is `rain_on`'s.
-fn shade(in: VertexOutput, rain: vec2<f32>) -> vec4<f32> {
+// `front`: whether the fragment is its triangle's front, the side its normal is on — a double-sided surface
+// seen from behind is lit on the side the camera sees, as the G-buffer route lights it (`fs_baked`).
+fn shade(in: VertexOutput, rain: vec2<f32>, front: bool) -> vec4<f32> {
     // The surface's normal and how it runs across neighbouring pixels, for the sun's shadow
     // (`receiver_axes`) — taken first, before any pixel of the quad discards.
 #ifdef SUN_SHADOWS
@@ -475,15 +521,19 @@ fn shade(in: VertexOutput, rain: vec2<f32>) -> vec4<f32> {
     // leaves this expression exactly `lit * base`.
     let colour = (lit + in.inst_ambient) * base + in.inst_emissive.xyz;
 
-    // The rain on it reflects the sun and the frame's lights (`water_glints`): what no bake holds, since a
-    // reflection depends on where it is seen from. Nothing on a dry surface — baked-lit's own light is
-    // the bake's alone.
+    // What the frame's lights add (`baked_surface_lights`): the rain on it reflects the sun and every light —
+    // what no bake holds, since a reflection depends on where it is seen from — and a light that is not
+    // `in_bake` lights it as it lights any surface. A dry surface under lights the bake holds is the bake's
+    // alone.
     var shaded = colour;
     let water = max(rain.x, rain.y);
-    if (water > 0.0) {
-        let water_n = normalize(mix(normalize(in.world_normal), vec3<f32>(0.0, 1.0, 0.0), rain.y));
-        shaded += water * water_glints(
-            in.world_pos, water_n, wet_roughness(in.inst_cutoff_roughness.y, rain), vis, in.inst_emissive.w >= 0.0,
+    if (water > 0.0 || scene.unbaked_lights > 0u) {
+        let surface_n = normalize(select(-in.world_normal, in.world_normal, front));
+        let water_n = normalize(mix(surface_n, vec3<f32>(0.0, 1.0, 0.0), rain.y));
+        shaded += baked_surface_lights(
+            in.world_pos, surface_n, base, wet_roughness(in.inst_cutoff_roughness.y, rain),
+            vec3<f32>(dielectric_f0(in.inst_emissive.w)), water, water_n,
+            wet_roughness(in.inst_cutoff_roughness.y, rain), vis, in.inst_emissive.w >= 0.0,
 #ifdef LOCAL_LIGHT_MAPS
 #ifndef LOCAL_SHADOW_TAP
             surface_axes,

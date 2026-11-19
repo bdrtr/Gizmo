@@ -56,7 +56,8 @@ struct SceneUniforms {
     environment_blend_t: f32,
     environment_preset: u32,
     // Padding (`point_shadows_enabled` until 2026-11-11).
-    _pad_shadow_flag: u32,
+    // How many of the first `lights` a baked-lit surface takes direct light from (not `in_bake`).
+    unbaked_lights: u32,
     // Named without a trailing digit: naga_oil reserves the `_<number>` suffix for naga's
     // WGSL writeback name-mangling and rejects composable-module identifiers that use it.
     // Only the byte layout must match gpu_types::SceneUniforms.environment_preset_2.

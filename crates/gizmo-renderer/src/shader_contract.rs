@@ -128,7 +128,7 @@ fn scene_layout() -> Vec<(&'static str, u32)> {
         ("clear_color", offset_of!(SceneUniforms, clear_color) as u32),
         ("environment_blend_t", offset_of!(SceneUniforms, environment_blend_t) as u32),
         ("environment_preset", offset_of!(SceneUniforms, environment_preset) as u32),
-        ("_pad_shadow_flag", offset_of!(SceneUniforms, _pad_shadow_flag) as u32),
+        ("unbaked_lights", offset_of!(SceneUniforms, unbaked_lights) as u32),
         // naga_oil reserves the `_<number>` suffix for naga's name mangling, so the WGSL field
         // cannot be called `environment_preset_2`. Only the byte offset has to agree.
         ("environment_preset_b", offset_of!(SceneUniforms, environment_preset_2) as u32),

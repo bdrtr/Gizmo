@@ -5011,8 +5011,8 @@ mod golden_render_tests {
     /// away, where the forward pass draws it with `baked_lit.wgsl`, and the targets say which route each
     /// frame took. The scene has what the formula has: vertex colours as the baked light, a texture, the
     /// sun's shadow falling on it (from a baked-lit caster), a surface that receives none, the ambient
-    /// and emissive knobs, a cut-out by vertex alpha, a double-sided wall seen from behind, a lamp, and
-    /// fog — dry, and in the rain with puddles, where the water glints with the sun and the lamp. The G-buffer holds the parts at other precisions (8 and 16
+    /// and emissive knobs, a cut-out by vertex alpha, a double-sided wall seen from behind, a lamp the bake
+    /// holds and a headlight it does not, and fog — dry, and in the rain with puddles, where the water glints with the sun and the lamp. The G-buffer holds the parts at other precisions (8 and 16
     /// bits), so its frame may differ by a step or two of 255, and by more on a few silhouette pixels
     /// (see the assertion) — and no more.
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no G-buffer.
@@ -5148,15 +5148,18 @@ mod golden_render_tests {
                 world.add_component(d, GlobalTransform::default());
                 world.add_component(d, crate::renderer::components::Decal::new(checker.clone(), Vec4::new(1.0, 1.0, 1.0, 0.0)));
             }
-            // A lamp over it, which a baked-lit surface does not see dry and its water reflects wet
-            // (`water_glints`, and the baked branch of the lighting pass).
-            world.spawn_bundle(crate::bundles::PointLightBundle {
-                position: Vec3::new(1.5, 2.5, -1.0),
-                color: Vec3::new(1.0, 0.8, 0.5),
-                intensity: 12.0,
-                radius: 10.0,
-                ..Default::default()
-            });
+            // A lamp over it that the bake holds (`in_bake`), which a baked-lit surface does not see dry
+            // and its water reflects wet (`baked_surface_lights`, and the baked branch of the lighting
+            // pass); and a headlight the bake does not, which lights it as any surface.
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(1.5, 2.5, -1.0)));
+            world.add_component(lamp, PointLight::new(Vec3::new(1.0, 0.8, 0.5), 12.0, 10.0).in_bake());
+            let headlight = world.spawn();
+            world.add_component(
+                headlight,
+                Transform::new(Vec3::new(-3.0, 1.0, 1.0)).with_rotation(crate::math::Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2) * crate::math::Quat::from_rotation_x(-0.3)),
+            );
+            world.add_component(headlight, SpotLight::new(Vec3::new(1.0, 0.95, 0.85), 30.0, 12.0, 0.25, 0.4));
             // Yaw 0 looks along +X: from −X, over the scene.
             world.spawn_bundle(CameraBundle { position: Vec3::new(-10.0, 4.0, 0.0), yaw: 0.0, pitch: -0.35, primary: true, ..Default::default() });
             world.spawn_bundle(DirectionalLightBundle::default());
@@ -5565,9 +5568,73 @@ mod golden_render_tests {
         });
     }
 
-    /// **A wet baked road glints with the lamps over it, and a dry one does not see them.** Baked-lit light
-    /// is the bake's alone, so a lamp over a dry baked road changes nothing on it. In the rain the water on
-    /// it reflects the lamp (`water_glints`): view-dependent, which no bake holds. Seen low along the road,
+    /// **A light outside the bake lights a baked floor; one inside it does not.** A baked-lit surface's
+    /// bake holds the lights that were there when it was baked — a city's street lamps — and not those
+    /// that move through it: a car's headlights (`in_bake` false, the default). A dark baked floor, a lamp
+    /// the bake holds over it next to the camera and a headlight further off pointing down at it. The lamp
+    /// changes nothing on the dry floor, to the byte; the headlight lights a pool on it; and with both the
+    /// frame is the headlight's alone. The lamp ranks first (it is nearer): unless the lights outside the
+    /// bake lead the array (`collect_scene_lights`), the floor's loop takes the lamp for one of them and
+    /// stops before the headlight. On both paths.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_light_outside_the_bake_lights_a_baked_floor_and_one_inside_it_does_not() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(lamp: bool, headlight: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.fxaa = None;
+            renderer.smaa = None;
+            // The lamp lights the air (`volumetric`) and what the screen-space passes gather from the
+            // frame: real light, but not the floor's.
+            renderer.volumetric = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(20.0, 0.1, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(white.clone()).with_baked_lit(Vec4::new(0.2, 0.2, 0.2, 1.0)));
+            world.add_component(floor, MeshRenderer::new());
+            if lamp {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(0.0, 2.0, 4.5)));
+                world.add_component(e, PointLight::new(Vec3::new(1.0, 0.8, 0.5), 30.0, 12.0).in_bake());
+            }
+            if headlight {
+                // Straight down: the spot's forward is its local −Z.
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(0.0, 2.5, -2.0)).with_rotation(crate::math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)));
+                world.add_component(e, SpotLight::new(Vec3::new(1.0, 0.95, 0.85), 60.0, 8.0, 0.35, 0.5));
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 4.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, pitch: -0.5, primary: true, ..Default::default() });
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            let none = frame(false, false).await;
+            assert_eq!(frame(true, false).await, none, "the lamp the bake holds changes nothing on the dry floor");
+            let headlight = frame(false, true).await;
+            let pool = (0..128 * 128)
+                .filter(|&i| (0..3).map(|c| i32::from(headlight[i * 4 + c]) - i32::from(none[i * 4 + c])).sum::<i32>() > 30)
+                .count();
+            assert!(pool > 300, "the headlight lights a pool on the floor: {pool} pixels");
+            assert_eq!(frame(true, true).await, headlight, "with the lamp too, the floor is the headlight's alone");
+        });
+    }
+
+    /// **A wet baked road glints with the lamps over it, and a dry one does not see them.** A lamp the
+    /// bake holds (`PointLight::in_bake`, as a city's street lamps are) changes nothing on a dry baked road.
+    /// In the rain the water on it reflects the lamp (`baked_surface_lights`): view-dependent, which no
+    /// bake holds. Seen low along the road,
     /// the glint is a streak towards the viewer — the water's lobe at a grazing angle — longer down the
     /// screen than across it. On both paths.
     #[test]
@@ -5602,13 +5669,9 @@ mod golden_render_tests {
             world.add_component(road, Material::new(white.clone()).with_baked_lit(Vec4::new(0.25, 0.25, 0.27, 1.0)));
             world.add_component(road, MeshRenderer::new());
             if lamp {
-                world.spawn_bundle(crate::bundles::PointLightBundle {
-                    position: Vec3::new(14.0, 4.0, 0.0),
-                    color: Vec3::new(1.0, 0.8, 0.5),
-                    intensity: 40.0,
-                    radius: 30.0,
-                    ..Default::default()
-                });
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(14.0, 4.0, 0.0)));
+                world.add_component(e, PointLight::new(Vec3::new(1.0, 0.8, 0.5), 40.0, 30.0).in_bake());
             }
             // Low, looking along +X down the road at the lamp.
             world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 1.2, 0.0), yaw: 0.0, pitch: -0.05, primary: true, ..Default::default() });

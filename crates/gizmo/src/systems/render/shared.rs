@@ -56,6 +56,11 @@ pub struct SceneLights {
     /// How many entries of `lights` are live this frame; the rest are stale and must not be
     /// read.
     pub num_lights: u32,
+    /// How many of the live lights a baked-lit surface takes direct light from — those not
+    /// `in_bake`. They are the first this many of `lights`, in rank order, so that every cluster's list
+    /// (ascending indices) starts with them and a baked-lit surface's loop stops at the first that is
+    /// not one of them.
+    pub unbaked_lights: u32,
     /// Direction the sun points along (normalized). Default down-vector when the
     /// scene has no `LightRole::Sun`.
     pub sun_dir: Vec3,
@@ -93,6 +98,25 @@ struct Candidate {
     /// Final tie-break, and the reason the selection is stable: entity id is a property of the
     /// world, not of iteration order.
     entity_id: u32,
+    /// The light's `in_bake`: a baked-lit surface already holds its direct light.
+    in_bake: bool,
+}
+
+/// The smallest sphere around what a spot light reaches: the points within `radius` of `position`
+/// and within `outer_angle` of `direction` — a cone capped by a sphere. Its middle lies on the axis,
+/// `radius / (2 cos θ)` from the light, and that is its radius too: it holds the light itself, the cap's
+/// tip and the rim where the cap meets the cone, and so all of it. Smaller than the light's own sphere
+/// below 60°, and nothing behind the light — a car's headlights do not reach the road behind the car,
+/// and the clusters there need not list them. Wider, it is the light's own sphere.
+#[must_use]
+pub fn spot_bounds(position: Vec3, direction: Vec3, radius: f32, outer_angle: f32) -> (Vec3, f32) {
+    let c = outer_angle.cos();
+    let direction = direction.normalize_or_zero();
+    if c <= 0.5 || direction == Vec3::ZERO || !radius.is_finite() {
+        return (position, radius);
+    }
+    let r = radius / (2.0 * c);
+    (position + direction * r, r)
 }
 
 /// Collect the scene's dynamic lights (point + spot, capped at [`MAX_LIGHTS`]) and the sun.
@@ -134,7 +158,8 @@ struct Candidate {
 /// ranking runs: nothing they light is on screen, so a slot spent on one is a slot taken from a
 /// light that is. `Frustum::intersects_sphere` is a plane test that errs toward keeping (a sphere
 /// straddling a plane counts as inside), which is the direction a cull must err in. For a spot
-/// light the sphere is a bound on its cone, so the test is conservative there twice over.
+/// light the sphere is the one around its cone (`spot_bounds`): a headlight pointing away from the
+/// view is not a candidate, and the clusters behind it do not list it.
 ///
 /// The jitter TAA adds to `view_proj` is sub-pixel and cannot decide this test, so the frame's own
 /// matrix is used rather than plumbing an unjittered one through.
@@ -205,6 +230,7 @@ pub fn collect_scene_lights(
                 surface_dist,
                 reach,
                 entity_id: e.id(),
+                in_bake: light.in_bake,
             });
         }
     }
@@ -221,9 +247,12 @@ pub fn collect_scene_lights(
             // raw radians made the cone a hard cut at the wrong angle with no falloff; the
             // studio path used to `.cos()` these itself, the game path never did (its spots
             // were broken) — single-sourcing the fix corrects both.
-            let Some((surface_dist, reach)) = score(pos, light.intensity, light.radius) else {
+            // Scored and culled by what its cone reaches (`spot_bounds`), not by its whole sphere.
+            let (centre, bound) = spot_bounds(pos, dir, light.radius, light.outer_angle);
+            let Some((surface_dist, _)) = score(centre, light.intensity, bound) else {
                 continue;
             };
+            let reach = light.intensity * light.radius;
             candidates.push(Candidate {
                 data: LightData {
                     position: [pos.x, pos.y, pos.z, light.intensity],
@@ -248,6 +277,7 @@ pub fn collect_scene_lights(
                 surface_dist,
                 reach,
                 entity_id: e.id(),
+                in_bake: light.in_bake,
             });
         }
     }
@@ -277,6 +307,7 @@ pub fn collect_scene_lights(
                 surface_dist,
                 reach,
                 entity_id: e.id(),
+                in_bake: light.in_bake,
             });
         }
     }
@@ -312,6 +343,7 @@ pub fn collect_scene_lights(
                 surface_dist: 0.0,
                 reach: f32::MAX,
                 entity_id: e.id(),
+                in_bake: light.in_bake,
             });
         }
     }
@@ -326,13 +358,19 @@ pub fn collect_scene_lights(
             .then(a.entity_id.cmp(&b.entity_id))
     });
 
+    // The ones that made the cut, those a baked-lit surface takes light from first (`in_bake` false
+    // sorts before true, and the sort is stable, so each half keeps its rank).
+    let mut chosen: Vec<&Candidate> = candidates.iter().take(MAX_LIGHTS).collect();
+    chosen.sort_by_key(|c| c.in_bake);
+    let unbaked_lights = chosen.iter().filter(|c| !c.in_bake).count() as u32;
+
     let mut lights = [LightData::default(); MAX_LIGHTS];
     let mut num_lights = 0usize;
     // Only lights that made the cut cast: one outside the array is not lit at all, so its shadow
     // would be a map with no light in it.
     let mut shadow_casters = Vec::new();
     let mut contact_shadows = Vec::new();
-    for c in candidates.iter().take(MAX_LIGHTS) {
+    for c in chosen {
         if let Some(caster) = c.shadow {
             shadow_casters.push((num_lights, caster));
         }
@@ -368,6 +406,7 @@ pub fn collect_scene_lights(
     SceneLights {
         lights,
         num_lights: num_lights as u32,
+        unbaked_lights,
         sun_dir,
         sun_col,
         has_sun,
@@ -508,9 +547,15 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
     let spheres: Vec<crate::renderer::clustered::LightSphere> = lights.lights
         [..lights.num_lights as usize]
         .iter()
-        .map(|l| crate::renderer::clustered::LightSphere {
-            center: Vec3::new(l.position[0], l.position[1], l.position[2]),
-            radius: l.color[3],
+        .map(|l| {
+            let at = Vec3::new(l.position[0], l.position[1], l.position[2]);
+            // A spot's (type 1) by its cone (`spot_bounds`; `params.x` is the outer cosine).
+            let (center, radius) = if l.params[1] == 1.0 {
+                spot_bounds(at, Vec3::new(l.direction[0], l.direction[1], l.direction[2]), l.color[3], l.params[0].clamp(-1.0, 1.0).acos())
+            } else {
+                (at, l.color[3])
+            };
+            crate::renderer::clustered::LightSphere { center, radius }
         })
         .collect();
     let clusters = crate::renderer::clustered::assign_lights(
@@ -549,6 +594,7 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
             },
             lights: lights.lights,
             num_lights: lights.num_lights,
+            unbaked_lights: lights.unbaked_lights,
             shadows: crate::renderer::ShadowFrame {
                 cascade_view_projs,
                 // A view that draws no cascades says it has no shadow range, which every lookup reads
@@ -637,7 +683,9 @@ mod tests {
     fn spotlight_cutoffs_are_stored_as_cosines() {
         let mut world = World::new();
         let e = world.spawn();
-        world.add_component(e, GlobalTransform::default());
+        // Turned to face the view (+Z): a spot pointing away from it lights nothing on screen, and is
+        // not a candidate (`spot_bounds`).
+        world.add_component(e, GlobalTransform { matrix: gizmo_math::Mat4::from_rotation_y(std::f32::consts::PI) });
         // inner_angle = 0.4 rad, outer_angle = 0.6 rad (radians, ctor clamps inner ≤ outer).
         world.add_component(e, SpotLight::new(Vec3::ONE, 10.0, 30.0, 0.4, 0.6));
 
@@ -830,6 +878,61 @@ mod tests {
     /// The z coordinates in the frame's light array, in order.
     fn selected_z(l: &SceneLights) -> Vec<f32> {
         l.lights[..l.num_lights as usize].iter().map(|d| d.position[2]).collect()
+    }
+
+    /// **A spot's bounds hold everything it lights, and nothing behind it.** Points spread through the
+    /// capped cone — on the axis, at the rim, on the cap, at the light — lie inside `spot_bounds`' sphere;
+    /// a point behind the light does not; and a cone wider than 60° keeps the light's own sphere, which
+    /// is then the smaller.
+    #[test]
+    fn a_spot_s_bounds_hold_its_cone_and_nothing_behind_it() {
+        let (at, dir, radius) = (Vec3::new(1.0, 2.0, 3.0), Vec3::new(0.0, -0.3, -1.0).normalize(), 45.0);
+        for outer in [0.1f32, 0.45, 0.65, 1.0] {
+            let (centre, r) = spot_bounds(at, dir, radius, outer);
+            assert!(r < radius, "{outer}: smaller than the light's own sphere: {r}");
+            let side = dir.cross(Vec3::Y).normalize();
+            for k in 0..=20 {
+                let angle = outer * k as f32 / 20.0;
+                let ray = gizmo_math::Quat::from_axis_angle(side, angle) * dir;
+                for t in [0.0, 0.3, 0.7, 1.0] {
+                    let p = at + ray * radius * t;
+                    assert!(p.distance(centre) <= r * 1.0001, "{outer}: {p} at {angle} rad, {t} of the reach, is outside");
+                }
+            }
+            assert!((at - dir).distance(centre) > r, "{outer}: a point behind the light is outside");
+        }
+        assert_eq!(spot_bounds(at, dir, radius, 1.1), (at, radius), "wider than 60°: the light's own sphere");
+    }
+
+    /// **The lights a baked-lit surface takes direct light from come first**, in rank order, and the
+    /// frame says how many: every cluster's list is ascending, so a baked-lit surface's loop stops at the
+    /// first index past them (`SceneUniforms::unbaked_lights`). Three lights, the nearest two in the bake
+    /// (a city's lamps) and the furthest not (a car's headlight): the headlight leads the array, the lamps
+    /// follow in their own order, and the headlight's shadow is cast from the slot it moved to.
+    #[test]
+    fn the_lights_outside_the_bake_lead_the_array() {
+        let mut world = World::new();
+        // Small, so that they rank by distance: the headlight, furthest, last.
+        for z in [3.0, 1.0] {
+            let e = point_at(&mut world, z);
+            world.add_component(e, PointLight::new(Vec3::ONE, 5.0, 0.5).in_bake());
+        }
+        let headlight = point_at(&mut world, 6.0);
+        world.add_component(headlight, PointLight::new(Vec3::ONE, 5.0, 0.5).with_shadows());
+
+        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default());
+        assert_eq!(selected_z(&l), vec![6.0, 1.0, 3.0], "the headlight first, then the lamps nearest first");
+        assert_eq!(l.unbaked_lights, 1);
+        assert_eq!(l.shadow_casters.iter().map(|(slot, _)| *slot).collect::<Vec<_>>(), vec![0], "its shadow from its slot");
+
+        // With none in the bake, the order is the rank alone.
+        let mut world = World::new();
+        for z in [3.0, 1.0, 6.0] {
+            let e = point_at(&mut world, z);
+            world.add_component(e, PointLight::new(Vec3::ONE, 5.0, 0.5));
+        }
+        let l = collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default());
+        assert_eq!((selected_z(&l), l.unbaked_lights), (vec![1.0, 3.0, 6.0], 3));
     }
 
     /// The cap drops the *far* lights, not the ones ECS iteration happened to reach last.

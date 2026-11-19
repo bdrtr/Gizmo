@@ -38,6 +38,14 @@ pub struct PointLight {
     /// frame's depth). `#[serde(default)]`.
     #[serde(default)]
     pub contact_shadow_length: f32,
+    /// **Already in the bake**: its direct light is part of what a baked-lit surface
+    /// ([`Material::with_baked_lit`](crate::components::Material::with_baked_lit)) holds — its vertex
+    /// colours or its lightmap — so such a surface takes only its reflection off the surface's rain
+    /// (`Renderer::wetness`); every other surface takes it as usual. Off (the default), a baked-lit
+    /// surface is lit by it as any surface is: a car's headlights on a baked street. A city's lamps,
+    /// baked into its vertex colours, are `true`. `#[serde(default)]`.
+    #[serde(default)]
+    pub in_bake: bool,
 }
 
 impl PointLight {
@@ -54,6 +62,7 @@ impl PointLight {
             source_length: 0.0,
             casts_shadows: false,
             contact_shadow_length: 0.0,
+            in_bake: false,
         }
     }
 
@@ -67,6 +76,12 @@ impl PointLight {
     /// [`contact_shadow_length`](Self::contact_shadow_length)), clamped to 0..=5.
     pub fn with_contact_shadows(mut self, metres: f32) -> Self {
         self.contact_shadow_length = if metres.is_finite() { metres.clamp(0.0, 5.0) } else { 0.0 };
+        self
+    }
+
+    /// This light as one the baked-lit surfaces' bake already holds (see [`in_bake`](Self::in_bake)).
+    pub fn in_bake(mut self) -> Self {
+        self.in_bake = true;
         self
     }
 
@@ -126,6 +141,14 @@ pub struct DirectionalLight {
     /// and only on the deferred path (the march reads the frame's depth). `#[serde(default)]`.
     #[serde(default)]
     pub contact_shadow_length: f32,
+    /// **Already in the bake**: its direct light is part of what a baked-lit surface
+    /// ([`Material::with_baked_lit`](crate::components::Material::with_baked_lit)) holds — its vertex
+    /// colours or its lightmap — so such a surface takes only its reflection off the surface's rain
+    /// (`Renderer::wetness`); every other surface takes it as usual. Off (the default), a baked-lit
+    /// surface is lit by it as any surface is: a car's headlights on a baked street. A city's lamps,
+    /// baked into its vertex colours, are `true`. Only a directional light other than the scene's sun takes it: the sun is always the bake's. `#[serde(default)]`.
+    #[serde(default)]
+    pub in_bake: bool,
 }
 
 impl DirectionalLight {
@@ -138,6 +161,7 @@ impl DirectionalLight {
             role,
             angular_radius: 0.0,
             contact_shadow_length: 0.0,
+            in_bake: false,
         }
     }
 
@@ -145,6 +169,12 @@ impl DirectionalLight {
     /// [`contact_shadow_length`](Self::contact_shadow_length)), clamped to 0..=5.
     pub fn with_contact_shadows(mut self, metres: f32) -> Self {
         self.contact_shadow_length = if metres.is_finite() { metres.clamp(0.0, 5.0) } else { 0.0 };
+        self
+    }
+
+    /// This light as one the baked-lit surfaces' bake already holds (see [`in_bake`](Self::in_bake)).
+    pub fn in_bake(mut self) -> Self {
+        self.in_bake = true;
         self
     }
 
@@ -198,6 +228,14 @@ pub struct SpotLight {
     /// frame's depth). `#[serde(default)]`.
     #[serde(default)]
     pub contact_shadow_length: f32,
+    /// **Already in the bake**: its direct light is part of what a baked-lit surface
+    /// ([`Material::with_baked_lit`](crate::components::Material::with_baked_lit)) holds — its vertex
+    /// colours or its lightmap — so such a surface takes only its reflection off the surface's rain
+    /// (`Renderer::wetness`); every other surface takes it as usual. Off (the default), a baked-lit
+    /// surface is lit by it as any surface is: a car's headlights on a baked street. A city's lamps,
+    /// baked into its vertex colours, are `true`. `#[serde(default)]`.
+    #[serde(default)]
+    pub in_bake: bool,
 }
 
 impl SpotLight {
@@ -224,6 +262,7 @@ impl SpotLight {
             cookie: None,
             casts_shadows: false,
             contact_shadow_length: 0.0,
+            in_bake: false,
         }
     }
 
@@ -237,6 +276,12 @@ impl SpotLight {
     /// [`contact_shadow_length`](Self::contact_shadow_length)), clamped to 0..=5.
     pub fn with_contact_shadows(mut self, metres: f32) -> Self {
         self.contact_shadow_length = if metres.is_finite() { metres.clamp(0.0, 5.0) } else { 0.0 };
+        self
+    }
+
+    /// This light as one the baked-lit surfaces' bake already holds (see [`in_bake`](Self::in_bake)).
+    pub fn in_bake(mut self) -> Self {
+        self.in_bake = true;
         self
     }
 
@@ -292,6 +337,14 @@ pub struct RectLight {
     /// frame's depth). `#[serde(default)]`.
     #[serde(default)]
     pub contact_shadow_length: f32,
+    /// **Already in the bake**: its direct light is part of what a baked-lit surface
+    /// ([`Material::with_baked_lit`](crate::components::Material::with_baked_lit)) holds — its vertex
+    /// colours or its lightmap — so such a surface takes only its reflection off the surface's rain
+    /// (`Renderer::wetness`); every other surface takes it as usual. Off (the default), a baked-lit
+    /// surface is lit by it as any surface is: a car's headlights on a baked street. A city's lamps,
+    /// baked into its vertex colours, are `true`. `#[serde(default)]`.
+    #[serde(default)]
+    pub in_bake: bool,
 }
 
 impl RectLight {
@@ -307,6 +360,7 @@ impl RectLight {
             height: extent(height),
             casts_shadows: false,
             contact_shadow_length: 0.0,
+            in_bake: false,
         }
     }
 
@@ -320,6 +374,12 @@ impl RectLight {
     /// [`contact_shadow_length`](Self::contact_shadow_length)), clamped to 0..=5.
     pub fn with_contact_shadows(mut self, metres: f32) -> Self {
         self.contact_shadow_length = if metres.is_finite() { metres.clamp(0.0, 5.0) } else { 0.0 };
+        self
+    }
+
+    /// This light as one the baked-lit surfaces' bake already holds (see [`in_bake`](Self::in_bake)).
+    pub fn in_bake(mut self) -> Self {
+        self.in_bake = true;
         self
     }
 }

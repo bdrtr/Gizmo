@@ -893,11 +893,13 @@ macro_rules! material_builders {
     }
 
     /// A material that uses light baked into the vertex colour and still receives the sun's
-    /// shadow.
+    /// shadow, and the lights its bake does not hold.
     ///
-    /// The only difference from `with_unlit` is the shadow. The light is already in the vertex
-    /// colour, so PBR is unnecessary — but the shadows of dynamic objects standing in front of
-    /// the world cannot be in the file.
+    /// The light is already in the vertex colour, so PBR is unnecessary — but the shadows of dynamic
+    /// objects standing in front of the world cannot be in the file, and neither can a light that moves
+    /// through it: a car's headlights. A light that is not [`in_bake`](crate::components::PointLight::in_bake)
+    /// (the default) lights the surface as it lights any surface; one that is — a street lamp the bake
+    /// holds — adds only its reflection off the surface's rain (`Renderer::wetness`).
     ///
     /// To lift a dark scene use [`with_ambient`](Self::with_ambient) and
     /// [`with_emissive`](Self::with_emissive); both default to zero.

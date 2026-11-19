@@ -230,7 +230,9 @@ fn compute_height_fog(world_pos: vec3<f32>, camera_pos: vec3<f32>) -> vec4<f32> 
 }
 
 // The frame's local lights on a surface — the clustered loop the lit path shades with, taken out so that the
-// water on a baked-lit surface (its branch above) is lit by the same lights, the same way.
+// water on a baked-lit surface (its branch above) is lit by the same lights, the same way. Only the lights
+// before `light_limit` in the frame's array: a baked-lit surface takes direct light from the first
+// `scene.unbaked_lights` alone, and every cluster's list is ascending, so the loop stops at the first past it.
 fn local_lighting(
     world_pos: vec3<f32>,
     iuv: vec2<i32>,
@@ -247,12 +249,16 @@ fn local_lighting(
     coat_roughness: f32,
     receives_shadows: bool,
     surface_axes: ReceiverAxes,
+    light_limit: u32,
 ) -> vec3<f32> {
     var total = vec3<f32>(0.0);
     let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, world_pos);
     let cluster_range = cluster_table[cluster];
     for (var ci = 0u; ci < cluster_range.y; ci++) {
         let i = cluster_light_indices[cluster_range.x + ci];
+        if (i >= light_limit) {
+            break;
+        }
         let light      = scene.lights[i];
         let light_type = u32(light.params.y);
         let intensity  = light.position.w;
@@ -282,11 +288,16 @@ fn local_lighting(
                 }
             } else if (light_type == 1u) {
                 atten *= spot_cone(light, -L);
-                if (light.params.w > 0.0) {
-                    cookie = textureSampleLevel(
-                        t_cookie, s_cookie, spot_cookie_uv(light, world_pos), i32(light.params.w) - 1, 0.0
-                    ).rgb;
-                }
+            }
+            // Past its reach, or outside its cone, it gives nothing here: no cookie to read, no shadow to
+            // look up. A rectangle is lit by its window alone.
+            if (select(atten, window, light_type == 3u) <= 0.0) {
+                continue;
+            }
+            if (light_type == 1u && light.params.w > 0.0) {
+                cookie = textureSampleLevel(
+                    t_cookie, s_cookie, spot_cookie_uv(light, world_pos), i32(light.params.w) - 1, 0.0
+                ).rgb;
             }
             // The light's shadow, if it casts one (`gizmo_renderer::local_shadows`) and lights this
             // point at all. On `window` as well as `atten`: a rectangle light is shaded from the
@@ -380,8 +391,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     // A baked-lit surface (`gbuffer.wgsl`'s `fs_baked`): finished as `baked_lit.wgsl` draws it — its
     // baked light (RT3) times its base (RT0), the sun's share of that darkened by the sun's shadow,
-    // plus what no shadow touches (RT5) — and fogged. No other light reaches it: its baked light is
-    // all the light it has. The shadow is baked-lit's own: the cascades, faded at the end of their
+    // plus what no shadow touches (RT5) — and fogged. Of the frame's lights only those its bake does not
+    // hold reach it (below), and the rain's reflections. The shadow is baked-lit's own: the cascades, faded at the end of their
     // range, no contact shadows.
     if (is_baked_surface(pos_sample.w)) {
         let baked_pos = pos_sample.xyz + scene.camera_pos.xyz;
@@ -421,9 +432,19 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             }
             glints += local_lighting(
                 baked_pos, iuv, baked_n, V, baked_n, baked_n, vec3<f32>(0.0), rough, 0.0, f0w, 0.0, 0.0, 0.08,
-                rest.w >= 0.0, receiver_axes(pos_dx, pos_dy, baked_n),
+                rest.w >= 0.0, receiver_axes(pos_dx, pos_dy, baked_n), 0xffffffffu,
             );
             colour += glints * water;
+        }
+        // The lights its bake does not hold (not `in_bake`, the first `unbaked_lights`) light it as they
+        // light any surface: a car's headlights on a baked street. Its roughness is RT1's, its reflectance
+        // RT5's alpha (as `fs_baked` writes them).
+        if (scene.unbaked_lights > 0u) {
+            let V = normalize(scene.camera_pos.xyz - baked_pos);
+            colour += local_lighting(
+                baked_pos, iuv, baked_n, V, baked_n, baked_n, albedo_metallic.rgb, max(abs(normal_roughness.w), 0.05), 0.0,
+                vec3<f32>(abs(rest.w)), 0.0, 0.0, 0.08, rest.w >= 0.0, receiver_axes(pos_dx, pos_dy, baked_n), scene.unbaked_lights,
+            );
         }
         let fog = compute_height_fog(baked_pos, scene.camera_pos.xyz);
         return vec4<f32>(mix(colour, fog.rgb, fog.a), 1.0);
@@ -575,7 +596,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // point-shadow caster comparison — reads exactly as it did when this looped over all of them.
     total_lighting += local_lighting(
         world_pos, iuv, N, V, T, B, albedo, min_roughness, metallic, f0, anisotropy, clear_coat, coat_roughness,
-        receives_shadows, surface_axes,
+        receives_shadows, surface_axes, 0xffffffffu,
     );
 
     // Exposure is NOT applied here anymore — it is a single post-process knob applied over

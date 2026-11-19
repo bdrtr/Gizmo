@@ -50,6 +50,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A light the bake does not hold lights a baked-lit surface: `in_bake` on every light.** A baked-lit surface
+  (`Material::with_baked_lit`) took its light from its bake alone, so a car's headlights on a baked city street lit
+  nothing on the road, and only its reflection reached it in the rain. Now each light says whether its direct light
+  is already in the bake (`PointLight`, `SpotLight`, `RectLight` and a non-sun `DirectionalLight` gain `in_bake`
+  and an `in_bake()` builder). A city's street lamps baked into its vertex colours are `true`: a dry baked surface
+  takes nothing from them, and a wet one their reflection, as before. Every other light — `false`, the default, as
+  the lightmap baker already has it — lights a baked-lit surface as it lights any surface, on every route the
+  surface takes (`baked_lit.wgsl`, the G-buffer's baked branch, the forward-only path). **A scene whose lights are
+  in its baked-lit surfaces' bake must now say so**, or they light those surfaces twice. The cost is kept off the
+  dry city: the lights outside the bake lead the frame's light array (`collect_scene_lights`), so every cluster's
+  list starts with them, and a baked-lit surface's loop stops at the first light past them —
+  `SceneUniforms::unbaked_lights`, in what was padding. A double-sided baked-lit surface seen from behind is now lit
+  on the side the camera sees in the forward shader too, as the G-buffer route lit it. Tests:
+  `a_light_outside_the_bake_lights_a_baked_floor_and_one_inside_it_does_not` (a lamp the bake holds changes nothing
+  on a dry floor, to the byte; a headlight further off lights a pool; with both, the frame is the headlight's —
+  which fails if the order is the rank alone), `the_lights_outside_the_bake_lead_the_array`, and the route test now
+  carries a headlight (the G-buffer's frame against the forward one). The inspector has an "In the bake" box.
+
 - **TAA holds small bright lights steady under a moving camera.** In `nfsu2-gizmo`'s night city the lit windows,
   neon and signs blinked as the car drove with TAA on (its MOTOR-NOTLARI #27; the game had TAA off since). TAA
   clamped the history to the neighbourhood's colours and blended in linear light, where a light a pixel wide and
@@ -251,6 +269,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   WebGPU's 16, which nothing did.
 
 ### Changed
+
+- **A spot light is culled, ranked and clustered by the sphere around its cone, and a light gives nothing where it
+  cannot reach.** A spot was bounded by its whole reach, so a car's headlights (45 m) were listed in every cluster
+  within 45 m of the car, the road behind it too, and every fragment there sampled the beam's cookie before finding
+  it outside the cone. `spot_bounds` is the smallest sphere around the capped cone — centred on the axis
+  `r / (2 cos θ)` from the light, of that radius, smaller than the reach below 60°, holding nothing behind the light
+  (`a_spot_s_bounds_hold_its_cone_and_nothing_behind_it`). And the lighting loops (`baked_lit.wgsl`,
+  `deferred_lighting.wgsl`) skip a light whose falloff or cone is zero at the fragment before its cookie, its shadow
+  or its shading. `nfsu2-gizmo`'s sixteen headlights cost the dry city 1.25 ms of forward GPU time at first, 0.8
+  with the skip and 0.5 with the bounds (AMD 780M, paired runs).
 
 - **Clustered light assignment builds each cluster's bound once a frame: 0.75 → 0.14 ms at 256 lights.** Each
   cluster's bound is the AABB of eight corner points. It was rebuilt inside the light loop — for every light,

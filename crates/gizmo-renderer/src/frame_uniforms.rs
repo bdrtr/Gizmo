@@ -432,6 +432,9 @@ pub struct SceneFrame {
     pub lights: [LightData; MAX_LIGHTS],
     /// How many entries of [`Self::lights`] are live.
     pub num_lights: u32,
+    /// How many of the first live [`Self::lights`] a baked-lit surface takes direct light from — those
+    /// not `in_bake` (`SceneUniforms::unbaked_lights`).
+    pub unbaked_lights: u32,
     /// The shadow cascades and their settings.
     pub shadows: ShadowFrame,
     /// The sky preset, the blend towards the next one, and the debug shading mode.
@@ -448,6 +451,7 @@ impl Default for SceneFrame {
             sun: SunFrame::default(),
             lights: [LightData::default(); MAX_LIGHTS],
             num_lights: 0,
+            unbaked_lights: 0,
             shadows: ShadowFrame::default(),
             environment: EnvironmentFrame::default(),
             elapsed_time: 0.0,
@@ -464,7 +468,7 @@ impl SceneUniforms {
     /// partial copy of the struct expects them.
     #[must_use]
     pub fn new(frame: &SceneFrame) -> Self {
-        let SceneFrame { camera, sun, lights, num_lights, shadows, environment, elapsed_time } =
+        let SceneFrame { camera, sun, lights, num_lights, unbaked_lights, shadows, environment, elapsed_time } =
             frame;
 
         let (fog, fog_shape) = frame_fog(environment.preset, environment.preset_2, environment.blend_t, environment.fog);
@@ -518,7 +522,7 @@ impl SceneUniforms {
             clear_color: environment.clear_color.unwrap_or(DEFAULT_BACKGROUND),
             environment_blend_t: environment.blend_t,
             environment_preset: environment.preset,
-            _pad_shadow_flag: 0,
+            unbaked_lights: (*unbaked_lights).min(*num_lights),
             environment_preset_2: environment.preset_2,
             shading_mode: environment.shading_mode,
             inv_view_proj: camera.view_proj.inverse().to_cols_array_2d(),
