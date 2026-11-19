@@ -1,7 +1,8 @@
 // Auto exposure: one step of adaptation, on the GPU.
 //
-// `sums[0]` is this frame's mean HDR luminance, written by `luminance_reduce.wgsl` just before.
-// The exposure that would bring it to `key` is `key / mean`; the current exposure moves toward it
+// `sums[0]` is this frame's log-average HDR luminance, written by `luminance_reduce.wgsl` just before
+// (`Metering::LogAverage`). The exposure that would bring it to `key` is `key / average`; the current
+// exposure moves toward it
 // in log2 space (stops — equal ratios are equal steps, as the eye judges them) by
 // `1 - exp(-dt * speed)`, a frame-rate-independent fraction. Darkening the picture (the scene got
 // brighter) and brightening it (the scene got darker) have separate speeds, the way eyes adapt
@@ -27,8 +28,8 @@ struct Params {
 
 @compute @workgroup_size(1)
 fn adapt() {
-    let mean = max(sums[0], 1e-5);
-    let target_exposure = clamp(p.key / mean, p.min_exposure, p.max_exposure);
+    let average = max(sums[0], 1e-5);
+    let target_exposure = clamp(p.key / average, p.min_exposure, p.max_exposure);
     let current = exposure[0];
     // A non-positive or NaN current (never written, or poisoned) cannot be adapted from in log
     // space; take the target.

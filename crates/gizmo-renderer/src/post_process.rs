@@ -42,6 +42,9 @@ pub struct PostProcessState {
     /// The composite pass's group 4: the G-buffer's velocity target, for object motion blur.
     /// `None` in the browser. See [`VelocityBinding`].
     pub velocity: Option<VelocityBinding>,
+    /// The composite pass's group 5: local exposure's grid. `None` in the browser. See
+    /// [`crate::local_exposure`].
+    pub local: Option<crate::local_exposure::LocalExposureBinding>,
     /// The extract pass's output.
     pub bloom_extract_texture_view: wgpu::TextureView,
     /// It as an input to the blur.
@@ -237,6 +240,10 @@ pub fn build_post_process_resources(
     let velocity = Some(build_velocity_binding(device));
     #[cfg(gizmo_forward_only)]
     let velocity: Option<VelocityBinding> = None;
+    #[cfg(not(gizmo_forward_only))]
+    let local = Some(crate::local_exposure::build_binding(device));
+    #[cfg(gizmo_forward_only)]
+    let local: Option<crate::local_exposure::LocalExposureBinding> = None;
 
     let composite_variant = CompositeVariant::default();
     let (bloom_extract_pipeline, bloom_blur_pipeline, composite_pipeline) = build_post_pipelines(
@@ -248,6 +255,7 @@ pub fn build_post_process_resources(
         &post_params_bind_group_layout,
         exposure.as_ref().map(|e| &e.layout),
         velocity.as_ref().map(|v| &v.layout),
+        local.as_ref().map(|l| &l.layout),
         surface_format,
         composite_variant,
     );
@@ -304,6 +312,7 @@ pub fn build_post_process_resources(
         blur_v_bind_group,
         exposure,
         velocity,
+        local,
     }
 }
 
@@ -423,6 +432,7 @@ fn build_post_pipelines(
     post_params_bgl: &wgpu::BindGroupLayout,
     exposure_bgl: Option<&wgpu::BindGroupLayout>,
     velocity_bgl: Option<&wgpu::BindGroupLayout>,
+    local_bgl: Option<&wgpu::BindGroupLayout>,
     surface_format: wgpu::TextureFormat,
     variant: CompositeVariant,
 ) -> (
@@ -507,9 +517,11 @@ fn build_post_pipelines(
             Some(post_params_bgl),
             exposure_bgl,
             velocity_bgl,
-        ][..match (exposure_bgl, velocity_bgl) {
-            (Some(_), Some(_)) => 5,
-            (Some(_), None) => 4,
+            local_bgl,
+        ][..match (exposure_bgl, velocity_bgl, local_bgl) {
+            (Some(_), Some(_), Some(_)) => 6,
+            (Some(_), Some(_), None) => 5,
+            (Some(_), None, _) => 4,
             _ => 3,
         }],
         immediate_size: 0,
@@ -566,6 +578,7 @@ pub fn rebuild_post_pipelines(renderer: &mut crate::Renderer, post_shader: &wgpu
         &renderer.post.post_params_bind_group_layout,
         renderer.post.exposure.as_ref().map(|e| &e.layout),
         renderer.post.velocity.as_ref().map(|v| &v.layout),
+        renderer.post.local.as_ref().map(|l| &l.layout),
         renderer.config.format,
         variant,
     );
@@ -948,6 +961,15 @@ pub fn run_post_processing(
         }
         if let Some(group) = velocity_group.as_ref() {
             pass.set_bind_group(4, group, &[]);
+        }
+        if let Some(local) = &renderer.post.local {
+            let group = renderer
+                .local_exposure
+                .as_ref()
+                .filter(|l| l.enabled)
+                .and_then(|l| l.composite_bind_group())
+                .unwrap_or(&local.neutral_bind_group);
+            pass.set_bind_group(5, group, &[]);
         }
         pass.draw(0..3, 0..1);
     }

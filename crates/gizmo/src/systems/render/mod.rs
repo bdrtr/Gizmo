@@ -5568,6 +5568,92 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only composite has no local exposure.
+    /// **Local exposure keeps a burning patch from burning and leaves the dark around it alone.** A dark
+    /// wall, and in front of it a small panel thirty times over the frame's white, checkered, as a car's
+    /// bumper is under headlights five metres off. One exposure burns the panel white, its checker and
+    /// all. With local exposure (`crate::renderer::local_exposure`), highlights' contrast halved about a
+    /// pivot of 0.5: the panel comes down out of white and its checker shows; the wall beside it — a
+    /// cell, two cells away — is as it was, since it is averaged with the pixels as dark as it and not
+    /// with the panel (the grid's bins: no halo). With every setting at 1 the frame is the frame without
+    /// it, to a step.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn local_exposure_keeps_a_burning_patch_from_burning_and_leaves_the_dark_around_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        const W: usize = 128;
+        // `None`: off; `Some(contrast)`: on, highlights' contrast at it.
+        async fn frame(local: Option<f32>) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(W as u32, W as u32).await;
+            renderer.taa = None;
+            renderer.fxaa = None;
+            renderer.smaa = None;
+            renderer.ssr = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.bloom_intensity = 0.0;
+            if let (Some(contrast), Some(state)) = (local, renderer.local_exposure.as_mut()) {
+                state.enabled = true;
+                state.settings.highlight_contrast = contrast;
+                state.settings.pivot = 0.5;
+            }
+            let mut assets = AssetManager::new();
+            let layout = renderer.scene.texture_bind_group_layout.clone();
+            let rgba: Vec<u8> = (0..64u32).flat_map(|i| if (i % 8 / 2 + i / 16) % 2 == 0 { [230, 230, 230, 255] } else { [120, 120, 120, 255] }).collect();
+            let checker = assets
+                .install_decoded_material_texture(&renderer.device, &renderer.queue, &layout, "local_checker", &rgba, 8, 8)
+                .expect("the texture installs");
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &layout);
+            let mut world = World::new();
+            for (at, half, material) in [
+                (Vec3::new(0.0, 0.0, -1.0), Vec3::new(10.0, 10.0, 0.1), Material::new(white.clone()).with_baked_lit(Vec4::new(0.03, 0.03, 0.03, 1.0))),
+                (Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.6, 0.6, 0.1), Material::new(checker.clone()).with_baked_lit(Vec4::new(30.0, 30.0, 30.0, 1.0))),
+            ] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, material);
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 4.0), yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            let (off, neutral, on) = (frame(None).await, frame(Some(1.0)).await, frame(Some(0.5)).await);
+            let px = |f: &[u8], x: usize, y: usize| f[(y * W + x) * 4];
+            // The panel is the middle of the frame; the wall a ring around it.
+            let panel: Vec<(usize, usize)> = (50..78).flat_map(|y| (50..78).map(move |x| (x, y))).collect();
+            let near_wall: Vec<(usize, usize)> = (0..W * W)
+                .map(|i| (i % W, i / W))
+                .filter(|&(x, y)| {
+                    let d = (x as i32 - 64).abs().max((y as i32 - 64).abs());
+                    (25..50).contains(&d) && px(&off, x, y) < 60
+                })
+                .collect();
+            let worst = |a: &[u8], b: &[u8], at: &[(usize, usize)]| at.iter().map(|&(x, y)| px(a, x, y).abs_diff(px(b, x, y))).max().unwrap_or(0);
+            let span = |f: &[u8]| {
+                let v: Vec<u8> = panel.iter().map(|&(x, y)| px(f, x, y)).collect();
+                (*v.iter().min().unwrap(), *v.iter().max().unwrap())
+            };
+            let ((off_low, off_high), (on_low, on_high)) = (span(&off), span(&on));
+            // When written: off 253–255, on 237–253; neutral and the wall 0 apart.
+            assert!(off_low >= 250, "the setup: one exposure burns the panel ({off_low}–{off_high})");
+            assert!(on_low + 10 <= off_low && on_high - on_low >= 10, "local exposure brings the panel down and its checker out: {on_low}–{on_high}");
+            assert!(near_wall.len() > 3000, "the setup: a dark wall around it ({} pixels)", near_wall.len());
+            assert!(worst(&on, &off, &near_wall) <= 1, "the wall beside the panel is as it was: {} apart", worst(&on, &off, &near_wall));
+            let whole = (0..W * W).map(|i| (0..3).map(|c| off[i * 4 + c].abs_diff(neutral[i * 4 + c])).max().unwrap()).max().unwrap();
+            assert!(whole <= 1, "every setting at 1 is the frame without it: {whole} apart");
+        });
+    }
+
     /// **A light outside the bake lights a baked floor; one inside it does not.** A baked-lit surface's
     /// bake holds the lights that were there when it was baked — a city's street lamps — and not those
     /// that move through it: a car's headlights (`in_bake` false, the default). A dark baked floor, a lamp

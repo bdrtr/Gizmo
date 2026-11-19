@@ -16,7 +16,16 @@ struct ReduceParams {
     partial_count: u32,
     // 0 = tile pass, 1 = final sum. One shader, one pipeline layout, two dispatches.
     stage: u32,
+    // 0 = the mean luminance; 1 = the log-average, `exp(mean(ln L))`, each texel floored at
+    // `LOG_FLOOR` (`luminance::Metering`).
+    metering: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
+
+// `luminance::LOG_AVERAGE_FLOOR`.
+const LOG_FLOOR: f32 = 1e-3;
 
 @group(0) @binding(0) var<uniform> params: ReduceParams;
 @group(0) @binding(1) var hdr: texture_2d<f32>;
@@ -57,9 +66,14 @@ fn main(
             let y = i / params.width;
             let c = textureLoad(hdr, vec2<u32>(x, y), 0).rgb;
             let l = luma(c);
-            // A blown highlight must not take the mean with it. `textureLoad` on Rgba16Float can
-            // hand back inf, and one inf makes every downstream sum inf.
-            if (l == l && l < 1e6) {
+            if (params.metering == 1u) {
+                // Every texel counts in the log-average, an infinite one as a very bright one and a
+                // NaN as the floor: a ratio of them cannot run away.
+                sum += log(clamp(select(LOG_FLOOR, l, l == l), LOG_FLOOR, 1e6));
+                count += 1.0;
+            } else if (l == l && l < 1e6) {
+                // A blown highlight must not take the mean with it. `textureLoad` on Rgba16Float can
+                // hand back inf, and one inf makes every downstream sum inf.
                 sum += l;
                 count += 1.0;
             }
@@ -108,7 +122,8 @@ fn main(
 
         if (lid.x == 0u) {
             let total = f32(params.width * params.height);
-            sums[0] = scratch[0] / max(total, 1.0);
+            let mean = scratch[0] / max(total, 1.0);
+            sums[0] = select(mean, exp(mean), params.metering == 1u);
         }
     }
 }

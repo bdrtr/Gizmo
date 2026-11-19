@@ -241,6 +241,9 @@ pub struct Renderer {
     /// Auto exposure — present but **disabled** by default on native, `None` in the browser. See
     /// [`crate::auto_exposure`].
     pub auto_exposure: Option<crate::auto_exposure::AutoExposureState>,
+    /// Local exposure — present but **disabled** by default on native, `None` in the browser: each
+    /// pixel exposed for its own neighbourhood. See [`crate::local_exposure`].
+    pub local_exposure: Option<crate::local_exposure::LocalExposureState>,
     /// The last frame's **unjittered** view-projection, kept for camera motion blur — what the
     /// composite's `reproject` matrix maps back to. `None` until a camera has drawn once (no
     /// motion on the first frame). Per split-screen view, like TAA's history.
@@ -1431,6 +1434,12 @@ impl Renderer {
         // Auto exposure measures the finished HDR frame and adapts before the composite reads it.
         if let Some(ae) = self.auto_exposure.as_ref().filter(|a| a.enabled) {
             ae.record(encoder);
+        }
+        // Local exposure sorts the same finished frame into its grid, for the composite to read.
+        if let Some(local) = self.local_exposure.as_mut().filter(|l| l.enabled) {
+            let size = self.post.hdr_texture.size();
+            local.prepare(&self.device, &self.queue, size.width, size.height);
+            local.record(&self.device, encoder, &self.post.hdr_texture_view);
         }
         // CAS's input is the frame's size only while CAS runs.
         if let Some(cas) = self.cas.as_mut() {

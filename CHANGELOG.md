@@ -50,6 +50,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Local exposure: each pixel exposed for its own neighbourhood (`Renderer::local_exposure`).** One exposure for the
+  whole frame cannot hold a night street and a car's bumper lit by headlights five metres off: an exposure that keeps
+  the street dark burns the bumper. What UE5 calls local exposure, in its bilateral-grid form
+  (`crate::local_exposure`): the frame is sorted into a grid of 32-pixel cells by 24 bins of log2 luminance (a compute
+  pass, workgroup atomics), blurred along x, y and the bins, and the composite reads each pixel's neighbourhood
+  average among the pixels about as bright as it, pulls it towards a pivot by the contrast on its side and keeps the
+  pixel's difference from it — `out = pivot + (b − pivot)·contrast + (l − b)·detail`, in log2 of the exposed
+  luminance. Because the bumper is averaged with the bumper and not with the dark boot above it, compressing one does
+  not darken the other: no halo. `LocalExposureSettings`: `highlight_contrast`, `shadow_contrast`, `pivot`, `detail`,
+  `blur_cells`, `blur_bins`; the defaults change nothing. Off by default, as auto exposure is; while off the composite
+  binds a neutral group 5 and the frame is bit-identical. Native only. Test
+  `local_exposure_keeps_a_burning_patch_from_burning_and_leaves_the_dark_around_it`: a checkered panel thirty times
+  over white in front of a dark wall — one exposure burns it (253–255), local exposure at ½ brings it down with its
+  checker (237–253), the wall within two cells of it does not move a step (a grid read from the wrong bin moves it
+  39), and every setting at 1 is the frame without it.
+
 - **A light the bake does not hold lights a baked-lit surface: `in_bake` on every light.** A baked-lit surface
   (`Material::with_baked_lit`) took its light from its bake alone, so a car's headlights on a baked city street lit
   nothing on the road, and only its reflection reached it in the rain. Now each light says whether its direct light
@@ -269,6 +285,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   WebGPU's 16, which nothing did.
 
 ### Changed
+
+- **Auto exposure is metered by the frame's log-average, not its mean.** Its key, 0.18, is Reinhard's, and his key is
+  a fraction of the log-average luminance; the engine measured the arithmetic mean instead, where a few bright pixels
+  carry the number — on a night street, its lit windows and a bumper under headlights darkened the whole street for
+  them. `luminance::Metering` (`Mean`, the default, and `LogAverage`: `exp(mean(ln L))`, each texel floored at
+  `LOG_AVERAGE_FLOOR`, 10⁻³, so a black sky does not drag it to `ln 0`); `LuminanceReduce::with_metering`; auto
+  exposure builds its sensor with `LogAverage`. Tests: `the_log_average_is_the_geometric_mean`,
+  `a_few_bright_texels_carry_the_mean_and_not_the_log_average` (2 % of a dark frame at 50: the mean twentyfold, the
+  log-average 15 %), `exposure_is_metered_by_the_log_average` (half 0.1, half 1.0 snaps to 0.569; by the mean, 0.327).
 
 - **`Renderer::exposure` is gone: nothing read it.** The frame's exposure is the camera's (`Camera::exposure`, applied
   once in the composite over the whole HDR frame); the renderer's field, 1.15 by default and documented as "applied

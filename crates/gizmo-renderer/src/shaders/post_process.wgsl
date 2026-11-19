@@ -124,6 +124,44 @@ var<storage, read> auto_exposure: array<f32>;
 @group(4) @binding(0)
 var t_velocity: texture_2d<f32>;
 
+// Local exposure (`crate::local_exposure`): the frame's luminance as a bilateral grid, and how its
+// contrast is compressed. A one-texel grid and `flags.x` 0 while it is off.
+struct LocalParams {
+    grid: vec4<u32>,
+    range: vec4<f32>,
+    shape: vec4<f32>,
+    flags: vec4<f32>,
+}
+@group(5) @binding(0) var t_local: texture_3d<f32>;
+@group(5) @binding(1) var s_local: sampler;
+@group(5) @binding(2) var<uniform> local: LocalParams;
+
+// `colour` (before exposure) exposed for its own neighbourhood: the neighbourhood's log2 luminance `b`,
+// among the pixels about as bright as this one, from the grid; pulled towards the pivot by the contrast
+// on its side, and this pixel's difference from it kept by `detail` — all in log2 of the luminance as
+// `exposure` exposes it. A factor on the colour, so its hue is kept.
+fn local_exposure(colour: vec3<f32>, uv: vec2<f32>, exposure: f32) -> vec3<f32> {
+    if (local.flags.x < 0.5) {
+        return colour;
+    }
+    let l = dot(colour, vec3<f32>(0.2126, 0.7152, 0.0722));
+    if (!(l > 0.0)) {
+        return colour;
+    }
+    let l2 = clamp(log2(l), local.range.x, local.range.y);
+    let grid = vec3<f32>(textureDimensions(t_local));
+    let covered = grid.xy * f32(local.grid.w);
+    let at = vec3<f32>(uv * vec2<f32>(textureDimensions(t_source)) / covered, (l2 - local.range.x) / (local.range.y - local.range.x));
+    let cell = textureSampleLevel(t_local, s_local, at, 0.0).xy;
+    let b = select(l2, cell.x / cell.y, cell.y > 1e-4);
+    let e = log2(max(exposure, 1e-8));
+    let pivot = local.shape.z;
+    let be = b + e;
+    let contrast = select(local.shape.y, local.shape.x, be > pivot);
+    let out = pivot + (be - pivot) * contrast + (l2 - b) * local.shape.w;
+    return colour * exp2(out - (l2 + e));
+}
+
 
 // ============================
 // Pass 1: Bright Extract
@@ -287,7 +325,8 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     if (params.bloom_and_lut.x > 0.5) {
         with_bloom = dof_color + (bloom_color - bright_part(dof_color)) * min(params.bloom_intensity, 1.0);
     }
-    let combined = with_bloom * params.exposure * auto_exposure[0];
+    // In the order it always was, so that a frame without local exposure is bit-identical.
+    let combined = local_exposure(with_bloom, in.uv, params.exposure * auto_exposure[0]) * params.exposure * auto_exposure[0];
     
     // 3. Tone mapping — ACES by default, `TonemapCurve` chooses.
     let mapped = display_mapping(

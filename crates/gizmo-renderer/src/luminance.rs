@@ -46,7 +46,7 @@ const PARTIALS: u32 = 256;
 /// reduction reads uninitialised scratch.
 const WORKGROUP: u32 = 64;
 
-/// The parameters both passes read. `repr(C)` and 16 bytes, so no padding question arises.
+/// The parameters both passes read. `repr(C)` and 32 bytes, so no padding question arises.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ReduceParams {
@@ -54,6 +54,36 @@ struct ReduceParams {
     height: u32,
     partial_count: u32,
     stage: u32,
+    /// [`Metering`] as the shader numbers it.
+    metering: u32,
+    _pad: [u32; 3],
+}
+
+/// What one number the frame is reduced to.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Metering {
+    /// The mean luminance: what the frame's light adds up to.
+    #[default]
+    Mean,
+    /// The **log-average** (geometric mean): `exp(mean(ln L))`, each texel floored at
+    /// [`LOG_AVERAGE_FLOOR`]. What exposure is metered by (Reinhard's "key", 0.18, is a fraction of
+    /// it): a ratio counts as a ratio, so a few bright windows or a car's lit bumper on a night street
+    /// move it a little, where they would carry the mean — the whole street exposed for them.
+    LogAverage,
+}
+
+/// The darkest luminance [`Metering::LogAverage`] counts, so that a black sky does not drag the
+/// average down without end (`ln 0`): ten stops under middle grey.
+pub const LOG_AVERAGE_FLOOR: f32 = 1e-3;
+
+impl Metering {
+    fn code(self) -> u32 {
+        match self {
+            Self::Mean => 0,
+            Self::LogAverage => 1,
+        }
+    }
 }
 
 /// The GPU-side reduction: pipeline, buffers, and the bind group tying them to one HDR target.
@@ -76,10 +106,12 @@ pub struct LuminanceReduce {
     bind_groups: [wgpu::BindGroup; 2],
     width: u32,
     height: u32,
+    metering: Metering,
 }
 
 impl LuminanceReduce {
-    /// Builds the reduction against an HDR texture view of the given size.
+    /// Builds the reduction against an HDR texture view of the given size, to the frame's mean
+    /// ([`Metering::Mean`]).
     ///
     /// Rebuild — or call [`resize`](Self::resize) — when the target changes size, since the bind
     /// group holds the view and the params hold the dimensions.
@@ -89,6 +121,18 @@ impl LuminanceReduce {
         hdr_view: &wgpu::TextureView,
         width: u32,
         height: u32,
+    ) -> Self {
+        Self::with_metering(device, hdr_view, width, height, Metering::Mean)
+    }
+
+    /// As [`new`](Self::new), reducing the frame to `metering`'s number.
+    #[must_use]
+    pub fn with_metering(
+        device: &wgpu::Device,
+        hdr_view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        metering: Metering,
     ) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("luminance_reduce"),
@@ -156,6 +200,8 @@ impl LuminanceReduce {
                     height,
                     partial_count: PARTIALS,
                     stage: stage as u32,
+                    metering: metering.code(),
+                    _pad: [0; 3],
                 }),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             })
@@ -186,6 +232,7 @@ impl LuminanceReduce {
             bind_groups,
             width,
             height,
+            metering,
         }
     }
 
@@ -238,6 +285,8 @@ impl LuminanceReduce {
                     height,
                     partial_count: PARTIALS,
                     stage: stage as u32,
+                    metering: self.metering.code(),
+                    _pad: [0; 3],
                 }),
             );
         }
@@ -324,6 +373,10 @@ mod tests {
     /// Returns `None` when there is no usable adapter, so the tests skip rather than fail on a
     /// machine without one — the same shape every other GPU test here uses.
     fn reduce(pixels: &[[f32; 3]], w: u32, h: u32) -> Option<f32> {
+        reduce_to(pixels, w, h, Metering::Mean)
+    }
+
+    fn reduce_to(pixels: &[[f32; 3]], w: u32, h: u32, metering: Metering) -> Option<f32> {
         let _gpu = crate::test_gpu::gpu_lock();
         let (device, queue) = pollster::block_on(crate::test_gpu::headless_device())?;
 
@@ -372,7 +425,7 @@ mod tests {
         );
         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let r = LuminanceReduce::new(&device, &view, w, h);
+        let r = LuminanceReduce::with_metering(&device, &view, w, h, metering);
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("luma_test"),
         });
@@ -464,5 +517,49 @@ mod tests {
             got.is_finite() && (got - 0.25).abs() < 0.01,
             "one infinite texel gave {got}; it should be skipped, leaving ~0.25"
         );
+    }
+
+    /// **The log-average is the geometric mean.** Half the frame at 0.1 and half at 1.0: the mean is
+    /// 0.55, the log-average √0.1 ≈ 0.316 — what exposure is metered by, where a ratio counts as one.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_log_average_is_the_geometric_mean() {
+        let mut px = vec![[1.0f32, 1.0, 1.0]; 64 * 64];
+        for p in px.iter_mut().take(64 * 32) {
+            *p = [0.1, 0.1, 0.1];
+        }
+        let Some(got) = reduce_to(&px, 64, 64, Metering::LogAverage) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        assert!((got - 0.1f32.sqrt()).abs() < 0.01, "half 0.1, half 1.0 reduced to {got}, not √0.1");
+    }
+
+    /// **A few bright texels carry the mean, not the log-average.** A dark street (0.05) with 2 % of it
+    /// lit at 50 — windows, a lamp, a bumper under headlights: the mean goes up twentyfold (1.05), so an
+    /// exposure metered by it would darken the whole street for them; the log-average moves 15 %
+    /// (0.057). And a black frame reduces to the floor, not to `ln 0`.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_few_bright_texels_carry_the_mean_and_not_the_log_average() {
+        let mut px = vec![[0.05f32, 0.05, 0.05]; 64 * 64];
+        for (i, p) in px.iter_mut().enumerate() {
+            if i % 50 == 0 {
+                *p = [50.0, 50.0, 50.0];
+            }
+        }
+        let bright = px.iter().filter(|p| p[0] > 1.0).count() as f32 / px.len() as f32;
+        let Some(mean) = reduce_to(&px, 64, 64, Metering::Mean) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let log = reduce_to(&px, 64, 64, Metering::LogAverage).expect("the adapter was there a moment ago");
+        let want_mean = 0.05 * (1.0 - bright) + 50.0 * bright;
+        let want_log = (0.05f32.ln() * (1.0 - bright) + 50.0f32.ln() * bright).exp();
+        assert!((mean - want_mean).abs() < 0.02 * want_mean, "the mean: {mean}, not {want_mean}");
+        assert!((log - want_log).abs() < 0.02 * want_log, "the log-average: {log}, not {want_log}");
+        assert!(mean > 15.0 * log, "the bright texels carry the mean ({mean}) and not the log-average ({log})");
+        let black = reduce_to(&vec![[0.0f32; 3]; 64 * 64], 64, 64, Metering::LogAverage).expect("adapter");
+        assert!((black - LOG_AVERAGE_FLOOR).abs() < 1e-4, "a black frame reduces to the floor: {black}");
     }
 }

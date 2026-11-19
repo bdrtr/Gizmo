@@ -9,9 +9,10 @@
 //! So every step stays on the GPU. Each frame, after the scene is in the HDR target and before
 //! tone mapping:
 //!
-//! 1. [`LuminanceReduce`](crate::luminance::LuminanceReduce) writes the mean luminance;
+//! 1. [`LuminanceReduce`](crate::luminance::LuminanceReduce) writes the frame's **log-average**
+//!    luminance ([`Metering::LogAverage`](crate::luminance::Metering::LogAverage));
 //! 2. one compute invocation (`shaders/auto_exposure.wgsl`) moves the exposure toward
-//!    `key / mean`, in stops, at a frame-rate-independent rate, and stores it;
+//!    `key / log-average`, in stops, at a frame-rate-independent rate, and stores it;
 //! 3. the composite pass multiplies by it, after `Camera::exposure` — which therefore becomes
 //!    exposure *compensation* while this is on.
 //!
@@ -28,15 +29,15 @@
 //! bit-identical to one rendered without this module. Native only: the browser's reduced post
 //! shader has no exposure stage to feed, and WebGL2 has no storage buffers in fragment shaders.
 
-use crate::luminance::LuminanceReduce;
+use crate::luminance::{LuminanceReduce, Metering};
 use wgpu::util::DeviceExt;
 
 /// How the exposure is chosen and how fast it follows.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AutoExposureSettings {
-    /// The mean luminance the frame is exposed to — 0.18, "middle grey", by default. Raise it
-    /// for a brighter picture overall.
+    /// The log-average luminance the frame is exposed to — 0.18, "middle grey", by default, as
+    /// Reinhard defines the key. Raise it for a brighter picture overall; a night scene wants it low.
     pub key: f32,
     /// How fast, per second, the exposure follows when the scene gets **brighter** (exposure
     /// going down). Higher is faster; 3.0 closes ~95 % of the gap in one second.
@@ -111,7 +112,7 @@ impl AutoExposureState {
         height: u32,
         composite_layout: &wgpu::BindGroupLayout,
     ) -> Self {
-        let reduce = LuminanceReduce::new(device, hdr_view, width, height);
+        let reduce = LuminanceReduce::with_metering(device, hdr_view, width, height, Metering::LogAverage);
         let settings = AutoExposureSettings::default();
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("auto_exposure_params"),
@@ -326,6 +327,44 @@ mod tests {
             wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
         );
         texture
+    }
+
+    /// Half of a frame at `dark` (the top rows) and half at `light`.
+    fn split_texture(device: &wgpu::Device, queue: &wgpu::Queue, dark: f32, light: f32) -> wgpu::Texture {
+        let texture = grey_texture(device, queue, None, light);
+        let h = half_bits(dark);
+        let texel = [h, h, h, half_bits(1.0)];
+        let data: Vec<u8> = (0..W * H / 2).flat_map(|_| texel.iter().flat_map(|v| v.to_le_bytes())).collect();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &data,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(W * 8), rows_per_image: Some(H / 2) },
+            wgpu::Extent3d { width: W, height: H / 2, depth_or_array_layers: 1 },
+        );
+        texture
+    }
+
+    /// **Exposure is metered by the log-average**, as the key is defined (Reinhard): half the frame at
+    /// 0.1 and half at 1.0 snaps to 0.18 / √0.1 = 0.569. Metered by the mean (0.55) it was 0.327 — the
+    /// bright half deciding for the whole frame, which on a night street is its windows and its lamps.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn exposure_is_metered_by_the_log_average() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        pollster::block_on(async {
+            let Some((device, queue)) = crate::test_gpu::headless_device().await else {
+                eprintln!("skipping: no usable GPU adapter");
+                return;
+            };
+            let bgl = crate::post_process::exposure_layout(&device);
+            let hdr = split_texture(&device, &queue, 0.1, 1.0);
+            let view = hdr.create_view(&Default::default());
+            let mut ae = AutoExposureState::new(&device, &view, W, H, &bgl);
+            ae.enabled = true;
+            let e = step(&device, &queue, &mut ae, 0.1);
+            let want = 0.18 / 0.1f32.sqrt();
+            assert!((e - want).abs() < 0.01, "metered by the log-average, {want}; got {e} (the mean's would be 0.327)");
+        });
     }
 
     /// f32 → IEEE half, for the positive normal values these tests use.

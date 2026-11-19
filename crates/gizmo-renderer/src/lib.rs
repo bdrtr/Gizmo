@@ -138,6 +138,7 @@ mod irradiance_bake;
 pub mod lightmap_bake;
 pub mod lightmap_uv;
 pub mod luminance;
+pub mod local_exposure;
 /// Per-object motion: last frame's model matrices and the G-buffer velocity target.
 pub mod motion;
 /// Reflection probes: the scene captured into a prefiltered cube for specular lighting.

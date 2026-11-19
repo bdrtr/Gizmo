@@ -665,8 +665,11 @@ impl Renderer {
             post_params_bind_group: post_res.post_params_bind_group,
             exposure: post_res.exposure,
             velocity: post_res.velocity,
+            local: post_res.local,
         };
 
+        // Built, not enabled, as auto exposure: the frame is the authored one until a scene asks.
+        let local_exposure = post_state.local.as_ref().map(|l| crate::local_exposure::LocalExposureState::new(&device, &l.layout));
         // Built, not enabled: an authored exposure stays authored until the scene asks.
         let auto_exposure = post_state.exposure.as_ref().map(|e| {
             crate::auto_exposure::AutoExposureState::new(
@@ -732,6 +735,7 @@ impl Renderer {
             smaa,
             cas,
             auto_exposure,
+            local_exposure,
             previous_view_proj: None,
             reflection_probe: None,
             motion_history: Default::default(),
