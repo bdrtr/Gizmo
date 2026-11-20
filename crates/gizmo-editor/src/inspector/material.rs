@@ -136,6 +136,7 @@ pub fn draw_material_section(
                         slider(ui, key, "thickness", "Thickness (m):", &mut mat.thickness, 0.0..=2.0, "Işığın içinde aldığı yol: arkadaki görüntü bu kadar kırılır. 0 = ince cam.");
                         tint_row(ui, key, "attenuation_color", "Absorption tint:", &mut mat.attenuation_color);
                         slider(ui, key, "attenuation_distance", "Absorption distance (m):", &mut mat.attenuation_distance, 0.0..=20.0, "Işığın bu mesafede soğurma rengine indiği uzaklık. 0 = soğurma yok.");
+                        slider(ui, key, "porosity", "Porosity:", &mut mat.porosity, 0.0..=1.0, "Yağmurun ne kadarının içine işlediği. 1 = asfalt, beton: ıslanınca koyulaşır, birikinti tutar. 0 = boya, cam, metal: koyulaşmaz, su üstünde boncuklanır.");
 
                         ui.separator();
 
