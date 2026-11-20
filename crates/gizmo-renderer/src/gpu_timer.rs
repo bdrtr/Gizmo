@@ -16,8 +16,9 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
-/// Timestamps a frame can hold.
-const CAPACITY: u32 = 64;
+/// Timestamps a frame can hold: every view's marks (a split screen's, a probe face's), about thirty
+/// each. Past it a mark is dropped, and with it the time of what it would have closed.
+const CAPACITY: u32 = 256;
 /// Frames in flight between a frame's resolve and its read-back.
 const SLOTS: usize = 3;
 

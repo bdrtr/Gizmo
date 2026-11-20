@@ -50,6 +50,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The GPU timer marks the shadow maps and the screen-space reflections stage by stage.**
+  - `gpu.shadow_maps` (the sun's cascades and the local lights' layers) now lies inside `gpu.shadows`, which
+    keeps the rain map.
+  - `gpu.seen`, `gpu.ssr_prepare`, `gpu.ssr_march`, `gpu.ssr_blur` and `gpu.ssr_apply` lie inside
+    `gpu.surface_effects`, which keeps the SSGI.
+  - A frame holds 256 marks, up from 64: past it a mark was dropped, and with it the time of what it closed,
+    which every view's thirty-odd marks would soon have reached.
+  - A wet drive in `nfsu2-gizmo`: the cascades 1.0 ms and the rain map 0.3 (the cars alone cast there), and
+    the reflections' march 0.9 ms of their 1.9.
+
 - **The frame's GPU timer marks the post-processing stage by stage.** `gpu.exposure` (auto and local
   exposure), `gpu.bloom` and `gpu.composite` now lie inside what `gpu.post` held whole. `gpu.post` keeps what
   follows: the edge filters and the overlay. `post_process::run_post_processing` is now `run_bloom`, then
@@ -391,6 +401,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   WebGPU's 16, which nothing did.
 
 ### Changed
+
+- **The bloom's extract blurs along X on the way.** The bright part used to be written whole into its own
+  target and read back by the first horizontal blur: a full frame's write and read. Now `fs_bright_extract`
+  takes the first round's horizontal blur straight off the frame. A tap between two pixels weighs the bright
+  parts of both as bilinear filtering did, and the frame's edge clamps as the sampler clamped.
+  - The sums are the same: `bloom_radius_and_iterations_widen_the_halo`'s rings read alike to the last
+    digit, at a radius of 1.5 over two rounds too.
+  - That test now holds the halo continuous in the radius: radius 1.99 must spread it as 2 does. Rounding a
+    fractional tap to a pixel read 90.15 against 94.73 and fails it.
+  - A wet drive in `nfsu2-gizmo`: bloom 1.3 → 0.9 ms.
 
 - **The reflective baked-lit pass writes the surfaces' velocity as it shades them.** The forward motion pass
   drew every forward-drawn surface a second time, only to write how it moved. In a baked-lit city that is as

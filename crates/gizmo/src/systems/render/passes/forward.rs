@@ -88,6 +88,8 @@ pub fn record_forward_and_fluid(
         // (GPU Particles artık AYRI bir pass'te — aşağıda — soft-particle derinlik örneklemesi için.)
         drop(render_pass);
         renderer.gpu_mark(encoder, "gpu.forward");
+        // Marked inside, stage by stage (`gpu.seen`, `gpu.ssr_prepare`, `gpu.ssr_march`, `gpu.ssr_blur`,
+        // `gpu.ssr_apply`); `gpu.surface_effects` is what is left, the SSGI.
         super::screen_space::record_surface_effects(encoder, renderer);
         renderer.gpu_mark(encoder, "gpu.surface_effects");
         // The parts of what blends, each to a GPU mark of its own: `gpu.blended`, which the frame's

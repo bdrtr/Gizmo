@@ -845,13 +845,21 @@ pub fn run_post_processing(
 pub fn run_bloom(renderer: &crate::Renderer, encoder: &mut wgpu::CommandEncoder) {
     #[cfg(gizmo_forward_only)]
     let _ = (renderer, encoder);
-    // Pass 1: Bright Extract (WASM'da KAPALI)
+    // The blur's steps (`bloom_radius` spreads the taps), which the extract's horizontal blur reads too.
+    #[cfg(not(gizmo_forward_only))]
+    {
+        let [h, v] = blur_steps(renderer.config.width, renderer.config.height, renderer.bloom_radius);
+        renderer.queue.write_buffer(&renderer.post.blur_params_buffer, 0, bytemuck::cast_slice(&h));
+        renderer.queue.write_buffer(&renderer.post.blur_v_params_buffer, 0, bytemuck::cast_slice(&v));
+    }
+    // Pass 1: the bright part, blurred along X on the way (`fs_bright_extract`): the first round's
+    // horizontal blur, into the blur target. (WASM'da KAPALI)
     #[cfg(not(gizmo_forward_only))]
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bloom Extract Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.post.bloom_extract_texture_view,
+                view: &renderer.post.bloom_blur_texture_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -868,20 +876,14 @@ pub fn run_bloom(renderer: &crate::Renderer, encoder: &mut wgpu::CommandEncoder)
         pass.set_bind_group(2, &renderer.post.post_params_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
-    // Pass 2: the separable blur, horizontal then vertical, `bloom_iterations` times (WASM'da
-    // KAPALI). Each round widens the halo by about the kernel's reach again, so three rounds reach
-    // roughly √3 as far as one; `bloom_radius` spreads the taps themselves.
+    // Pass 2: the separable blur, horizontal then vertical, `bloom_iterations` times — the first round's
+    // horizontal half already done by the extract (WASM'da KAPALI). Each round widens the halo by about
+    // the kernel's reach again, so three rounds reach roughly √3 as far as one.
     #[cfg(not(gizmo_forward_only))]
-    {
-        let [h, v] = blur_steps(renderer.config.width, renderer.config.height, renderer.bloom_radius);
-        renderer.queue.write_buffer(&renderer.post.blur_params_buffer, 0, bytemuck::cast_slice(&h));
-        renderer.queue.write_buffer(&renderer.post.blur_v_params_buffer, 0, bytemuck::cast_slice(&v));
-    }
-    #[cfg(not(gizmo_forward_only))]
-    for _ in 0..renderer.bloom_iterations.clamp(1, 8) {
+    for round in 0..renderer.bloom_iterations.clamp(1, 8) {
         // Pass 2a: Yatay Blur (WASM'da KAPALI)
         #[cfg(not(gizmo_forward_only))]
-        {
+        if round > 0 {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Bloom Blur Horizontal"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

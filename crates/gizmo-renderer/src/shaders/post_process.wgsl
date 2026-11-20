@@ -166,11 +166,36 @@ fn local_exposure(colour: vec3<f32>, uv: vec2<f32>, exposure: f32) -> vec3<f32> 
 // ============================
 // Pass 1: Bright Extract
 // ============================
+// The bright part, blurred along X on the way: the first round's horizontal blur (`fs_blur`'s taps and
+// weights, `blur_params` stepping along X) taken straight off the frame, rather than off a copy of the
+// bright part written whole and read back — a full frame's write and read, of 1.3 ms of bloom (a wet
+// drive in `nfsu2-gizmo`, 1080p, AMD 780M). A tap that falls between two pixels takes the bright parts
+// of both, weighted as bilinear filtering weighed them in the copy, at the frame's edge clamped as its
+// sampler clamped: the same sums.
 @fragment
 fn fs_bright_extract(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(t_source, s_source, in.uv);
-    return vec4<f32>(bright_part(color.rgb), 1.0);
+    let dims = vec2<i32>(textureDimensions(t_source));
+    let pixel = vec2<i32>(in.position.xy);
+    // Texels between taps (`post_process::blur_steps`).
+    let step = blur_params.direction.x * f32(dims.x);
+    var result = vec3<f32>(0.0);
+    for (var k = -4; k <= 4; k++) {
+        let at = f32(k) * step;
+        let left = floor(at);
+        let f = at - left;
+        let x = pixel.x + i32(left);
+        var tap = bright_part(textureLoad(t_source, vec2<i32>(clamp(x, 0, dims.x - 1), pixel.y), 0).rgb);
+        if (f > 0.0) {
+            let right = bright_part(textureLoad(t_source, vec2<i32>(clamp(x + 1, 0, dims.x - 1), pixel.y), 0).rgb);
+            tap = mix(tap, right, f);
+        }
+        result += tap * BLUR_WEIGHTS[abs(k)];
+    }
+    return vec4<f32>(result, 1.0);
 }
+
+// `fs_blur`'s weights, from the middle tap out.
+const BLUR_WEIGHTS = array<f32, 5>(0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
 
 // The share of a colour that blooms.
 fn bright_part(color: vec3<f32>) -> vec3<f32> {

@@ -5,13 +5,31 @@ use super::super::*;
 /// through. Added after everything until 2026-11-11, so a pane 98 % opaque took the floor's reflection
 /// behind it at full strength. The cost is that the reflection no longer shows what blends: it is a
 /// reflection of the opaque frame, which is what every screen-space reflection reads.
-pub fn record_surface_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) {
+///
+/// `renderer`'s GPU timer marks each stage; it is taken out for the while, as the stages borrow the rest.
+pub fn record_surface_effects(encoder: &mut wgpu::CommandEncoder, renderer: &mut Renderer) {
+    let mut timer = renderer.gpu_timer.take();
+    let mut mark = |encoder: &mut wgpu::CommandEncoder, label: &'static str| {
+        if let Some(timer) = timer.as_mut() {
+            timer.mark(encoder, label);
+        }
+    };
+    record_surface_effects_marked(encoder, renderer, &mut mark);
+    renderer.gpu_timer = timer;
+}
+
+fn record_surface_effects_marked(
+    encoder: &mut wgpu::CommandEncoder,
+    renderer: &Renderer,
+    mark: &mut dyn FnMut(&mut wgpu::CommandEncoder, &'static str),
+) {
     // ── How much of the G-buffer's surface the frame shows ─────────────────────
     // SSR and SSGI belong to that surface and are added after the opaque forward draws, so in
     // proportion to it: not over an unlit or baked-lit surface, or a game's own pipeline, drawn in
     // front of it.
     if let Some(def) = renderer.deferred.as_ref().filter(|_| surface_effects_on(renderer)) {
         def.record_seen(encoder, renderer.scene.view_bind_group());
+        mark(encoder, "gpu.seen");
     }
 
     // ── SSR: Screen Space Reflections ───────────────────────────────────────────
@@ -20,6 +38,7 @@ pub fn record_surface_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Ren
         let frame = renderer.taa.as_ref().filter(|t| t.enabled).map_or(0, |t| t.frame_index);
         ssr.upload(&renderer.queue, frame);
         ssr.record_prepare(encoder);
+        mark(encoder, "gpu.ssr_prepare");
 
         // Pass 1: SSR Raymarch
         {
@@ -47,9 +66,11 @@ pub fn record_surface_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Ren
             }
             pass.draw(0..3, 0..1);
         }
+        mark(encoder, "gpu.ssr_march");
 
         // Pass 2: the glossy resolve, spreading each reflection over its surface's lobe.
         ssr.record_blur(encoder, renderer.scene.view_bind_group());
+        mark(encoder, "gpu.ssr_blur");
 
         // Pass 3: SSR Apply (Additive blend into HDR texture)
         {
@@ -73,6 +94,7 @@ pub fn record_surface_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Ren
             pass.set_bind_group(0, &ssr.apply_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
+        mark(encoder, "gpu.ssr_apply");
     }
 
     // ── SSGI: Screen Space Global Illumination ────────────────────────────────

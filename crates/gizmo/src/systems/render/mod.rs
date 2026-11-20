@@ -1940,6 +1940,8 @@ fn draw_camera_view_with(
             setup.draws_cascades().then_some(&setup.cascade_view_projs),
             setup.local_shadows.layers(),
         );
+        // The sun's cascades and the local lights' layers; the rain map is `gpu.shadows`, after.
+        renderer.gpu_mark(encoder, "gpu.shadow_maps");
         let (rain_passes, rain_instances) = match rain_map {
             Some((view_proj, _)) => {
                 renderer.scene.rain_map.write(&renderer.queue, view_proj, cam_pos, elapsed_time);
@@ -16359,14 +16361,21 @@ mod golden_render_tests {
             let (base, centre) = halo(1.0, 1, 0.8).await;
             let (wide, _) = halo(3.0, 1, 0.8).await;
             let (soft, _) = halo(1.0, 4, 0.8).await;
-            // Measured (horizontal / vertical arm): no bloom 61.29 / 61.31, default 67.99 / 67.99
-            // (centre 255), radius 3 132.80 / 132.82, four rounds 101.02 / 101.03. Caught: either
-            // step never rewritten (that arm stays at the default's) and the rounds ignored.
+            // The halo grows with the radius smoothly, not in steps: at 2 every tap falls on a pixel, at
+            // 1.99 every one but the middle falls between two, and each must weigh both. The extract's
+            // horizontal blur (`fs_bright_extract`) taking the nearer one alone read 90.15 there.
+            let (two, _) = halo(2.0, 1, 0.8).await;
+            let (under, _) = halo(1.99, 1, 0.8).await;
+            // Measured (horizontal / vertical arm), 2026-11-21: no bloom 59.16 / 59.15, default 65.95 /
+            // 65.94 (centre 255), radius 3 131.60 / 131.60, four rounds 99.49 / 99.50, radius 2 94.73 /
+            // 94.71 and 1.99 94.61 / 94.60. Caught: either step never rewritten (that arm stays at the
+            // default's), the rounds ignored, and a fractional tap rounded to a pixel.
             assert!(centre > 250.0, "the cube is saturated: {centre:.1}");
             for (axis, name) in [(0, "horizontal"), (1, "vertical")] {
                 assert!(base[axis] > none[axis] + 3.0, "the default bloom reaches the {name} arm: {none:?} → {base:?}");
                 assert!(wide[axis] > base[axis] + 20.0, "radius 3 spreads the {name} arm: {base:?} → {wide:?}");
                 assert!(soft[axis] > base[axis] + 10.0, "four rounds spread the {name} arm: {base:?} → {soft:?}");
+                assert!((two[axis] - under[axis]).abs() < 1.0, "radius 1.99 spreads the {name} arm as 2 does: {under:?} against {two:?}");
             }
         });
     }
