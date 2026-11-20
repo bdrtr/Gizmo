@@ -241,7 +241,7 @@ threshold, 4 steps against 64 differ on 2755 pixels with a largest delta of 6 â€
 and the test now asserts that shape instead of a difference it will never have.
 
 *(the plan as written)* **Effect parameters.** `VolumetricState` exposes textures, views, pipelines and dimensions â€” not
-one shaping field. Phase 0.55, 16 steps, a 100 m cap, sun scatter 0.0015, bulb 0.0008, bias 0.16
+one shaping field. Phase 0.55, 16 steps, a 100 m cap, sun scatter 0.0015, bulb 0.0005 (0.0008 until 2026-11-20, under the windowed air falloff the inverse square replaced), bias 0.16
 are all shader literals. A `VolumetricParams` uniform is mechanical work with a measured payoff:
 the effect already moves 19.55 % of pixels, max 134, and none of it is reachable.
 

@@ -27,9 +27,16 @@ pub struct VolumetricParams {
     pub max_distance: f32,
     /// Scattering coefficient for the directional light. Shader default **0.0015**.
     pub sun_scatter: f32,
-    /// Scattering coefficient for the local lights — point, spot and rectangle — inside their
-    /// radius, where each reaches the air: a spot's cone and cookie, a rectangle's lit side, and
-    /// past the light's shadow when it casts one. Shader default **0.0008**.
+    /// Scattering coefficient for the local lights — point, spot and rectangle — per metre of air:
+    /// what of each reaches a point of the air as it would reach a surface there (the inverse square,
+    /// windowed at the radius), through a spot's cone and cookie, on a rectangle's lit side and past
+    /// the light's shadow when it casts one, scattered towards the camera by the phase function.
+    /// Default **0.0005**, a thin haze: a light of intensity 40 seen a metre off gives its air a halo of
+    /// about 0.04 (`I · σ · phase · π / b`), and a camera standing in a light of 60 — a reflection probe at
+    /// a room's lamp — air of about 0.6 down every ray, as the windowed `(1 − d/r)²` this replaced gave
+    /// with its 0.0008 (2026-11-20). Matching that falloff's air two metres from a light instead took
+    /// 0.04, a fog: every ray near a light went white. A light of a real lamp's intensity (a thousand)
+    /// wants about the default.
     pub bulb_scatter: f32,
     /// How far past a shadow map's stored depth a point of the air is compared, in metres (times
     /// `ShadowSettings::depth_bias`), so that a march step landing on a surface is not shadowed by
@@ -46,7 +53,7 @@ impl Default for VolumetricParams {
             steps: 16.0,
             max_distance: 100.0,
             sun_scatter: 0.0015,
-            bulb_scatter: 0.0008,
+            bulb_scatter: 0.0005,
             shadow_bias: 0.16,
             _pad: [0.0; 2],
         }

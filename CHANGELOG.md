@@ -286,6 +286,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The volumetric light's local lights scatter by the inverse square, through the phase function, and only
+  from their cluster.** A point, spot or rectangle light lit the air by `(1 − d/r)²` inside its radius — no
+  inverse square, no phase — so a lamp lit the air nearly as brightly a radius off as at the bulb, and
+  `nfsu2-gizmo`'s street of lamps (each a thousand-odd at 13 m, as their surfaces need) filled the frame with
+  fog: the median went 13 → 113 at the faintest scatter. Now a light's air is what it gives a surface there
+  (the inverse square, windowed at the radius), scattered towards the camera by the Henyey-Greenstein phase as
+  the sun's is; the inverse square integrated over each step's stretch of the ray exactly
+  (`∫ du/(b² + u²)`), and the rest — window, phase, cone, cookie, shadow — taken at a point of the stretch drawn
+  by it (equiangular sampling, Kulla & Fajardo 2012) and turned each frame for TAA to average. A ray passing a
+  bulb gathers its halo whatever its step; sampled evenly, a sky ray's 6 m steps missed it. The stretches tile
+  the ray (`[k·step, (k+1)·step]`), are cut at the veil for the front/behind split, and end short of the
+  surface by the shadow's bias for a light that casts — `a_lamp_behind_a_wall_lights_no_air_in_front_of_it`
+  went from 6.4 of 1 250 to 0. The march walks only its cluster's lights (the clustered lists, on the global
+  group), skips a light whose sphere misses the stretch, and skips the sun's cascades when `sun_scatter` is 0.
+  `VolumetricParams::bulb_scatter` defaults to **0.0005**, a thin haze (0.0008 under the old falloff; matching that
+  falloff's air two metres from a light took 0.04, a fog that turned every ray near a light white). The inverse
+  square keeps `light_falloff`'s 10 cm core, so a camera standing in a light — a reflection probe at a lamp — sees
+  air, not an infinite halo. Tests re-measured where they encoded the old falloff's spread: the parameter test's
+  bulb value (0.03, sixty times the default, as 0.05 was),
+  the wide spot's outer thirds (0.18 of the middle, from 0.2), the smoke's numbers.
+
 - **Auto exposure is metered by the frame's log-average, not its mean.** Its key, 0.18, is Reinhard's, and his key is
   a fraction of the log-average luminance; the engine measured the arithmetic mean instead, where a few bright pixels
   carry the number — on a night street, its lit windows and a bumper under headlights darkened the whole street for

@@ -7659,7 +7659,7 @@ mod golden_render_tests {
                 p.steps = 16.0;
                 p.max_distance = 100.0;
                 p.sun_scatter = 0.0015;
-                p.bulb_scatter = 0.0008;
+                p.bulb_scatter = 0.0005;
                 p.shadow_bias = 0.16;
             })
             .await;
@@ -7738,7 +7738,8 @@ mod golden_render_tests {
             // The bulb loop needs a bulb. Both runs have the lamp; the only difference is the
             // coefficient, so a lit scene cannot pass this by being lit.
             let bulb_base = render_sunbeam_full(true, true, |_| {}).await;
-            let bulb_moved = render_sunbeam_full(true, true, |p| p.bulb_scatter = 0.05).await;
+            // Sixty times the default, as 0.05 was of the 0.0008 the default was until 2026-11-20.
+            let bulb_moved = render_sunbeam_full(true, true, |p| p.bulb_scatter = 0.03).await;
             let (changed, total) = changed_pixels(&bulb_base, &bulb_moved, 128);
             assert!(
                 changed >= 1500,
@@ -7856,6 +7857,12 @@ mod golden_render_tests {
         renderer.ssgi = None;
         renderer.ssr = None;
         renderer.enable_volumetric();
+        // These tests ask where the air is — in a cone, short of a wall's shadow, behind a pane — not how
+        // thick: they see it at 0.04, eighty times the engine's thin default, so that what they measure
+        // stands well clear of the frame's own.
+        if let Some(air) = renderer.volumetric.as_mut() {
+            air.params.bulb_scatter = 0.04;
+        }
         renderer
     }
 
@@ -8014,7 +8021,9 @@ mod golden_render_tests {
                 (open_l - open_r).abs() < 0.1 * (open_l + open_r),
                 "an open cone's air is symmetric: {open_l:.4} / {open_r:.4}"
             );
-            assert!(open_l > 0.2 * open_m, "a wide cone's air reaches the outer thirds: {open_l:.4} of {open_m:.4}");
+            // 0.18 of the middle under the inverse square (2026-11-20): the outer thirds look past the cone
+            // further from the bulb than the middle does. The narrow cone's are 0.
+            assert!(open_l > 0.1 * open_m, "a wide cone's air reaches the outer thirds: {open_l:.4} of {open_m:.4}");
 
             // The slab over +X: which third that is on screen is not this test's question, so the
             // darker side is compared with the lit one.
@@ -8782,8 +8791,9 @@ mod golden_render_tests {
             eprintln!("(front, behind): clear {clear:?}, smoke {smoke:?}, wall {wall:?}");
             assert!(clear.1 == 0.0 && wall.1 == 0.0, "with nothing that blends, no air is behind it: {clear:?} / {wall:?}");
             assert!(clear.0 > wall.0 * 1.5, "the setup: the lamp's air reaches past the wall ({clear:?} against {wall:?})");
-            // Measured: clear (138.74, 0), smoke (52.10, 86.64), wall (49.65, 0) — the smoke's quads
-            // stand a little off the wall's face, and its gaps let some through.
+            // Measured: clear (741.83, 0), smoke (366.09, 370.41), wall (334.12, 0) — the smoke's quads
+            // stand a little off the wall's face, and its gaps let some through. (Under the windowed air
+            // falloff before 2026-11-20: 138.74, 52.10 + 86.64, 49.65.)
             assert!(
                 ((smoke.0 + smoke.1) - clear.0).abs() < 0.01 * clear.0,
                 "the split moves the air and does not make or lose it: {} + {} against {}",
@@ -19122,20 +19132,27 @@ fn material_surface(input: SurfaceInput) -> Surface {
         );
         world.add_component(floor, MeshRenderer::new());
 
+        // The white light ranks last — the camera is outside its 3 m — so it fills the array's last slot;
+        // the others are dark and tiny, a hand's breadth in front of the camera, nearer, so they rank
+        // first. They sit in depth slices of their own, far from the white light's pool: each cluster
+        // holds a few of them or the white light alone, inside the 32 a cluster keeps. (They stood all at
+        // one point until 2026-11-20, and the white light was the 256th of one cluster: no surface shader
+        // reached it, and only the volumetric light — walking the whole array — kept this test green.)
         let n = crate::renderer::MAX_LIGHTS;
-        for i in 0..n {
-            let lit = white_last && i == n - 1;
+        let white = world.spawn();
+        world.add_component(white, Transform::new(Vec3::new(0.0, 0.5, 0.0)));
+        world.add_component(white, GlobalTransform::default());
+        world.add_component(
+            white,
+            crate::renderer::components::PointLight::new(if white_last { Vec3::ONE } else { Vec3::ZERO }, 40.0, 3.0),
+        );
+        let (eye, ahead) = (Vec3::new(-5.0, 2.0, 0.0), Vec3::new(0.35f32.cos(), -0.35f32.sin(), 0.0));
+        for i in 0..n - 1 {
+            let (u, v) = ((i % 16) as f32 / 15.0 - 0.5, (i / 16) as f32 / 15.0 - 0.5);
             let e = world.spawn();
-            world.add_component(e, Transform::new(Vec3::new(0.0, 0.5, 0.0)));
+            world.add_component(e, Transform::new(eye + ahead * 1.5 + Vec3::Z * (u * 0.8) + Vec3::Y * (v * 0.5)));
             world.add_component(e, GlobalTransform::default());
-            world.add_component(
-                e,
-                crate::renderer::components::PointLight::new(
-                    if lit { Vec3::ONE } else { Vec3::ZERO },
-                    40.0,
-                    8.0,
-                ),
-            );
+            world.add_component(e, crate::renderer::components::PointLight::new(Vec3::ZERO, 40.0, 0.05));
         }
 
         world.spawn_bundle(CameraBundle {
@@ -19269,7 +19286,8 @@ fn material_surface(input: SurfaceInput) -> Surface {
             assert!(
                 changed >= 2_000,
                 "a light in slot MAX_LIGHTS-1 changed {changed}/{total} pixels — the shaders are \
-                 not reading the end of the array they declare (measured 11631)",
+                 not reading the end of the array they declare (measured 3004; 11631 before 2026-11-20, \
+                 most of it the volumetric light's air)",
             );
         });
     }
