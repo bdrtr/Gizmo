@@ -293,6 +293,19 @@ impl GpuParticleSystem {
         self.set_flipbook(device, queue, &rgba, size, size, tiles);
     }
 
+    /// Where the particles alive now can be, as a box (its two corners): spanned by where each was born
+    /// and where its speed could take it over its life, since the set was last idle. `None` while it is
+    /// idle. What the frame's level of detail measures a camera's distance from — not the world's origin,
+    /// which a city or a level far from it would have stood every particle past.
+    #[must_use]
+    pub fn region(&self) -> Option<(gizmo_math::Vec3, gizmo_math::Vec3)> {
+        let c = self.clock.lock().ok()?;
+        if c.idle() {
+            return None;
+        }
+        c.region.map(|(lo, hi)| (gizmo_math::Vec3::from_array(lo), gizmo_math::Vec3::from_array(hi)))
+    }
+
     /// Whether nothing spawned so far can still be alive — no spawn yet, or the elapsed time is
     /// past the end of the longest-lived particle ever spawned.
     ///
@@ -368,7 +381,16 @@ impl GpuParticleSystem {
 
         if let Ok(mut c) = self.clock.lock() {
             let longest = new_particles.iter().map(|p| p.max_life).fold(0.0f32, f32::max);
-            c.spawned(longest);
+            // Where these can be over their lives: where each starts, and where its speed could take it.
+            let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+            for p in new_particles {
+                for k in 0..3 {
+                    let end = p.position[k] + p.velocity[k] * p.max_life.max(0.0);
+                    lo[k] = lo[k].min(p.position[k]).min(end);
+                    hi[k] = hi[k].max(p.position[k]).max(end);
+                }
+            }
+            c.spawned(longest, (lo, hi));
         }
 
         let count = new_particles.len() as u32;
@@ -732,11 +754,21 @@ struct ParticleClock {
     now: f32,
     /// `None` until the first spawn: a set nothing was ever put into is idle.
     quiet_after: Option<f32>,
+    /// Where the particles spawned since the set was last idle can be ([`GpuParticleSystem::region`]).
+    region: Option<([f32; 3], [f32; 3])>,
 }
 
 impl ParticleClock {
-    /// A spawn at the current time whose longest-lived particle lives `max_life` seconds.
-    fn spawned(&mut self, max_life: f32) {
+    /// A spawn at the current time whose longest-lived particle lives `max_life` seconds, its particles
+    /// within `bounds` over their lives. A spawn into an idle set starts the region again.
+    fn spawned(&mut self, max_life: f32, bounds: ([f32; 3], [f32; 3])) {
+        self.region = match self.region.filter(|_| !self.idle()) {
+            Some((lo, hi)) => Some((
+                std::array::from_fn(|k| lo[k].min(bounds.0[k])),
+                std::array::from_fn(|k| hi[k].max(bounds.1[k])),
+            )),
+            None => Some(bounds),
+        };
         // A frame of slack, so the frame a particle dies on is still drawn.
         let end = self.now + max_life.max(0.0) + 0.1;
         self.quiet_after = Some(self.quiet_after.map_or(end, |q| q.max(end)));
@@ -751,19 +783,32 @@ impl ParticleClock {
 mod clock_tests {
     use super::ParticleClock;
 
+    const HERE: ([f32; 3], [f32; 3]) = ([0.0; 3], [1.0; 3]);
+
     #[test]
     fn idle_until_the_first_spawn_and_after_the_last_particle_dies() {
         let mut c = ParticleClock::default();
         assert!(c.idle(), "nothing spawned yet");
         c.now = 10.0;
-        c.spawned(2.0);
+        c.spawned(2.0, HERE);
         assert!(!c.idle());
-        c.spawned(0.5); // a shorter one later does not cut the longer one short
+        c.spawned(0.5, HERE); // a shorter one later does not cut the longer one short
         c.now = 12.0;
         assert!(!c.idle(), "the 2 s particle is still alive");
         c.now = 12.2;
         assert!(c.idle(), "everything spawned has died");
-        c.spawned(1.0);
+        c.spawned(1.0, HERE);
         assert!(!c.idle(), "a new spawn wakes it");
+    }
+
+    #[test]
+    fn the_region_grows_with_the_spawns_and_starts_again_after_idle() {
+        let mut c = ParticleClock::default();
+        c.spawned(1.0, ([500.0, 0.0, 400.0], [501.0, 2.0, 401.0]));
+        c.spawned(1.0, ([490.0, 0.0, 405.0], [491.0, 1.0, 406.0]));
+        assert_eq!(c.region, Some(([490.0, 0.0, 400.0], [501.0, 2.0, 406.0])), "a car's trail: the region spans it");
+        c.now = 5.0;
+        c.spawned(1.0, ([0.0; 3], [1.0; 3]));
+        assert_eq!(c.region, Some(([0.0; 3], [1.0; 3])), "after the last died, it starts again where the next is born");
     }
 }

@@ -452,6 +452,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Particles far from the world's origin reach the frame.** The GPU simulations' level of detail measured a
+  camera's distance from fixed points near the world's origin: the particles' from (0, 0, 0), the fluid's from
+  (0, 5, 0). A camera 200 m from the origin drew no particle at all, wherever the particles were, so a city a few
+  hundred metres off the origin, as `nfsu2-gizmo`'s is, had none in any street; a tank built elsewhere was likewise
+  measured from the wrong place.
+  - The particles are now measured from where they are: `GpuParticleSystem::region`, the box where the particles
+    born since the set was last idle can be over their lives. It grows with a car's trail and starts again after
+    the last one dies.
+  - The fluid is measured from its own box (`FluidSettings::bounds_min`/`bounds_max`).
+
+  `particles_far_from_the_worlds_origin_reach_the_frame`: particles 480 m out, seen from 10 m, are drawn. Measured
+  from the origin, 0 of 16,384 pixels changed.
+
 - **A lit particle is lit by the lights round it (`GpuParticleSystem::lit`).** A lit particle — smoke, dust, spray
   — took a fixed 0.4 of ambient and the sun, and no local light at all. So a night street's mist glowed grey
   everywhere, no brighter by its lamps or a car's headlights. Now it takes:

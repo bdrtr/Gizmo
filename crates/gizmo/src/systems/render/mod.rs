@@ -1297,8 +1297,12 @@ fn step_gpu_simulations_ahead(world: &World, renderer: &mut Renderer, detail: Si
 }
 
 /// The share of the particles and of the fluid one camera standing at `position` asks for: less the
-/// farther it stands from the particles' origin and from the fluid's tank.
-fn detail_from(position: Vec3) -> (f32, f32) {
+/// farther it stands from where the particles are (`GpuParticleSystem::region`; `None` takes them as
+/// beside it) and from the fluid's tank (its box, `FluidSettings::bounds_min`/`bounds_max`). Both were
+/// measured from fixed points near the world's origin until 2026-11-20, so a camera 200 m from it drew
+/// no particle at all, wherever they were: a city a few hundred metres off the origin, as
+/// `nfsu2-gizmo`'s is, had none in any street.
+fn detail_from(position: Vec3, particles: Option<(Vec3, Vec3)>, fluid: (Vec3, Vec3)) -> (f32, f32) {
     let by_distance = |distance: f32, steps: [f32; 3]| {
         if distance < steps[0] {
             1.0
@@ -1310,10 +1314,11 @@ fn detail_from(position: Vec3) -> (f32, f32) {
             0.0
         }
     };
-    const FLUID_TANK: Vec3 = Vec3::new(0.0, 5.0, 0.0);
+    // How far `position` stands from the box `lo`–`hi`: 0 inside it.
+    let to_box = |(lo, hi): (Vec3, Vec3)| (lo - position).max(position - hi).max(Vec3::ZERO).length();
     (
-        by_distance(position.length(), [50.0, 100.0, 200.0]),
-        by_distance((position - FLUID_TANK).length(), [40.0, 80.0, 150.0]),
+        by_distance(particles.map_or(0.0, to_box), [50.0, 100.0, 200.0]),
+        by_distance(to_box(fluid), [40.0, 80.0, 150.0]),
     )
 }
 
@@ -1351,12 +1356,17 @@ fn step_gpu_simulations(
 
     // Every view is simulated for: the nearest camera sets the level of detail. One camera — the
     // ordinary frame — gives exactly what that camera alone always gave.
+    let particles_at = renderer.gpu_particles.as_ref().and_then(|p| p.region());
+    let tank = renderer.gpu_fluid.as_ref().map_or((Vec3::ZERO, Vec3::ZERO), |f| {
+        let s = f.settings();
+        (Vec3::from_array(s.bounds_min), Vec3::from_array(s.bounds_max))
+    });
     let (particle_share, fluid_share) = match detail {
         SimulationDetail::Full => (1.0, 1.0),
-        SimulationDetail::NearestOf([]) => detail_from(Vec3::ZERO),
+        SimulationDetail::NearestOf([]) => detail_from(Vec3::ZERO, particles_at, tank),
         SimulationDetail::NearestOf(cameras) => cameras
             .iter()
-            .map(|&p| detail_from(p))
+            .map(|&p| detail_from(p, particles_at, tank))
             .fold((0.0f32, 0.0f32), |(p0, f0), (p1, f1)| (p0.max(p1), f0.max(f1))),
     };
     // No fluid unless the scene has one, whoever asks for how much: its settings hold no particles
@@ -19435,6 +19445,59 @@ fn material_surface(input: SurfaceInput) -> Surface {
                 changed >= 40,
                 "an emitter spawning 400 particles a second changed {changed}/{total} pixels over                  ten frames — nothing is reaching the frame (measured 197)",
             );
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no GPU particles.
+    /// **Particles far from the world's origin reach the frame.** Particles born 480 m out along x, seen
+    /// from 10 m off: they are drawn. The frame's level of detail measured a camera's distance from the
+    /// world's origin rather than from the particles, and past 200 m of it drew none — every street of a
+    /// city a few hundred metres off the origin, as `nfsu2-gizmo`'s is (`detail_from`,
+    /// `GpuParticleSystem::region`).
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn particles_far_from_the_worlds_origin_reach_the_frame() {
+        use crate::renderer::gpu_particles::GpuParticle;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(spawn: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            world.spawn_bundle(CameraBundle { position: Vec3::new(470.0, 2.0, 0.0), yaw: 0.0, pitch: 0.0, primary: true, ..Default::default() });
+            let particles = renderer.gpu_particles.as_mut().expect("the desktop path has GPU particles");
+            particles.gravity = 0.0;
+            if spawn {
+                let batch: Vec<GpuParticle> = (0..25)
+                    .map(|k| GpuParticle {
+                        position: [480.0, 1.0 + (k / 5) as f32 * 0.5, (k % 5) as f32 * 0.5 - 1.0],
+                        life: 50.0,
+                        velocity: [0.0; 3],
+                        max_life: 100.0,
+                        color: [1.0, 0.6, 0.2, 1.0],
+                        size_start: 0.3,
+                        size_end: 0.3,
+                        _padding: [0.0; 2],
+                    })
+                    .collect();
+                particles.spawn_particles(&renderer.queue, &batch);
+            }
+            let mut last = Vec::new();
+            for _ in 0..3 {
+                last = render_world(&mut renderer, &mut world).await;
+            }
+            last
+        }
+        pollster::block_on(async {
+            let (with, without) = (frame(true).await, frame(false).await);
+            let (changed, total) = changed_pixels(&with, &without, 128);
+            // 0 measured from the world's origin.
+            assert!(changed > 100, "particles 480 m out, seen from 10 m: {changed}/{total} pixels");
         });
     }
 
