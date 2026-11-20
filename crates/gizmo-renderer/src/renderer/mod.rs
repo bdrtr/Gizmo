@@ -1451,19 +1451,30 @@ impl Renderer {
         if let Some(cas) = self.cas.as_mut() {
             cas.ensure_input(&self.device);
         }
+        // The GPU timer's marks between the stages: `gpu.exposure`, `gpu.bloom`, `gpu.composite`; what
+        // follows — the edge filters and the overlay — is the caller's to mark.
+        self.gpu_mark(encoder, "gpu.exposure");
+        crate::post_process::run_bloom(self, encoder);
+        self.gpu_mark(encoder, "gpu.bloom");
+        {
+            let smaa = self.smaa.as_ref();
+            let fxaa = self.fxaa.as_ref().filter(|f| f.enabled && smaa.is_none());
+            let cas = self.cas.as_ref().filter(|c| c.enabled);
+            let after_composite = smaa
+                .map(|s| &s.input_texture_view)
+                .or(fxaa.map(|f| &f.input_texture_view))
+                .or(cas.map(|c| &c.input_texture_view));
+            crate::post_process::run_composite(
+                self,
+                encoder,
+                after_composite.unwrap_or(output_view),
+                if after_composite.is_some() { None } else { region },
+            );
+        }
+        self.gpu_mark(encoder, "gpu.composite");
         let smaa = self.smaa.as_ref();
         let fxaa = self.fxaa.as_ref().filter(|f| f.enabled && smaa.is_none());
         let cas = self.cas.as_ref().filter(|c| c.enabled);
-        let after_composite = smaa
-            .map(|s| &s.input_texture_view)
-            .or(fxaa.map(|f| &f.input_texture_view))
-            .or(cas.map(|c| &c.input_texture_view));
-        crate::post_process::run_post_processing(
-            self,
-            encoder,
-            after_composite.unwrap_or(output_view),
-            if after_composite.is_some() { None } else { region },
-        );
         if let Some(smaa) = smaa {
             match cas {
                 Some(cas) => crate::smaa::run_smaa_pass(smaa, encoder, &cas.input_texture_view, None),

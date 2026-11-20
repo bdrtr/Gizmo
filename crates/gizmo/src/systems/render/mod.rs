@@ -9184,7 +9184,7 @@ mod golden_render_tests {
             let deferred = motion("deferred", false).await;
             eprintln!("deferred cube: {deferred:?}");
             assert!(deferred[0].abs() > 0.01, "the setup: a cube lit through the G-buffer writes its motion ({deferred:?})");
-            for kind in ["unlit", "baked-lit"] {
+            for kind in ["unlit", "baked-lit", "baked-lit reflective"] {
                 let forward = motion(kind, false).await;
                 let hidden = motion(kind, true).await;
                 eprintln!("{kind} cube: {forward:?}; behind the wall {hidden:?}");
@@ -9223,7 +9223,7 @@ mod golden_render_tests {
             // written either way, but the cube's last-frame model is neither looked up, kept nor
             // uploaded without a reader — so it holds the still camera's motion, none, rather than
             // the cube's (or, as it briefly did, the projection of a zero matrix: −∞).
-            for kind in ["unlit", "baked-lit", "deferred"] {
+            for kind in ["unlit", "baked-lit", "baked-lit reflective", "deferred"] {
                 let unread = forward_motion(kind, false, false).await;
                 assert_eq!(unread, [0.0, 0.0], "a cube drawn {kind} wrote its motion {unread:?} with nothing to read it");
                 let read = forward_motion(kind, false, true).await;
@@ -9235,13 +9235,20 @@ mod golden_render_tests {
     #[cfg(not(gizmo_forward_only))]
     /// The mean screen-UV motion across the middle of the frame, after a cube drawn `kind` moved 30 cm
     /// in front of a still wall; `behind` puts it behind the wall. TAA and SSR are off; `reader` gives
-    /// the camera motion blur, which reads the velocity.
+    /// the camera motion blur, which reads the velocity. `baked-lit reflective`: a baked-lit cube with
+    /// SSR on, which draws it through the reflective pass (`BakedRoute::Reflective`) — where it writes
+    /// its velocity as it is shaded, and the forward motion pass leaves it out.
     async fn forward_motion(kind: &str, behind: bool, reader: bool) -> [f32; 2] {
         {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
-            // None of the velocity's readers but the one `reader` asks for: TAA and SSR are off.
+            // None of the velocity's readers but the one `reader` asks for: TAA is off, and SSR, which
+            // does not read it, but for the reflective route it chooses.
             renderer.taa = None;
-            renderer.ssr = None;
+            if kind == "baked-lit reflective" {
+                renderer.ssr.as_mut().expect("the deferred path has screen-space reflections").enabled = true;
+            } else {
+                renderer.ssr = None;
+            }
             let mut world = World::new();
             let mut assets = AssetManager::new();
             let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);

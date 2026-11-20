@@ -827,7 +827,8 @@ pub fn blur_steps(width: u32, height: u32, radius: f32) -> [[f32; 4]; 2] {
     [[r / width.max(1) as f32, 0.0, 0.0, 0.0], [0.0, r / height.max(1) as f32, 0.0, 0.0]]
 }
 
-/// Runs the post-processing render passes in order.
+/// Runs the post-processing render passes in order: the bloom ([`run_bloom`]), then the composite
+/// ([`run_composite`]).
 #[tracing::instrument(skip_all, level = "trace")]
 pub fn run_post_processing(
     renderer: &crate::Renderer,
@@ -835,6 +836,15 @@ pub fn run_post_processing(
     output_view: &wgpu::TextureView,
     region: Option<[f32; 4]>,
 ) {
+    run_bloom(renderer, encoder);
+    run_composite(renderer, encoder, output_view, region);
+}
+
+/// The bloom: the frame's bright parts, extracted and blurred into the texture the composite reads. The
+/// forward-only path has none.
+pub fn run_bloom(renderer: &crate::Renderer, encoder: &mut wgpu::CommandEncoder) {
+    #[cfg(gizmo_forward_only)]
+    let _ = (renderer, encoder);
     // Pass 1: Bright Extract (WASM'da KAPALI)
     #[cfg(not(gizmo_forward_only))]
     {
@@ -915,6 +925,16 @@ pub fn run_post_processing(
         }
     }
 
+}
+
+/// The composite: the frame with its bloom, exposed, tone-mapped and finished (motion blur, depth of
+/// field, aberration, vignette, grain), into `output_view` — into `region` of it, for a split screen.
+pub fn run_composite(
+    renderer: &crate::Renderer,
+    encoder: &mut wgpu::CommandEncoder,
+    output_view: &wgpu::TextureView,
+    region: Option<[f32; 4]>,
+) {
     // Pass 3: Composite + Tone Mapping
     // Group 4, the G-buffer's velocity, for motion blur: around this frame's target when there is
     // a deferred state, else the 1×1 zero.

@@ -50,6 +50,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The frame's GPU timer marks the post-processing stage by stage.** `gpu.exposure` (auto and local
+  exposure), `gpu.bloom` and `gpu.composite` now lie inside what `gpu.post` held whole. `gpu.post` keeps what
+  follows: the edge filters and the overlay. `post_process::run_post_processing` is now `run_bloom`, then
+  `run_composite`. A wet drive's 2.7 ms of post turned out to be 1.3 ms of bloom, 0.6 of exposure and 0.5 of
+  composite.
+
 - **The volumetric light marches at the resolution it is asked for, upsampled by depth
   (`VolumetricState::set_march_divisor`).** It marched at half the frame's resolution, filtered plainly onto it.
   Now the march's size is a setting (2, half, by default; `nfsu2-gizmo` asks for 4, a sixteenth of the pixels), and
@@ -385,6 +391,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   WebGPU's 16, which nothing did.
 
 ### Changed
+
+- **The reflective baked-lit pass writes the surfaces' velocity as it shades them.** The forward motion pass
+  drew every forward-drawn surface a second time, only to write how it moved. In a baked-lit city that is as
+  many draws as the frame itself: 0.9 ms of a wet drive in `nfsu2-gizmo` (1080p, AMD 780M).
+  - On `BakedRoute::Reflective`, `fs_reflective` now writes RT4 beside RT1, RT2 and RT5, as `fs_motion` does.
+  - Its pipelines take the motion's group at 5, and the motion pass leaves those surfaces out.
+  - The same drive: motion 0.9 → 0 ms, for 0.3 ms more of forward; GPU 15.8 → 15.4 ms.
+  - `what_is_drawn_forward_writes_how_it_moved` covers the route: −0.0764 against the G-buffer's −0.0764.
+    Writing a zero velocity there fails it.
 
 - **The z-prepass lays the solid baked-lit surfaces' depth too, so the forward pass shades each of their
   pixels once.** They were left out on the reasoning that shading an overlap again costs less than drawing

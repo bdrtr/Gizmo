@@ -110,8 +110,8 @@ pub fn record_forward_and_fluid(
     }
 
     // How what was drawn forward and opaque moved, into the G-buffer's velocity, for TAA and motion blur
-    // — when either, or SSR, reads it. It is every forward-drawn surface drawn again: in a baked-lit
-    // city, as many draws as the frame itself.
+    // — when either, or SSR, reads it. It is every forward-drawn surface drawn again, but for the baked-lit
+    // ones the reflective pass drew (`BakedRoute::Reflective`), which wrote theirs as they were shaded.
     if velocity_read {
         record_forward_motion(encoder, renderer, draw_items, uploaded_instances, baked);
         renderer.gpu_mark(encoder, "gpu.motion");
@@ -150,7 +150,9 @@ pub fn record_forward_and_fluid(
 }
 
 /// How each opaque surface drawn forward moved — unlit; a baked-lit one is in the G-buffer where there is
-/// one (`DrawItem::in_gbuffer`) and writes its own — into the G-buffer's velocity, where
+/// one (`DrawItem::in_gbuffer`) and writes its own, and so does one the reflective pass draws
+/// (`record_baked_reflective`, `fs_reflective`'s velocity), where the city of `nfsu2-gizmo` drawn again
+/// for this pass alone took 0.9 ms of a wet drive (1080p, AMD 780M, 2026-11-21) — into the G-buffer's velocity, where
 /// the forward pass left the frame's depth (`fs_motion` in `gbuffer.wgsl`). They write depth and no
 /// G-buffer, so their pixels kept the motion of what stood behind them: TAA reprojected a moving unlit
 /// object as if it stood still, and motion blur left it sharp. Not a sky, a backdrop, the grid, water
@@ -170,6 +172,7 @@ fn record_forward_motion(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer
             && !item.is_water
             && item.mirror.is_none()
             && item.custom.is_none()
+            && !item.drawn_reflective(baked)
             && !item.camera_instance_range(uploaded_instances).is_empty()
     };
     if !draw_items.iter().any(|item| moving(&item)) {
@@ -520,7 +523,8 @@ fn draw_forward_items(
 /// The opaque baked-lit surfaces on [`BakedRoute::Reflective`]: drawn forward (`baked_lit.wgsl`'s
 /// `fs_reflective`) into the frame and, beside it, into the G-buffer's RT1, RT2 and RT5, which is what
 /// screen-space reflections read of them — rather than through the G-buffer's six targets and the
-/// lighting pass, which cost a baked-lit city twice this draw. After the lighting pass, which wrote the
+/// lighting pass, which cost a baked-lit city twice this draw — and into its velocity (RT4), which the
+/// forward motion pass would otherwise draw them all again for. After the lighting pass, which wrote the
 /// background where they stand: their depth decides what shows, as in the forward pass.
 fn record_baked_reflective(
     encoder: &mut wgpu::CommandEncoder,
@@ -551,6 +555,7 @@ fn record_baked_reflective(
             load(&def.normal_roughness_view),
             load(&def.world_position_view),
             load(&def.emissive_view),
+            load(&def.velocity_view),
         ],
         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
             view: &renderer.depth_texture_view,
@@ -565,6 +570,7 @@ fn record_baked_reflective(
     #[cfg(not(gizmo_forward_only))]
     pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
     pass.set_bind_group(BG_INSTANCE, renderer.scene.view_instance_bind_group(), &[]);
+    pass.set_bind_group(5, &def.motion.bind_group, &[]);
     let mut plan = super::plan::PassPlan::default();
     for item in draw_items.iter().filter(drawn) {
         let inst_start = item.first_instance;

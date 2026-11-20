@@ -337,8 +337,8 @@ impl DeferredState {
                     &[("REFLECTION_INPUTS", naga_oil::compose::ShaderDefValue::Bool(true))],
                 );
                 [
-                    Self::create_baked_reflective_pipeline(device, scene, &baked, back, "Baked-Lit Reflective Pipeline"),
-                    Self::create_baked_reflective_pipeline(device, scene, &baked, None, "Baked-Lit Reflective TwoSided Pipeline"),
+                    Self::create_baked_reflective_pipeline(device, scene, motion_layout, &baked, back, "Baked-Lit Reflective Pipeline"),
+                    Self::create_baked_reflective_pipeline(device, scene, motion_layout, &baked, None, "Baked-Lit Reflective TwoSided Pipeline"),
                 ]
             },
             z_prepass: [
@@ -900,23 +900,26 @@ impl DeferredState {
     }
 
     /// `baked_lit.wgsl`'s `fs_reflective` over the forward pass's layout and depth: the HDR target, then
-    /// RT1, RT2 and RT5, which it writes as `fs_baked` does for the reflections to read.
+    /// RT1, RT2 and RT5, which it writes as `fs_baked` does for the reflections to read, and the
+    /// velocity (RT4), with the motion's group at 5 as the G-buffer's pipelines have it.
     fn create_baked_reflective_pipeline(
         device: &wgpu::Device,
         scene: &SceneState,
+        motion_layout: &wgpu::BindGroupLayout,
         shader: &wgpu::ShaderModule,
         cull_mode: Option<wgpu::Face>,
         label: &str,
     ) -> wgpu::RenderPipeline {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Baked-Lit Reflective Pipeline Layout"),
-            // The forward pass's: what `baked_lit.wgsl` is bound with there.
+            // The forward pass's: what `baked_lit.wgsl` is bound with there; and the motion's.
             bind_group_layouts: &[
                 Some(&scene.global_bind_group_layout),
                 Some(&scene.texture_bind_group_layout),
                 Some(&scene.shadow_bind_group_layout),
                 Some(&scene.skeleton_bind_group_layout),
                 Some(&scene.instance_bind_group_layout),
+                Some(motion_layout),
             ],
             immediate_size: 0,
         });
@@ -939,6 +942,7 @@ impl DeferredState {
                     target(GBUFFER_NORMAL_ROUGHNESS_FORMAT),
                     target(GBUFFER_WORLD_POSITION_FORMAT),
                     target(GBUFFER_EMISSIVE_FORMAT),
+                    target(crate::motion::VELOCITY_FORMAT),
                 ],
             }),
             primitive: wgpu::PrimitiveState {

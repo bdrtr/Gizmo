@@ -146,6 +146,19 @@ struct VertexInput {
     @location(7) lightmap_uv: vec2<f32>,
 };
 
+#ifdef REFLECTION_INPUTS
+// The frame's motion, for the velocity `fs_reflective` writes: as the G-buffer's (`gbuffer.wgsl`'s
+// `Motion`, `crate::motion`).
+struct Motion {
+    view_proj: mat4x4<f32>,
+    prev_view_proj: mat4x4<f32>,
+    // x = 1 when `previous_models` holds this frame's instances' last models.
+    objects: vec4<f32>,
+};
+@group(5) @binding(0) var<uniform> motion: Motion;
+@group(5) @binding(1) var<storage, read> previous_models: array<mat4x4<f32>>;
+#endif
+
 struct VertexOutput {
     // Invariant: the z-prepass draws the same surfaces with this vertex stage alone
     // (`SceneState::baked_lit_depth_pipelines`), and the forward draw must meet its depth exactly.
@@ -164,6 +177,11 @@ struct VertexOutput {
     @location(7) inst_cutoff_roughness: vec3<f32>,
     // Where the base colour is (`InstanceRaw::texture.x`, `base_colour`).
     @location(9) @interpolate(flat) base_layer: u32,
+#ifdef REFLECTION_INPUTS
+    // Where it is and where it was, in clip space, for its velocity.
+    @location(10) motion_now: vec4<f32>,
+    @location(11) motion_before: vec4<f32>,
+#endif
 #ifdef SUN_SHADOWS
 #ifdef SUN_SHADOW_PER_VERTEX
     // Where the sun's one cascade sees this point (`sun_shadow_coord`).
@@ -186,6 +204,16 @@ fn vs_main(input: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput 
     let world = model * vec4<f32>(input.position, 1.0);
     out.world_pos = world.xyz;
     out.clip_position = scene.view_proj * world;
+#ifdef REFLECTION_INPUTS
+    // As the G-buffer's vertex stage takes them.
+    out.motion_now = motion.view_proj * world;
+    // `select` takes no matrices.
+    var before_model = model;
+    if (motion.objects.x > 0.5) {
+        before_model = previous_models[i];
+    }
+    out.motion_before = motion.prev_view_proj * (before_model * vec4<f32>(input.position, 1.0));
+#endif
     out.color = input.color;
     out.tex_coords = vec4<f32>(input.tex_coords, input.lightmap_uv);
     out.inst_albedo = inst.albedo_color;
@@ -283,6 +311,8 @@ struct ReflectionInputs {
     @location(1) normal_roughness: vec4<f32>,
     @location(2) position_rel_camera: vec4<f32>,
     @location(3) reflectance: vec4<f32>,
+    // How it moved on screen (RT4): what the forward motion pass drew it a second time for.
+    @location(4) velocity: vec4<f32>,
 };
 
 @fragment
@@ -300,6 +330,10 @@ fn fs_reflective(in: VertexOutput, @builtin(front_facing) front: bool) -> Reflec
     out.position_rel_camera = vec4<f32>(in.world_pos - scene.camera_pos.xyz, BAKED_SURFACE);
     let f0 = dielectric_f0(in.inst_emissive.w);
     out.reflectance = vec4<f32>(0.0, 0.0, 0.0, select(f0, -f0, in.inst_emissive.w < 0.0));
+    // As `gbuffer.wgsl`'s `fs_motion` writes it: the motion in `xy`, nothing of a specular tint in `zw`.
+    let now_ndc = in.motion_now.xy / in.motion_now.w;
+    let before_ndc = in.motion_before.xy / in.motion_before.w;
+    out.velocity = vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 0.0, 0.0);
     return out;
 }
 #endif
