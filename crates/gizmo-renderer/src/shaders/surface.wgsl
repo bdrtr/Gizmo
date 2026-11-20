@@ -120,9 +120,10 @@ fn surface_lobes(inst_pbr: vec4<f32>) -> vec3<f32> {
 
 // ── Rain (`Renderer::wetness`) ─────────────────────────────────────────────────────────────────────
 // What water does to a surface it lies on: darkens what it soaks into and smooths it, and where it
-// stands — a puddle — is a flat mirror over it. The scene's `wetness` (`SceneUniforms::wetness`: x =
-// level, y = how much of the flat ground is under water, z = 1 / a puddle's size in metres) is handed
-// in by the shader that reads it, as this module declares no bindings.
+// stands — a puddle — is a flat mirror over it, rippled by the rain while it falls. The scene's `wetness`
+// (`SceneUniforms::wetness`: x = level, y = how much of the flat ground is under water, z = 1 / a
+// puddle's size in metres, w = the rings falling rain leaves on water, per square metre per second) is
+// handed in by the shader that reads it, as this module declares no bindings.
 
 // What a soaked surface's colour is multiplied by: water fills its pores and it reflects less light
 // back out (Lagarde, "Water drop 2b — Dynamic rain and its effects", 2013).
@@ -160,8 +161,8 @@ fn rain_on(wetness: vec4<f32>, world_position: vec3<f32>, up: f32, exposure: f32
     return vec2<f32>(soaked, puddle);
 }
 
-// The surface as rain leaves it (`rain` from `rain_on`).
-fn wet_surface(s: Surface, rain: vec2<f32>) -> Surface {
+// The surface as rain leaves it (`rain` from `rain_on`, `ripples` from `rain_ripples`).
+fn wet_surface(s: Surface, rain: vec2<f32>, ripples: vec3<f32>) -> Surface {
     var out = s;
     let water = max(rain.x, rain.y);
     if (water <= 0.0) {
@@ -170,9 +171,111 @@ fn wet_surface(s: Surface, rain: vec2<f32>) -> Surface {
     let darkening = wet_darkening(rain);
     out.albedo = s.albedo * darkening;
     out.base_color = s.base_color * darkening;
-    out.roughness = wet_roughness(s.roughness, rain);
-    out.N = normalize(mix(s.N, vec3<f32>(0.0, 1.0, 0.0), rain.y));
+    out.roughness = wet_roughness(s.roughness, rain, ripples);
+    out.N = water_normal(s.N, rain, ripples);
     return out;
+}
+
+// The normal of the water over a surface of normal `n`: a puddle's flat, the rain's rings on it and on a
+// soaked surface's film.
+fn water_normal(n: vec3<f32>, rain: vec2<f32>, ripples: vec3<f32>) -> vec3<f32> {
+    return normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), rain.y) + vec3<f32>(-ripples.x, 0.0, -ripples.y));
+}
+
+// ── The rings falling rain leaves on water ─────────────────────────────────────────────────────────
+// A drop landing in standing water throws out a ring of small waves that spreads and dies. Nothing is
+// simulated: the ground is a grid of cells, a few grids laid over each other, and each cell takes a drop
+// at a time of its own once a period — so that `wetness.w` rings land per square metre per second — at a
+// place of its own near its middle. A ring is a packet of waves a wavelength or two wide behind a front
+// running out at the waves' speed, dying away linearly over its life (a 2-D wave's height falls with the
+// root of its radius, and the water's viscosity takes the rest); it stays inside its cell, so a fragment
+// looks at one cell a grid. What the fragment gets is the water's slope there, which tilts the water's normal.
+//
+// Where a pixel spans more than a wavelength the rings cannot be drawn: their slopes would alias into
+// sparkling noise. They are not dropped, either — water that rain is falling on does not reflect like a
+// mirror however far off. Their slope's variance over the pixel goes into the roughness instead (Toksvig,
+// "Mipmapping Normal Maps", 2005), and a far puddle's reflection blurs as a near one's shimmers.
+const RIPPLE_WAVELENGTH: f32 = 0.03;
+// How fast a ring runs out, m/s, and how long it lasts, s: 22 cm across at the end.
+const RIPPLE_SPEED: f32 = 0.25;
+const RIPPLE_LIFE: f32 = 0.45;
+// A cell's side, m, and how far from its middle its drop lands, of a cell: a ring never leaves its cell.
+const RIPPLE_CELL: f32 = 0.3;
+const RIPPLE_JITTER: f32 = 0.1;
+// Grids laid over each other. A cell holds one ring at a time, so they hold at most
+// `RIPPLE_LAYERS / (RIPPLE_CELL² · RIPPLE_LIFE)` rings a square metre a second, 99; past that the rain
+// saturates them rather than cutting a ring off before it dies (a ring vanishing mid-life blinks).
+const RIPPLE_LAYERS: u32 = 4u;
+// The steepest a fresh ring's waves stand: their slope, height over run.
+const RIPPLE_SLOPE: f32 = 0.25;
+// How much a soaked surface's film ripples, beside a puddle's 1: a millimetre of water carries less.
+const FILM_RIPPLES: f32 = 0.3;
+
+// How wide a pixel is on the ground at a fragment whose position runs `dx`, `dy` across neighbouring
+// pixels (`dpdx`, `dpdy` of it): its longer side, where a slope seen at a glance foreshortens it.
+fn ripple_footprint(dx: vec3<f32>, dy: vec3<f32>) -> f32 {
+    return max(length(dx.xz), length(dy.xz));
+}
+
+// The rain's rings at `world_position` with the clock at `clock` (`SceneUniforms::cascade_params.z`), for
+// a pixel `footprint` metres wide (`ripple_footprint`), on the water `rain` says lies there (`rain_on`'s):
+// x, y = the water's slope along x and z, as the pixel shows it; z = the slope's variance it cannot show.
+fn rain_ripples(wetness: vec4<f32>, world_position: vec3<f32>, clock: f32, footprint: f32, rain: vec2<f32>) -> vec3<f32> {
+    let rate = wetness.w;
+    let weight = rain.y + FILM_RIPPLES * rain.x * (1.0 - rain.y);
+    if (rate <= 0.0 || weight <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let resolved = 1.0 - smoothstep(0.25 * RIPPLE_WAVELENGTH, RIPPLE_WAVELENGTH, footprint);
+    var slope = vec2<f32>(0.0);
+    if (resolved > 0.0) {
+        // Each grid's cells take one drop a period: the layers together, `rate` a square metre a second — no
+        // sooner than the last ring has died.
+        let period = max(f32(RIPPLE_LAYERS) / (RIPPLE_CELL * RIPPLE_CELL * rate), RIPPLE_LIFE);
+        let k = 6.2831853 / RIPPLE_WAVELENGTH;
+        for (var layer = 0u; layer < RIPPLE_LAYERS; layer++) {
+            // Each grid shifted by a golden fraction of a cell, so that no two share their edges.
+            let p = world_position.xz / RIPPLE_CELL + vec2<f32>(0.381966, 0.618034) * f32(layer);
+            let cell = floor(p);
+            let h = ripple_hash(vec3<i32>(vec2<i32>(cell), i32(layer)));
+            let age = fract(clock / period + h.z) * period;
+            if (age >= RIPPLE_LIFE) {
+                continue;
+            }
+            let offset = (p - (cell + 0.5 + (h.xy - 0.5) * 2.0 * RIPPLE_JITTER)) * RIPPLE_CELL;
+            let d = length(offset);
+            // Behind the front, negative: the packet a wavelength behind it, 0.6 of one wide.
+            let x = d - RIPPLE_SPEED * age;
+            let packet = (x + RIPPLE_WAVELENGTH) / (0.6 * RIPPLE_WAVELENGTH);
+            let fade = 1.0 - age / RIPPLE_LIFE;
+            let s = RIPPLE_SLOPE * fade * exp(-packet * packet) * cos(k * x);
+            slope += s * offset / max(d, 1e-4);
+        }
+    }
+    // The slope's mean square over the ground, which the rings' shape gives in closed form, at the rings a
+    // square metre a second the grids hold: per ring of age t, half the peak's square, faded by (1 − t/L)²,
+    // over a band 0.6·λ·√(π/2) wide and 2π·(v·t − λ) long — the packet a wavelength behind the front, so
+    // nothing until v·t = λ. With w₀ = 1 − λ/(v·L), ∫ (1 − t/L)² (v·t − λ) dt from λ/v to L is
+    // v·L²·(w₀³/3 − w₀⁴/4) − λ·L·w₀³/3. Within 7 % of the field's own, sampled (0.000346 at 60 a second).
+    let held = min(rate, f32(RIPPLE_LAYERS) / (RIPPLE_CELL * RIPPLE_CELL * RIPPLE_LIFE));
+    let w0 = 1.0 - RIPPLE_WAVELENGTH / (RIPPLE_SPEED * RIPPLE_LIFE);
+    let band = RIPPLE_SPEED * RIPPLE_LIFE * RIPPLE_LIFE * (w0 * w0 * w0 / 3.0 - w0 * w0 * w0 * w0 / 4.0)
+        - RIPPLE_WAVELENGTH * RIPPLE_LIFE * w0 * w0 * w0 / 3.0;
+    let variance = held * 0.5 * RIPPLE_SLOPE * RIPPLE_SLOPE * 6.2831853 * 0.6 * RIPPLE_WAVELENGTH * 1.2533141 * band;
+    return vec3<f32>(slope * resolved * weight, variance * weight * weight * (1.0 - resolved));
+}
+
+// Three uniform numbers for a cell of a grid (PCG).
+fn ripple_hash(i: vec3<i32>) -> vec3<f32> {
+    var v = bitcast<vec3<u32>>(i) * 1664525u + vec3<u32>(1013904223u);
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v = v ^ (v >> vec3<u32>(16u));
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    return vec3<f32>(v) * (1.0 / 4294967296.0);
 }
 
 // What rain multiplies a surface's colour by.
@@ -180,10 +283,13 @@ fn wet_darkening(rain: vec2<f32>) -> f32 {
     return mix(1.0, WET_DARKENING, max(rain.x, rain.y));
 }
 
-// A roughness as rain leaves it: no rougher than it was.
-fn wet_roughness(roughness: f32, rain: vec2<f32>) -> f32 {
+// A roughness as rain leaves it: no rougher than it was, but for the rain's rings too fine for the pixel
+// (`ripples.z`), whose slopes' variance joins the microfacets' — `α² + σ²`, with `α` = roughness².
+fn wet_roughness(roughness: f32, rain: vec2<f32>, ripples: vec3<f32>) -> f32 {
     let soaked = min(roughness, mix(roughness, WET_ROUGHNESS, rain.x));
-    return mix(soaked, min(soaked, PUDDLE_ROUGHNESS), rain.y);
+    let still = mix(soaked, min(soaked, PUDDLE_ROUGHNESS), rain.y);
+    let a = still * still;
+    return sqrt(sqrt(a * a + ripples.z));
 }
 
 // Two octaves of value noise over the ground, in [0, 1].

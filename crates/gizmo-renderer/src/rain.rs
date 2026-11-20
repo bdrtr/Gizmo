@@ -54,6 +54,12 @@ pub struct Rainfall {
     pub splash_size: f32,
     /// How long a splash lasts, seconds.
     pub splash_life: f32,
+    /// The rings the rain leaves on standing water, per square metre per second: a puddle's rippling, and a
+    /// soaked surface's film's, less ([`Wetness`](crate::frame_uniforms::Wetness) says where water lies).
+    /// 0 for none; at most 99 (`RIPPLE_LAYERS` in `surface.wgsl`), past which they saturate. Every drop of a
+    /// real rain rings the water — a moderate rain's 5 mm an hour is some 300 drops a square metre a second
+    /// —, most of them too small to see.
+    pub ripples: f32,
 }
 
 impl Default for Rainfall {
@@ -71,6 +77,7 @@ impl Default for Rainfall {
             splash_cell: 0.5,
             splash_size: 0.12,
             splash_life: 0.3,
+            ripples: 60.0,
         }
     }
 }

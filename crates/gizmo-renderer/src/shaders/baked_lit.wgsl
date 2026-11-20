@@ -11,7 +11,7 @@
 // its own. On the web schema that group does not exist (the 4-bind-group limit), and there the
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
 #import gizmo::common::{SceneUniforms, height_fog, instance_keeps, BAKED_SUN_SHARE}
-#import gizmo::surface::{rain_on, wet_darkening, wet_roughness, WATER_F0}
+#import gizmo::surface::{rain_on, rain_ripples, ripple_footprint, water_normal, wet_darkening, wet_roughness, WATER_F0}
 #import gizmo::common::{compute_direct_lighting, dielectric_f0}
 #ifdef RAIN_MAP
 #import gizmo::common::{rain_exposure}
@@ -250,7 +250,10 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, axes: ReceiverA
 
 @fragment
 fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return shade(in, rain_at(in.world_pos, in.world_normal), front);
+    // How wide a pixel is on the ground, for the rain's rings — taken before any pixel of the quad discards.
+    let ripple_px = ripple_footprint(dpdx(in.world_pos), dpdy(in.world_pos));
+    let rain = rain_at(in.world_pos, in.world_normal);
+    return shade(in, rain, rain_ripples(scene.wetness, in.world_pos, scene.cascade_params.z, ripple_px, rain), front);
 }
 
 // The scene's rain on a fragment (`rain_on`), kept off what is under cover where there is a rain map —
@@ -281,13 +284,15 @@ struct ReflectionInputs {
 
 @fragment
 fn fs_reflective(in: VertexOutput, @builtin(front_facing) front: bool) -> ReflectionInputs {
+    let ripple_px = ripple_footprint(dpdx(in.world_pos), dpdy(in.world_pos));
     let rain = rain_at(in.world_pos, in.world_normal);
+    let ripples = rain_ripples(scene.wetness, in.world_pos, scene.cascade_params.z, ripple_px, rain);
     var out: ReflectionInputs;
-    out.colour = shade(in, rain, front);
+    out.colour = shade(in, rain, ripples, front);
     let n = normalize(select(-in.world_normal, in.world_normal, front));
     out.normal_roughness = vec4<f32>(
-        normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), rain.y)),
-        wet_roughness(in.inst_cutoff_roughness.y, rain),
+        water_normal(n, rain, ripples),
+        wet_roughness(in.inst_cutoff_roughness.y, rain, ripples),
     );
     out.position_rel_camera = vec4<f32>(in.world_pos - scene.camera_pos.xyz, BAKED_SURFACE);
     let f0 = dielectric_f0(in.inst_emissive.w);
@@ -445,10 +450,10 @@ fn baked_light_term(
 }
 #endif
 
-// The surface's colour, fogged, with its alpha; `rain` is `rain_on`'s.
+// The surface's colour, fogged, with its alpha; `rain` is `rain_on`'s, `ripples` `rain_ripples`'s.
 // `front`: whether the fragment is its triangle's front, the side its normal is on — a double-sided surface
 // seen from behind is lit on the side the camera sees, as the G-buffer route lights it (`fs_baked`).
-fn shade(in: VertexOutput, rain: vec2<f32>, front: bool) -> vec4<f32> {
+fn shade(in: VertexOutput, rain: vec2<f32>, ripples: vec3<f32>, front: bool) -> vec4<f32> {
     // The surface's normal and how it runs across neighbouring pixels, for the sun's shadow
     // (`receiver_axes`) — taken first, before any pixel of the quad discards.
 #ifdef SUN_SHADOWS
@@ -529,11 +534,11 @@ fn shade(in: VertexOutput, rain: vec2<f32>, front: bool) -> vec4<f32> {
     let water = max(rain.x, rain.y);
     if (water > 0.0 || scene.unbaked_lights > 0u) {
         let surface_n = normalize(select(-in.world_normal, in.world_normal, front));
-        let water_n = normalize(mix(surface_n, vec3<f32>(0.0, 1.0, 0.0), rain.y));
+        let water_n = water_normal(surface_n, rain, ripples);
         shaded += baked_surface_lights(
-            in.world_pos, surface_n, base, wet_roughness(in.inst_cutoff_roughness.y, rain),
+            in.world_pos, surface_n, base, wet_roughness(in.inst_cutoff_roughness.y, rain, ripples),
             vec3<f32>(dielectric_f0(in.inst_emissive.w)), water, water_n,
-            wet_roughness(in.inst_cutoff_roughness.y, rain), vis, in.inst_emissive.w >= 0.0,
+            wet_roughness(in.inst_cutoff_roughness.y, rain, ripples), vis, in.inst_emissive.w >= 0.0,
 #ifdef LOCAL_LIGHT_MAPS
 #ifndef LOCAL_SHADOW_TAP
             surface_axes,

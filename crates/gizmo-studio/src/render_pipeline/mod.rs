@@ -123,6 +123,7 @@ fn draw_studio_frame(
                 fog: renderer.fog,
                 sky: renderer.sky,
                 wetness: renderer.wetness,
+                rainfall: renderer.rainfall,
                 // The editor draws no rain map: in its views the rain falls everywhere it falls.
                 rain_map: None,
                 ..Default::default()
@@ -885,6 +886,7 @@ fn record_game_view(
                 fog: renderer.fog,
                 sky: renderer.sky,
                 wetness: renderer.wetness,
+                rainfall: renderer.rainfall,
                 // The editor draws no rain map: in its views the rain falls everywhere it falls.
                 rain_map: None,
                 ..Default::default()

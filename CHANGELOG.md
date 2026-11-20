@@ -50,6 +50,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rain falling ripples the water it falls on (`Rainfall::ripples`, `rain_ripples` in `surface.wgsl`).** While
+  `Renderer::rainfall` falls, a puddle is no longer a still mirror: each drop that lands in it throws out a ring of
+  small waves that spreads and dies, and a soaked surface's film ripples at 0.3 of that. Nothing is simulated.
+  - The ground is four grids of 30 cm cells laid over each other; each cell takes a drop at a time and place of its
+    own, so that `ripples` rings land per square metre per second (60 by default, at most 99, past which they
+    saturate rather than cut a ring off mid-life).
+  - A ring is a packet of 3 cm waves running out at 0.25 m/s for 0.45 s, fading as it goes. The fragment gets the
+    water's slope, which tilts its normal on every path that wets a surface (forward, G-buffer, baked-lit, and the
+    inputs a baked surface writes for the reflections — one `water_normal`, where each had its own copy).
+  - Where a pixel spans more than a wavelength the rings are not drawn: their slopes would alias into sparkle.
+    Their variance over the pixel goes into the roughness instead (Toksvig, 2005), in closed form within 7 % of the
+    field's own, sampled. A far puddle's reflection blurs where a near one's shimmers.
+
+  `rain_ripples_the_water_it_falls_on_and_still_water_is_a_mirror` reads the G-buffer back. Without rain falling,
+  every texel of a puddle faces straight up. With it, seen from 60 cm, 925 of 16,384 texels tilt and the 12,593
+  within 75 cm keep still water's roughness. Seen across 25 m and more, all 584 texels still face up and their
+  roughness is 0.134. Drawing the rings however wide the pixel, 36 of those texels tilt; without the variance, none
+  roughens. On `nfsu2-gizmo`'s wet night the G-buffer pass takes 0.7 ms with or without them (AMD 780M).
+
 - **Rain falling and splashing (`Renderer::rainfall`, `gizmo_renderer::rain`).** What `Renderer::wetness` does to
   surfaces, this does to the air. Streaks fall round the camera: each drop is its instance index, a point of a box
   round the camera moved down with the clock, so nothing is simulated or uploaded. A drop is drawn along where it

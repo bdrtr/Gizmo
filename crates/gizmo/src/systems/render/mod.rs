@@ -1767,6 +1767,7 @@ fn draw_camera_view_with(
                 fog: renderer.fog,
                 sky: renderer.sky,
                 wetness: renderer.wetness,
+                rainfall: renderer.rainfall,
                 rain_map,
             },
             // The forward-only path draws the sun's cascade and the local lights' layers unless a game
@@ -5622,15 +5623,18 @@ mod golden_render_tests {
         }
         let changed = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(p, q)| p[..3] != q[..3]).count();
         // Dense, so that a lamp's 1.5 m holds a few hundred drops; and no air light, so that an unlit drop adds
-        // nothing.
+        // nothing. No rings on the water: the open floor's film ripples in the sun, which is the water's, not
+        // the drops' (`rain_ripples_the_water_it_falls_on_and_still_water_is_a_mirror`).
         let mut drops = Rainfall::default();
         drops.drops = 100_000;
         drops.box_size = [24.0, 10.0, 24.0];
         drops.ambient = 0.0;
         drops.splash_cells = 0;
+        drops.ripples = 0.0;
         let mut splashes = Rainfall::default();
         splashes.drops = 0;
         splashes.ambient = 0.0;
+        splashes.ripples = 0.0;
         pollster::block_on(async {
             // A lamp 1.5 m up, reaching 1.5 m: its air is all under the roof, between the roof and the floor.
             let (lamp, reach) = (Vec3::new(7.0, 1.5, 0.0), 1.5);
@@ -5659,6 +5663,98 @@ mod golden_render_tests {
                     assert!(n > 40, "in the open the rain splashes on the floor in the lamp's light: {n} pixels changed");
                 }
             }
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // Reads the G-buffer.
+    /// **Rain ripples the water it falls on, and still water is a mirror** (`rain_ripples` in `surface.wgsl`,
+    /// `Rainfall::ripples`). A floor under water, the G-buffer read back. With no rain falling the puddle is
+    /// flat: every texel's normal straight up, its roughness still water's. With rain falling, seen from 60 cm
+    /// above, the rings tilt the water's normal where they run and leave its roughness alone — the pixel
+    /// shows them. Seen across 25 m and more, where a pixel spans more than a ring's wavelength, the water's
+    /// normal stays up — no sparkle of aliased rings — and its roughness rises by the rings' slopes it cannot
+    /// show: a far puddle's reflection blurs.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn rain_ripples_the_water_it_falls_on_and_still_water_is_a_mirror() {
+        use crate::renderer::rain::Rainfall;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // Each texel's roughness, normal and distance from the camera, from a camera at `eye` pitched `pitch`.
+        async fn frame(eye: Vec3, pitch: f32, raining: bool) -> Vec<(f32, Vec3, f32)> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            renderer.wetness = Some(crate::renderer::Wetness::new(1.0).with_puddles(1.0));
+            // The rings alone: no streaks or splashes drawn over the frame (they are not in the G-buffer anyway).
+            renderer.rainfall = raining.then(|| {
+                let mut rain = Rainfall::default();
+                rain.drops = 0;
+                rain.splash_cells = 0;
+                rain
+            });
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(200.0, 0.1, 200.0)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(white.clone()).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.8, 0.0));
+            world.add_component(e, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle { position: eye, yaw: 0.0, pitch, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await;
+            let def = renderer.deferred.as_ref().expect("the desktop path keeps a G-buffer");
+            let half = |t: &[u8], i: usize| f16_bits_to_f32(u16::from_le_bytes([t[2 * i], t[2 * i + 1]]));
+            let rough = read_target(&renderer, &def.normal_roughness_tex, 128).await;
+            let place = read_target(&renderer, &def.world_position_tex, 128).await;
+            rough
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .zip(place.as_chunks::<8>().0)
+                .map(|(r, p)| {
+                    let at = Vec3::new(half(p, 0), half(p, 1), half(p, 2));
+                    (half(r, 3).abs(), Vec3::new(half(r, 0), half(r, 1), half(r, 2)), at.length())
+                })
+                .collect()
+        }
+        pollster::block_on(async {
+            // From 60 cm, looking nearly straight down: a pixel of the floor is half a centimetre.
+            let (eye, pitch) = (Vec3::new(0.0, 0.6, 0.0), -1.3);
+            let (still, rain) = (frame(eye, pitch, false).await, frame(eye, pitch, true).await);
+            // Under water in the still frame: a puddle's roughness.
+            let water: Vec<usize> = (0..still.len()).filter(|&i| still[i].0 < 0.031 && still[i].2 < 2.0).collect();
+            assert!(water.len() > 8000, "the floor near by is under water: {} texels", water.len());
+            let flat = water.iter().filter(|&&i| still[i].1.y > 0.9999).count();
+            assert_eq!(flat, water.len(), "still water is flat: {flat} of {} texels", water.len());
+            let tilted = water.iter().filter(|&&i| rain[i].1.y < 0.999).count();
+            // Within 75 cm a pixel is under a quarter of a ring's wavelength, and shows every ring it holds.
+            let close: Vec<usize> = water.iter().copied().filter(|&i| still[i].2 < 0.75).collect();
+            let smooth = close.iter().filter(|&&i| rain[i].0 < 0.035).count();
+            eprintln!("NEAR water {} tilted {tilted} close {} smooth {smooth}", water.len(), close.len());
+            assert!(tilted * 30 > water.len(), "the rain's rings tilt the water: {tilted} of {} texels", water.len());
+            assert!(close.len() > 2000 && smooth == close.len(), "and, seen close, leave it as smooth: {smooth} of {} texels", close.len());
+
+            // Low, looking along the floor: 25 m off and more, a pixel spans decimetres.
+            let (eye, pitch) = (Vec3::new(0.0, 1.2, 0.0), -0.08);
+            let (still, rain) = (frame(eye, pitch, false).await, frame(eye, pitch, true).await);
+            let far: Vec<usize> = (0..still.len()).filter(|&i| still[i].0 < 0.031 && still[i].2 > 25.0 && still[i].2 < 150.0).collect();
+            assert!(far.len() > 200, "the floor far off is under water: {} texels", far.len());
+            let up = far.iter().filter(|&&i| rain[i].1.y > 0.999).count();
+            let blurred = far.iter().filter(|&&i| rain[i].0 > 0.1).count();
+            eprintln!("FAR water {} up {up} blurred {blurred} roughness {:?}", far.len(), far.first().map(|&i| rain[i].0));
+            assert_eq!(up, far.len(), "far off the rings are not drawn to alias: {up} of {} texels face up", far.len());
+            assert_eq!(blurred, far.len(), "but they roughen the water: {blurred} of {} texels past 0.1", far.len());
         });
     }
 

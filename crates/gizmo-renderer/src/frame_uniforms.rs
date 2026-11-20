@@ -201,6 +201,9 @@ pub struct EnvironmentFrame {
     pub sky: Option<Sky>,
     /// Rain on the scene (`Renderer::wetness`); `None` is dry.
     pub wetness: Option<Wetness>,
+    /// Rain falling (`Renderer::rainfall`), which ripples the water [`wetness`](Self::wetness) leaves
+    /// standing; `None`: none falls, and the water is still.
+    pub rainfall: Option<crate::rain::Rainfall>,
     /// The rain map this frame drew (`crate::rain_map`): its matrix and its resolution. `None`: no map,
     /// and the rain falls everywhere it falls.
     pub rain_map: Option<(Mat4, u32)>,
@@ -411,9 +414,10 @@ impl Wetness {
         self
     }
 
-    /// As the scene uniform holds it: x = level, y = puddles, z = 1 / puddle size, w unused.
-    pub(crate) fn uniform(self) -> [f32; 4] {
-        [self.level.clamp(0.0, 1.0), self.puddles.clamp(0.0, 1.0), 1.0 / self.puddle_size.max(0.01), 0.0]
+    /// As the scene uniform holds it: x = level, y = puddles, z = 1 / puddle size, w = the rings rain falling
+    /// leaves on its water, per square metre per second (`Rainfall::ripples`, 0 while none falls).
+    pub(crate) fn uniform(self, ripples: f32) -> [f32; 4] {
+        [self.level.clamp(0.0, 1.0), self.puddles.clamp(0.0, 1.0), 1.0 / self.puddle_size.max(0.01), ripples.max(0.0)]
     }
 }
 
@@ -507,7 +511,7 @@ impl SceneUniforms {
             sky_zenith: environment.sky.map_or([0.0, 0.0, 0.0, -1.0], |s| [s.zenith[0], s.zenith[1], s.zenith[2], s.intensity.max(0.0)]),
             sky_horizon: environment.sky.map_or([0.0; 4], |s| [s.horizon[0], s.horizon[1], s.horizon[2], 0.0]),
             sky_ground: environment.sky.map_or([0.0; 4], |s| [s.ground[0], s.ground[1], s.ground[2], 0.0]),
-            wetness: environment.wetness.map_or([0.0; 4], Wetness::uniform),
+            wetness: environment.wetness.map_or([0.0; 4], |w| w.uniform(environment.rainfall.map_or(0.0, |r| r.ripples))),
             rain_view_proj: environment.rain_map.map_or(Mat4::IDENTITY, |(m, _)| m).to_cols_array_2d(),
             rain_params: environment.rain_map.map_or([0.0; 4], |(_, res)| crate::rain_map::RainMap::params(res)),
             // Read by nothing today — the post composite owns exposure and `deferred_lighting.wgsl`

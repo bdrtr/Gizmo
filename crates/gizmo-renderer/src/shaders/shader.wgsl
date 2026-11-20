@@ -52,7 +52,7 @@
 #ifdef LOBES
 #import gizmo::pbr_ext::{compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 #endif
-#import gizmo::surface::{Surface, tangent_frame, rain_on, wet_surface}
+#import gizmo::surface::{Surface, tangent_frame, rain_on, rain_ripples, ripple_footprint, wet_surface}
 #ifdef CUSTOM_SURFACE
 #import gizmo::surface::{SurfaceInput}
 #import gizmo::custom_surface::{material_surface}
@@ -453,6 +453,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 fn shade(in: VertexOutput) -> vec4<f32> {
 #endif
+    // How wide a pixel is on the ground, for the rain's rings on the water (`rain_ripples`) — taken
+    // first, before any pixel of the quad discards.
+    let ripple_px = ripple_footprint(dpdx(in.world_position), dpdy(in.world_position));
 #ifdef SUN_SHADOWS
 #ifndef SUN_SHADOW_PER_VERTEX
     // How the surface runs across neighbouring pixels, for the soft shadows (`receiver_axes`) —
@@ -461,12 +464,14 @@ fn shade(in: VertexOutput) -> vec4<f32> {
     let pos_dy = dpdy(in.world_position);
 #endif
 #endif
+    let rain = rain_here(in);
+    let ripples = rain_ripples(scene.wetness, in.world_position, scene.cascade_params.z, ripple_px, rain);
 #ifdef DETAILS
-    let surface = wet_surface(fragment_surface(in, front), rain_here(in));
+    let surface = wet_surface(fragment_surface(in, front), rain, ripples);
 #else
     // The plain tier draws front faces only. A game's surface is never built on it: only its own code
     // knows whether it cuts (`SurfaceMaterial`).
-    let surface = wet_surface(fragment_surface(in, true), rain_here(in));
+    let surface = wet_surface(fragment_surface(in, true), rain, ripples);
 #endif
 #ifdef WIREFRAME
     // `WireframeConfig::color`: one flat colour for every line, readable on any material. Alpha 0

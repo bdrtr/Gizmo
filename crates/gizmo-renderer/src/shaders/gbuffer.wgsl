@@ -12,7 +12,7 @@
 #ifdef RAIN_MAP
 #import gizmo::common::{rain_exposure}
 #endif
-#import gizmo::surface::{Surface, tangent_frame, surface_lobes, rain_on, wet_surface, wet_darkening, wet_roughness}
+#import gizmo::surface::{Surface, tangent_frame, surface_lobes, rain_on, rain_ripples, ripple_footprint, water_normal, wet_surface, wet_darkening, wet_roughness}
 #ifdef CUSTOM_SURFACE
 #import gizmo::surface::{SurfaceInput}
 #import gizmo::custom_surface::{material_surface}
@@ -287,27 +287,31 @@ fn fs_motion(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(
 #ifndef CUSTOM_SURFACE
 @fragment
 fn fs_baked(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
+    // How wide a pixel is on the ground, for the rain's rings — taken before any pixel of the quad discards.
+    let ripple_px = ripple_footprint(dpdx(in.world_position), dpdy(in.world_position));
     let tex = base_colour(in.tex_coords.xy, in.base_layer);
     let final_alpha = in.baked_extra.w * in.inst_albedo.a * tex.a;
     if (!instance_keeps(in.inst_coat_keep.y, final_alpha, in.clip_position.xy)) {
         discard;
     }
-    // The scene's rain (`Renderer::wetness`): darker, smoother, and flat in a puddle.
+    // The scene's rain (`Renderer::wetness`): darker, smoother, and flat in a puddle but for the rings the
+    // rain falling leaves on it.
     let rain = rain_at(in.world_position, in.normal);
+    let ripples = rain_ripples(scene.wetness, in.world_position, scene.cascade_params.z, ripple_px, rain);
     let base = in.inst_albedo.rgb * tex.rgb * wet_darkening(rain);
     var baked = in.color;
     let lightmap = baked_light(in.tex_coords.zw);
     if (lightmap.w > 0.5) {
         baked = baked * lightmap.rgb;
     }
-    let N = normalize(mix(normalize(select(-in.normal, in.normal, front)), vec3<f32>(0.0, 1.0, 0.0), rain.y));
+    let N = water_normal(normalize(select(-in.normal, in.normal, front)), rain, ripples);
     let now_ndc    = in.motion_now.xy / in.motion_now.w;
     let before_ndc = in.motion_before.xy / in.motion_before.w;
     let f0 = dielectric_f0(in.inst_emissive.w);
 
     var out: GBufferOut;
     out.albedo_metallic  = vec4<f32>(base, 0.0);
-    out.normal_roughness = vec4<f32>(N, wet_roughness(in.inst_pbr.x, rain));
+    out.normal_roughness = vec4<f32>(N, wet_roughness(in.inst_pbr.x, rain, ripples));
     out.world_position   = vec4<f32>(in.world_position - scene.camera_pos.xyz, BAKED_SURFACE);
     // `w`: how much water lies on it, which the lighting pass lights with the sun and the frame's lights.
     out.world_tangent    = vec4<f32>(baked, max(rain.x, rain.y));
@@ -319,11 +323,15 @@ fn fs_baked(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut 
 
 @fragment
 fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
+    // How wide a pixel is on the ground, for the rain's rings — taken before any pixel of the quad discards.
+    let ripple_px = ripple_footprint(dpdx(in.world_position), dpdy(in.world_position));
     // Skip unlit / skybox objects — they are drawn in a forward pass
     if (in.inst_pbr.z > 0.5) { discard; }
 
     // The scene's rain (`Renderer::wetness`), on the engine's surface and on a game's alike.
-    let surface = wet_surface(fragment_surface(in, front), rain_at(in.world_position, in.normal));
+    let rain = rain_at(in.world_position, in.normal);
+    let ripples = rain_ripples(scene.wetness, in.world_position, scene.cascade_params.z, ripple_px, rain);
+    let surface = wet_surface(fragment_surface(in, front), rain, ripples);
     // glTF AlphaMode::Mask cutout: hard per-texel discard at alphaCutoff.
     // cutoff == 0 → no cutout (Opaque / Blend materials), so this is a no-op for them.
     if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }

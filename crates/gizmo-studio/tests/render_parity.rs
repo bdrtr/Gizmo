@@ -44,7 +44,7 @@ fn game_inputs() -> SceneSetupInputs {
         aspect: 1.6,
         cam_fov: 0.8,
         // Live renderer state in the real call; the values themselves are not the subject here.
-        environment: EnvironmentFrame { preset: 2, preset_2: 3, blend_t: 0.5, shading_mode: 0, clear_color: None, wireframe_color: None, fog: None, sky: None, wetness: None, rain_map: None },
+        environment: EnvironmentFrame { preset: 2, preset_2: 3, blend_t: 0.5, shading_mode: 0, clear_color: None, wireframe_color: None, fog: None, sky: None, wetness: None, rainfall: None, rain_map: None },
         sun_shadow_maps: true,
         local_shadow_maps: true,
         elapsed_time: 7.5,

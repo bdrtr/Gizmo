@@ -500,7 +500,8 @@ pub struct SceneUniforms {
     pub sky_horizon: [f32; 4],
     /// rgb = the colour straight down; a unused.
     pub sky_ground: [f32; 4],
-    /// `Renderer::wetness`: x = level, y = puddles, z = 1 / puddle size (m); zeros = dry.
+    /// `Renderer::wetness`: x = level, y = puddles, z = 1 / puddle size (m), w = rings a square metre a second
+    /// on its water (`Rainfall::ripples`, while `Renderer::rainfall` falls); zeros = dry.
     pub wetness: [f32; 4],
     /// The rain map's world → clip matrix (`crate::rain_map`), its layer the sun array's past the cascades.
     pub rain_view_proj: [[f32; 4]; 4],
