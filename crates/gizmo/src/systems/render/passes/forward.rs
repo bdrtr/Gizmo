@@ -222,7 +222,7 @@ fn record_veil_depth(
         .gpu_particles
         .as_ref()
         .filter(|p| simulations && p.active_particles > 0)
-        .map(|p| (p, p.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view)));
+        .map(|p| (p, p.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view, renderer.scene.view_cluster_buffers(), &renderer.scene.cookies)));
     #[cfg(gizmo_forward_only)]
     let _ = simulations;
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

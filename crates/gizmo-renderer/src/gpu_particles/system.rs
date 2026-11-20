@@ -70,9 +70,19 @@ pub struct GpuParticleSystem {
     /// Is the flipbook on (the FS samples the atlas rather than a procedural disc)? Off by
     /// default, so existing spark/dust effects are unchanged; a smoke demo turns it on.
     pub flipbook_on: bool,
-    /// Lighting (T4): lit by the sun through a spherical normal + half-lambert + ambient. Off by
-    /// default (so sparks and fire stay emissive); a smoke or dust demo turns it on.
+    /// Whether the particles are lit, as smoke, dust and spray are, rather than giving off their own
+    /// light, as sparks and fire do (off, the default). Lit, a particle takes the sky's light
+    /// (`scene_environment`), the sun's through a spherical normal — one side of a puff bright, the
+    /// other shaded — and the frame's local lights at its centre, through their cones and cookies and
+    /// [`scatter_anisotropy`](Self::scatter_anisotropy)'s phase: a street lamp or a headlight lights
+    /// the spray it shines through. Until 2026-11-20 a lit particle had a fixed 0.4 for its ambient and
+    /// no local light at all, so a night street's mist glowed grey everywhere and nowhere brighter by
+    /// its lamps.
     pub lit: bool,
+    /// How much a lit particle throws its local lights' light forward, Henyey–Greenstein's `g`: 0
+    /// scatters it evenly (smoke, the default), towards 1 forward — water's fine droplets, about 0.5,
+    /// glow from behind a light more than in front of it.
+    pub scatter_anisotropy: f32,
 }
 
 impl GpuParticleSystem {
@@ -175,6 +185,7 @@ impl GpuParticleSystem {
             flipbook_tiles: 4.0,
             flipbook_on: false,
             lit: false,
+            scatter_anisotropy: 0.0,
         }
     }
 
@@ -326,7 +337,7 @@ impl GpuParticleSystem {
             self.flipbook_tiles,
             if self.flipbook_on { 1.0f32 } else { 0.0 },
             if self.lit { 1.0f32 } else { 0.0 },
-            0.0,
+            self.scatter_anisotropy.clamp(-0.95, 0.95),
         ];
         queue.write_buffer(&self.flipbook_params_buffer, 0, bytemuck::cast_slice(&fb));
     }
@@ -402,21 +413,27 @@ impl GpuParticleSystem {
         tracing::trace!(active_particles, workgroups, "[GpuParticles] simulated");
     }
 
-    /// Builds the group-1 (scene depth) bind group for soft particles from the current
-    /// `depth_view`. `depth_texture_view` changes on resize, so this must be called every frame
-    /// (it is cheap).
+    /// Builds group 1 for the draw: the scene's depth (`depth_view`, for soft particles), the view's
+    /// clustered lights (`clusters`, `SceneState::view_cluster_buffers`) and the spots' `cookies`, which
+    /// light a lit particle. The depth view changes on resize and the clusters with the view, so this is
+    /// built every frame (it is cheap).
     pub fn create_depth_bind_group(
         &self,
         device: &wgpu::Device,
         depth_view: &wgpu::TextureView,
+        clusters: (&wgpu::Buffer, &wgpu::Buffer),
+        cookies: &crate::cookies::CookieTextures,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("particle_depth_bind_group"),
             layout: &self.pipelines.depth_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(depth_view),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(depth_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: clusters.0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: clusters.1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&cookies.view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&cookies.sampler) },
+            ],
         })
     }
 

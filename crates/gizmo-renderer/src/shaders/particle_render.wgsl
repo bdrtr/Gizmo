@@ -1,14 +1,20 @@
 // SceneUniforms shared from gizmo::common (composed by load_shader_composed).
-#import gizmo::common::{SceneUniforms, height_fog}
+#import gizmo::common::{SceneUniforms, LightData, height_fog, light_falloff, rotate_by_quat, spot_cone, spot_cookie_uv, gizmo_cluster_index, scene_environment}
 
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
 
-// Group 1: sahne derinlik dokusu (soft particles). textureLoad ile ham derinlik okunur.
+// Group 1: the scene's depth (soft particles, read raw with `textureLoad`), and what a lit particle is
+// lit by at its centre: the view's clustered lights and the spots' cookies (`particle_light`).
 @group(1) @binding(0)
 var scene_depth: texture_depth_2d;
+@group(1) @binding(1) var<storage, read> cluster_table: array<vec2<u32>>;
+@group(1) @binding(2) var<storage, read> cluster_light_indices: array<u32>;
+@group(1) @binding(3) var t_cookie: texture_2d_array<f32>;
+@group(1) @binding(4) var s_cookie: sampler;
 
-// Group 2: flipbook/SubUV atlas (duman sprite'ları). cfg.x=kenar-kare sayısı, cfg.y=açık(1/0).
+// Group 2: the flipbook atlas (smoke sprites). cfg.x = frames per edge, cfg.y = flipbook on, cfg.z = lit,
+// cfg.w = how much a lit particle throws its local lights forward (`GpuParticleSystem::scatter_anisotropy`).
 @group(2) @binding(0) var flipbook_tex: texture_2d<f32>;
 @group(2) @binding(1) var flipbook_samp: sampler;
 @group(2) @binding(2) var<uniform> flipbook_cfg: vec4<f32>;
@@ -28,7 +34,58 @@ struct VertexOutput {
     @location(3) progress: f32, // flipbook: ömür ilerlemesi (kare seçimi)
     @location(4) bb_right: vec3<f32>, // billboard sağ ekseni (ışıklandırma: küresel normal)
     @location(5) bb_up: vec3<f32>, // billboard yukarı ekseni
+    // A lit particle's light at its centre: the sky's and its local lights' (`particle_light`). The sun is
+    // added per pixel, through the puff's spherical normal.
+    @location(6) light: vec3<f32>,
 };
+
+const PI: f32 = 3.14159265;
+
+// Henyey–Greenstein, normalised so that light scattered evenly is 1.
+fn scatter_phase(g: f32, cos_theta: f32) -> f32 {
+    let g2 = g * g;
+    return (1.0 - g2) / pow(max(1.0 + g2 - 2.0 * g * cos_theta, 1e-4), 1.5);
+}
+
+// What light a lit particle at `p` takes, seen from along `to_camera`: the sky's, and each of its
+// cluster's local lights' — through a spot's cone and cookie, on a rectangle's lit side, thrown forward
+// by the phase — over π, as a matt surface takes it. Once a particle, in the vertex stage: a puff of
+// spray or smoke is soft, and a big one drawn over itself many times would pay for every pixel.
+fn particle_light(p: vec3<f32>, to_camera: vec3<f32>) -> vec3<f32> {
+    let sky = scene_environment(
+        vec3<f32>(0.0, 1.0, 0.0), 1.0, scene.sky_zenith, scene.sky_horizon.rgb, scene.sky_ground.rgb,
+        scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.sun_direction,
+    );
+    let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, p);
+    let range = cluster_table[cluster];
+    var total = vec3<f32>(0.0);
+    for (var ci = 0u; ci < range.y; ci++) {
+        let light = scene.lights[cluster_light_indices[range.x + ci]];
+        let kind = u32(light.params.y);
+        // A directional light is the sun's, added per pixel.
+        if (kind == 2u) {
+            continue;
+        }
+        let from_light = p - light.position.xyz;
+        if (kind == 3u && dot(from_light, rotate_by_quat(light.direction, vec3<f32>(0.0, 0.0, -1.0))) <= 0.0) {
+            continue;
+        }
+        let dist = length(from_light);
+        var reach = light_falloff(dist, light.color.a).x;
+        let travel = from_light / max(dist, 1e-6);
+        var colour = light.color.rgb;
+        if (kind == 1u) {
+            reach *= spot_cone(light, travel);
+            if (reach > 0.0 && light.params.w > 0.0) {
+                colour *= textureSampleLevel(t_cookie, s_cookie, spot_cookie_uv(light, p), i32(light.params.w) - 1, 0.0).rgb;
+            }
+        }
+        if (reach > 0.0) {
+            total += colour * light.position.w * reach * scatter_phase(flipbook_cfg.w, dot(travel, to_camera));
+        }
+    }
+    return sky + total / PI;
+}
 
 @vertex
 fn vs_main(
@@ -46,6 +103,7 @@ fn vs_main(
         out.progress = 0.0;
         out.bb_right = vec3<f32>(1.0, 0.0, 0.0);
         out.bb_up = vec3<f32>(0.0, 1.0, 0.0);
+        out.light = vec3<f32>(0.0);
         return out;
     }
 
@@ -90,6 +148,10 @@ fn vs_main(
     out.progress = progress;
     out.bb_right = right;
     out.bb_up = up;
+    out.light = vec3<f32>(0.0);
+    if (flipbook_cfg.z > 0.5) {
+        out.light = particle_light(instance.pos_life.xyz, to_camera);
+    }
 
     return out;
 }
@@ -145,17 +207,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var base_rgb = texel.rgb;
     let base_alpha = texel.a;
 
-    // T4 LIT: billboard'u KÜRE gibi ele al → küresel normal + half-lambert + ambient → duman
-    // güneşe göre aydınlanır (bir yanı parlak, diğeri gölgeli). Emissive için kapalı.
+    // Lit: the sky's and the local lights' light at the particle's centre (`particle_light`), and the
+    // sun's through the billboard taken as a sphere — a spherical normal, half-Lambert — so a puff is
+    // bright on its sunlit side and shaded on the other. Over π, as every matt surface's. Off, the
+    // particle gives off its own light (sparks, fire).
     if (flipbook_cfg.z > 0.5) {
         let r2 = clamp(dot(in.uv, in.uv), 0.0, 1.0);
         let zc = sqrt(1.0 - r2);
         let to_cam = normalize(scene.camera_pos.xyz - in.world_pos);
         let n = normalize(in.bb_right * in.uv.x + in.bb_up * in.uv.y + to_cam * zc);
-        var lightv = vec3<f32>(0.4); // ambient
+        var lightv = in.light;
         if (scene.sun_direction.w > 0.5) {
             let ndl = dot(n, normalize(scene.sun_direction.xyz)) * 0.5 + 0.5; // half-lambert
-            lightv += scene.sun_color.rgb * (scene.sun_color.w * 0.55) * ndl;
+            lightv += scene.sun_color.rgb * scene.sun_color.w * ndl / PI;
         }
         base_rgb *= lightv;
     }

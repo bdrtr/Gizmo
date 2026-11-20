@@ -827,6 +827,17 @@ impl SceneState {
         }
     }
 
+    /// The clustered-light table and index list the next recorded pass reads, selected as
+    /// [`view_bind_group`](Self::view_bind_group) selects its group: for a pass that binds them in a
+    /// group of its own (a lit particle's lights, in its vertex stage).
+    #[must_use]
+    pub fn view_cluster_buffers(&self) -> (&wgpu::Buffer, &wgpu::Buffer) {
+        match self.active() {
+            None => (&self.cluster_table_buffer, &self.cluster_index_buffer),
+            Some(v) => (&v.cluster_table_buffer, &v.cluster_index_buffer),
+        }
+    }
+
     /// The scene-uniform buffer the next recorded pass will read, selected the same way
     /// [`view_bind_group`](Self::view_bind_group) selects its group.
     ///

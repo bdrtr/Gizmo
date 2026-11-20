@@ -102,19 +102,47 @@ pub fn create_particle_pipelines(
         "Particle Render Shader",
     );
 
-    // Group 1: sahne derinlik dokusu (soft particles). textureLoad ile okunur → sampler yok.
+    // Group 1: the scene's depth (soft particles, read with `textureLoad`), and what a lit particle is
+    // lit by at its centre, in the vertex stage: the view's clustered lights — the same buffers group 0
+    // has, bound again here because there they are the fragment stage's alone — and the spots' cookies.
+    let storage = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::VERTEX,
+        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+        count: None,
+    };
     let depth_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("particle_depth_layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Depth,
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
             },
-            count: None,
-        }],
+            storage(1),
+            storage(2),
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
     });
 
     // Group 2: flipbook atlas dokusu (filterable) + sampler.
@@ -141,7 +169,8 @@ pub fn create_particle_pipelines(
                 // binding 2: flipbook config uniform (x=tiles/kenar, y=açık 1/0)
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    // The vertex stage reads it too: whether the particles are lit, and how they scatter.
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,

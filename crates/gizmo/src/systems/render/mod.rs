@@ -73,7 +73,7 @@ pub fn record_gpu_particles(encoder: &mut wgpu::CommandEncoder, renderer: &crate
     if particles.active_particles == 0 {
         return;
     }
-    let depth_bg = particles.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view);
+    let depth_bg = particles.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view, renderer.scene.view_cluster_buffers(), &renderer.scene.cookies);
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Particle Soft Pass"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -19435,6 +19435,84 @@ fn material_surface(input: SurfaceInput) -> Surface {
                 changed >= 40,
                 "an emitter spawning 400 particles a second changed {changed}/{total} pixels over                  ten frames — nothing is reaching the frame (measured 197)",
             );
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no GPU particles.
+    /// **A lit particle is lit by the lights round it, and dark where none reaches.** A dark night — a
+    /// black sky, no sun — and a lamp reaching 3 m: lit particles beside it add light to the frame, the
+    /// same particles 4.7 m from it, past its reach, almost none. A lit particle had a fixed 0.4 of
+    /// ambient and no local light until 2026-11-20, so the far ones glowed grey as much as the near ones,
+    /// and a wet street's spray was no brighter by its lamps (`particle_light` in `particle_render.wgsl`).
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_lit_particle_is_lit_by_the_lights_round_it_and_dark_where_none_reaches() {
+        use crate::renderer::gpu_particles::GpuParticle;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // The frame with lit particles round each of `spots`, a lamp at (10, 2, 1.5) reaching 3 m.
+        async fn frame(spots: &[Vec3]) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            renderer.sky = Some(crate::renderer::Sky::uniform([0.0, 0.0, 0.0]));
+            let mut world = World::new();
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(10.0, 2.0, 1.5)));
+            world.add_component(lamp, PointLight::new(Vec3::ONE, 30.0, 3.0));
+            // Yaw 0 looks along +X; +Z is to the right. A black background, so what the frame shows is the
+            // particles' own light.
+            let cam = world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 2.0, 0.0), yaw: 0.0, pitch: 0.0, primary: true, ..Default::default() });
+            if let Some(mut c) = world.query_mut::<&mut crate::renderer::components::Camera>().get_mut(cam) {
+                c.clear_color = Some(Vec3::ZERO);
+            }
+            let particles = renderer.gpu_particles.as_mut().expect("the desktop path has GPU particles");
+            particles.lit = true;
+            particles.gravity = 0.0;
+            particles.drag = 0.0;
+            let mut batch = Vec::new();
+            for &spot in spots {
+                for k in 0..9 {
+                    let offset = Vec3::new(0.0, (k / 3) as f32 - 1.0, (k % 3) as f32 - 1.0) * 0.25;
+                    batch.push(GpuParticle {
+                        position: (spot + offset).to_array(),
+                        // Half way through a long life: drawn at once, at full strength, and not aging away.
+                        life: 50.0,
+                        velocity: [0.0; 3],
+                        max_life: 100.0,
+                        color: [1.0, 1.0, 1.0, 0.9],
+                        size_start: 0.3,
+                        size_end: 0.3,
+                        _padding: [0.0; 2],
+                    });
+                }
+            }
+            if !batch.is_empty() {
+                particles.spawn_particles(&renderer.queue, &batch);
+            }
+            let mut last = Vec::new();
+            for _ in 0..3 {
+                last = render_world(&mut renderer, &mut world).await;
+            }
+            last
+        }
+        let light = |f: &[u8]| f.chunks(4).map(|p| u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2])).sum::<u64>();
+        pollster::block_on(async {
+            let none = light(&frame(&[]).await);
+            let near = light(&frame(&[Vec3::new(10.0, 2.0, 0.0)]).await) - none;
+            let far = light(&frame(&[Vec3::new(10.0, 2.0, -3.2)]).await) - none;
+            // 84,803 and 956 when written; with the old fixed ambient and no local light, the far ones as
+            // bright as the near.
+            assert!(near > 2000, "beside the lamp the particles are lit: {near} of light added");
+            assert!(far * 20 < near, "past its reach, on a dark night, they are dark: {far} against {near}");
         });
     }
 

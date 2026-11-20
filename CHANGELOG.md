@@ -452,6 +452,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A lit particle is lit by the lights round it (`GpuParticleSystem::lit`).** A lit particle — smoke, dust, spray
+  — took a fixed 0.4 of ambient and the sun, and no local light at all. So a night street's mist glowed grey
+  everywhere, no brighter by its lamps or a car's headlights. Now it takes:
+  - the sky's light (`scene_environment`), where the 0.4 was;
+  - the frame's local lights, through their cones and cookies, on a rectangle's lit side, thrown forward by a
+    Henyey–Greenstein phase (`GpuParticleSystem::scatter_anisotropy`, 0 — even — by default; about 0.5 for
+    water's fine droplets);
+  - the sun, through the puff's spherical normal as before, now over π like every matt surface.
+
+  Local lights are taken once a particle, at its centre, in the vertex stage: a big soft puff drawn over itself
+  many times would otherwise pay for every pixel. The particle's own group carries the view's clusters
+  (`SceneState::view_cluster_buffers`) and the cookies, since group 0 gives them to the fragment stage alone.
+  `a_lit_particle_is_lit_by_the_lights_round_it_and_dark_where_none_reaches`: on a dark night, particles beside a
+  lamp add 84,803 to the frame and the same particles past its reach 956; with the old lighting, 20,332 and
+  22,143.
+
 - **Glass keeps the rain off what is under it.** The rain map (`gizmo_renderer::rain_map`) was drawn with the
   shadow casters, and glass casts no shadow: it lets the light through. So the rain fell through every window, bus
   shelter and glass roof, and a car's cabin took it under its windows — its parcel shelf soaked to a mirror and
