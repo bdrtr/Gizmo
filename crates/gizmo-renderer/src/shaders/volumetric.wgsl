@@ -84,24 +84,31 @@ fn rand(co: vec2<f32>) -> f32 {
 }
 
 // Henyey-Greenstein phase function for forward scattering
-// A stretch `x`–`y` of a ray and a light `off_line` (b) from the ray's line, nearest it at `along`:
-// `.x` is `∫ du / (b² + u²)` over the stretch — the inverse square, exactly — and `.y` a point of the
-// stretch drawn by it (equiangular sampling, Kulla & Fajardo 2012): even in the angle the stretch spans
-// from the light, so its density along the ray is the inverse square's, and `.x · (what reaches .y)` is an
-// unbiased estimate of the stretch's air. `xi` in [0, 1).
-fn equiangular(x: f32, y: f32, along: f32, off_line: f32, xi: f32) -> vec2<f32> {
+// A local light's air over the stretch `x`–`y` of a ray from `origin` along `ray_dir`, the light
+// `off_line` (b) from the ray's line and nearest it at `along`. In the angle the stretch spans from the
+// light, `φ = atan(u / b)`, the inverse square is flat — `du / (b² + u²) = dφ / b` — and what is left
+// (`local_air`: the window, the phase, a spot's cone and cookie, the shadow) turns smoothly; so the
+// stretch's air is `(1/b) ∫ local_air dφ`, taken by three-point Gauss–Legendre over the angle — two points
+// were 11 % out over a 6 m stretch passing a lamp, where the phase falls from forward scattering in front
+// of it (0.61) to back scattering behind (0.02). The same on every frame and every pixel. A single point drawn at random in the angle (equiangular sampling) was
+// unbiased, but left each pixel's halo a grain of its own, which TAA could average only while the camera
+// stood still: driving, the lamps were dust.
+fn stretch_air(light: LightData, j: u32, kind: u32, x: f32, y: f32, along: f32, off_line: f32, origin: vec3<f32>, ray_dir: vec3<f32>) -> vec3<f32> {
     let first = atan((x - along) / off_line);
     let last = atan((y - along) / off_line);
-    return vec2<f32>((last - first) / off_line, along + off_line * tan(mix(first, last, xi)));
+    let middle = 0.5 * (first + last);
+    let half_width = 0.5 * (last - first);
+    let side = half_width * 0.7745967;
+    let centre = local_air(light, j, kind, origin + ray_dir * (along + off_line * tan(middle)), ray_dir);
+    let low = local_air(light, j, kind, origin + ray_dir * (along + off_line * tan(middle - side)), ray_dir);
+    let high = local_air(light, j, kind, origin + ray_dir * (along + off_line * tan(middle + side)), ray_dir);
+    return half_width / off_line * (0.8888889 * centre + 0.5555556 * (low + high));
 }
 
 // What of a local light reaches the point `p` of the air and is scattered along `ray_dir` towards the
-// camera, short of the inverse square (which `equiangular` integrates over the stretch `p` was drawn
-// from) and the scattering coefficient: its colour and intensity, the window at its
-// radius, the phase, on a rectangle's lit side only, inside a spot's cone and through its cookie, and past
-// the light's shadow when it casts one. All at the drawn point: the phase turns sharply along a ray
-// looking at a lamp — strong forward scattering in front of it, a twentieth of that beside it — and any one
-// point but a drawn one gets the stretch's air wrong (at the point nearest the light, half of it).
+// camera, short of the inverse square (which `stretch_air` integrates) and the scattering coefficient:
+// its colour and intensity, the window at its radius, the phase, on a rectangle's lit side only, inside a
+// spot's cone and through its cookie, and past the light's shadow when it casts one.
 fn local_air(light: LightData, j: u32, kind: u32, p: vec3<f32>, ray_dir: vec3<f32>) -> vec3<f32> {
     let radius = light.color.a;
     let from_light = p - light.position.xyz;
@@ -206,9 +213,6 @@ fn fs_main(in: VertexOutput) -> MarchOut {
     let veil_along = veil / max(dot(ray_dir, fwd), 1e-4);
     // Where a shadow-casting local light's air ends: the ray's end, short of a surface by the shadow's bias.
     let local_end = select(max_dist, max_dist - params.shadow_bias * scene.shadow_bias.x, depth < 1.0);
-    // The pixel's random number for the local lights' drawn points (`equiangular`), turned each frame (by
-    // the clock, `cascade_params.z`) so that the frames average what one draw would leave as grain.
-    let xi = fract(jitter / step_size + fract(scene.cascade_params.z * 7.31));
     
     // Sun Directional Light Precalculations
     let L_sun = normalize(-scene.sun_direction.xyz);
@@ -280,16 +284,15 @@ fn fs_main(in: VertexOutput) -> MarchOut {
             // sample lies in — so the stretches tile the ray from the camera to where it stops, with no gap
             // and nothing past the surface. Cut at the veil: what is in front of it is the front's.
             //
-            // Over a stretch the inverse square is integrated exactly (`equiangular`'s `.x`), and the
-            // rest — window, phase, a spot's cone and cookie, the shadow (`local_air`) — is taken at a point
-            // of the stretch drawn by the inverse square (`equiangular`), where its weight is, and turned each
-            // frame for the frames to average: a ray passing a bulb gathers its halo whatever its step. Sampled evenly, one step carried the whole halo and the
-            // next none, and a sky ray's 6 m steps missed it outright. For a light that casts a shadow, short
-            // of the surface the ray ends on by the shadow's bias: the air there is what its shadow cannot
-            // tell from the surface, and a lamp behind a wall lit it as if the wall were not there. It used to be
-            // `(1 - d/r)²` at the sample, with no inverse square and no phase: inside its radius a lamp lit
-            // the air nearly as brightly a radius off as at the bulb, and a street of them filled the frame
-            // with fog (`nfsu2-gizmo`'s 2,233 lamps, 2026-11-20).
+            // Over a stretch the light's air is integrated in the angle the stretch spans from it
+            // (`stretch_air`): the inverse square exactly, the rest by quadrature, the same on every frame —
+            // a ray passing a bulb gathers its halo whatever its step. Sampled at the step, one step carried
+            // the whole halo and the next none, and a sky ray's 6 m steps missed it outright. For a light
+            // that casts a shadow, short of the surface the ray ends on by the shadow's bias: the air there
+            // is what its shadow cannot tell from the surface, and a lamp behind a wall lit it as if the wall
+            // were not there. It used to be `(1 - d/r)²` at the sample, with no inverse square and no phase:
+            // inside its radius a lamp lit the air nearly as brightly a radius off as at the bulb, and a
+            // street of them filled the frame with fog (`nfsu2-gizmo`'s 2,233 lamps, 2026-11-20).
             let along = dot(light.position.xyz - cam_pos, ray_dir);
             // The light's distance from the ray's line, with the inverse square's 10 cm core (`light_falloff`
             // divides by `d² + 0.01`): a ray from a camera standing in the light — a reflection probe at a
@@ -307,12 +310,10 @@ fn fs_main(in: VertexOutput) -> MarchOut {
                 continue;
             }
             if (cut > start) {
-                let s = equiangular(start, cut, along, off_line, xi);
-                front += params.bulb_scatter * local_air(light, j, kind, cam_pos + ray_dir * s.y, ray_dir) * s.x;
+                front += params.bulb_scatter * stretch_air(light, j, kind, start, cut, along, off_line, cam_pos, ray_dir);
             }
             if (end > cut) {
-                let s = equiangular(cut, end, along, off_line, xi);
-                behind += params.bulb_scatter * local_air(light, j, kind, cam_pos + ray_dir * s.y, ray_dir) * s.x;
+                behind += params.bulb_scatter * stretch_air(light, j, kind, cut, end, along, off_line, cam_pos, ray_dir);
             }
         }
         if (dot(current_pos - cam_pos, fwd) < veil) {

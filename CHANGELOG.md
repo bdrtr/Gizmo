@@ -286,6 +286,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A local light's air is integrated over each stretch by quadrature, not drawn at a random point: no grain.**
+  The volumetric light took each stretch's window, phase, cone, cookie and shadow at one point drawn by the inverse
+  square (equiangular sampling), turned each frame for TAA to average. Unbiased, but each pixel's halo was a grain
+  of its own, which TAA averaged only while the camera stood still: driving, `nfsu2-gizmo`'s street lamps were
+  dust ("toz taneleri gibi", the user, 2026-11-20). In the angle the stretch spans from the light the inverse square
+  is flat (`du/(b² + u²) = dφ/b`) and the rest turns smoothly, so the stretch is now three-point Gauss–Legendre over
+  the angle (`stretch_air`): the same on every frame and pixel, a lamp's halo a round glow. Two points were 11 % out
+  over a 6 m stretch passing a lamp, where the phase falls from 0.61 in front of it to 0.02 behind
+  (`a_pane_shows_the_air_behind_it_as_much_as_it_lets_through`); three are 2 %. With fewer, longer steps, which
+  the quadrature allows (`nfsu2-gizmo` marches 5), the city's haze costs what the drawn point did: 1.9 ms of GPU,
+  wet, on an AMD 780M.
+
 - **The volumetric light's local lights scatter by the inverse square, through the phase function, and only
   from their cluster.** A point, spot or rectangle light lit the air by `(1 − d/r)²` inside its radius — no
   inverse square, no phase — so a lamp lit the air nearly as brightly a radius off as at the bulb, and
