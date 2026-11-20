@@ -12,7 +12,7 @@
 #ifdef RAIN_MAP
 #import gizmo::common::{rain_exposure}
 #endif
-#import gizmo::surface::{Surface, tangent_frame, surface_lobes, rain_on, rain_ripples, ripple_footprint, water_normal, wet_surface, wet_darkening, wet_roughness}
+#import gizmo::surface::{Surface, tangent_frame, surface_lobes, rain_on, rain_ripples, ripple_footprint, water_normal, wet_surface, wet_darkening, wet_roughness, Beads, bead_density, rain_beads, bead_normal, bead_roughness, beaded}
 #ifdef CUSTOM_SURFACE
 #import gizmo::surface::{SurfaceInput}
 #import gizmo::custom_surface::{material_surface}
@@ -84,8 +84,12 @@ struct VertexOutput {
     // flag besides, and a desktop device gives sixteen.
     // x = clear coat roughness, y = the cut-out and LOD fade (`instance_keeps`), z = `Material::porosity`.
     @location(11) inst_coat_keep: vec3<f32>,
-    // A baked-lit surface's (`fs_baked`): the instance's ambient in `xyz`, the vertex's alpha in `w`.
-    @location(12) baked_extra: vec4<f32>,
+    // What only one route reads, by the instance's route (`inst.pbr.z`). A baked-lit surface's
+    // (`fs_baked`): the instance's ambient in `xyz`, the vertex's alpha in `w`. A PBR surface's (`fs_main`):
+    // the vertex's position in the model's own space, before skinning, in `xyz` — where the rain's beads
+    // are laid out (`rain_beads`), so that they ride with what they landed on. Shared because the fragment
+    // stage has no location left: fifteen and the front-facing flag are a desktop device's sixteen.
+    @location(12) route_extra: vec4<f32>,
     // `Material::specular_tint`, from `1 − optics.xyz`.
     @location(13) inst_tint: vec3<f32>,
     // Where the base colour is (`InstanceRaw::texture.x`, `gizmo::material::base_colour`).
@@ -185,7 +189,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_coat_keep = vec3<f32>(inst.ambient.zw, 1.0 - inst.texture.y);
     out.inst_tint = vec3<f32>(1.0) - inst.optics.xyz;
     out.base_layer = u32(inst.texture.x);
-    out.baked_extra = vec4<f32>(inst.ambient.rgb, input.color.a);
+    out.route_extra = select(vec4<f32>(input.position, 0.0), vec4<f32>(inst.ambient.rgb, input.color.a), inst.pbr.z > 0.5);
     out.clip_position = scene.view_proj * world_pos;
     out.motion_now    = motion.view_proj * world_pos;
     // `select` takes no matrices.
@@ -291,7 +295,7 @@ fn fs_baked(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut 
     // How wide a pixel is on the ground, for the rain's rings — taken before any pixel of the quad discards.
     let ripple_px = ripple_footprint(dpdx(in.world_position), dpdy(in.world_position));
     let tex = base_colour(in.tex_coords.xy, in.base_layer);
-    let final_alpha = in.baked_extra.w * in.inst_albedo.a * tex.a;
+    let final_alpha = in.route_extra.w * in.inst_albedo.a * tex.a;
     if (!instance_keeps(in.inst_coat_keep.y, final_alpha, in.clip_position.xy)) {
         discard;
     }
@@ -305,6 +309,7 @@ fn fs_baked(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut 
     if (lightmap.w > 0.5) {
         baked = baked * lightmap.rgb;
     }
+    // No beads: a baked-lit surface is the still, lit-ahead world (see `rain_beads`).
     let N = water_normal(normalize(select(-in.normal, in.normal, front)), rain, ripples);
     let now_ndc    = in.motion_now.xy / in.motion_now.w;
     let before_ndc = in.motion_before.xy / in.motion_before.w;
@@ -317,22 +322,28 @@ fn fs_baked(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut 
     // `w`: how much water lies on it, which the lighting pass lights with the sun and the frame's lights.
     out.world_tangent    = vec4<f32>(baked, max(rain.x, rain.y));
     out.velocity         = vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 0.0, 0.0);
-    out.emissive         = vec4<f32>(in.baked_extra.xyz * base + max(in.inst_emissive.xyz, vec3<f32>(0.0)), select(f0, -f0, in.inst_emissive.w < 0.0));
+    out.emissive         = vec4<f32>(in.route_extra.xyz * base + max(in.inst_emissive.xyz, vec3<f32>(0.0)), select(f0, -f0, in.inst_emissive.w < 0.0));
     return out;
 }
 #endif
 
 @fragment
 fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
-    // How wide a pixel is on the ground, for the rain's rings — taken before any pixel of the quad discards.
-    let ripple_px = ripple_footprint(dpdx(in.world_position), dpdy(in.world_position));
+    // How the surface and its own coordinates run across neighbouring pixels, for the rain's rings and
+    // beads — taken before any pixel of the quad discards.
+    let world_dx = dpdx(in.world_position);
+    let world_dy = dpdy(in.world_position);
+    let local_dx = dpdx(in.route_extra.xyz);
+    let local_dy = dpdy(in.route_extra.xyz);
+    let ripple_px = ripple_footprint(world_dx, world_dy);
     // Skip unlit / skybox objects — they are drawn in a forward pass
     if (in.inst_pbr.z > 0.5) { discard; }
 
     // The scene's rain (`Renderer::wetness`), on the engine's surface and on a game's alike.
     let rain = rain_at(in.world_position, in.normal, in.inst_coat_keep.z);
     let ripples = rain_ripples(scene.wetness, in.world_position, scene.cascade_params.z, ripple_px, rain);
-    let surface = wet_surface(fragment_surface(in, front), rain, ripples);
+    let beads = rain_beads(in.route_extra.xyz, bead_density(scene.wetness, normalize(in.normal).y, rain.z), max(length(world_dx), length(world_dy)));
+    let surface = beaded(wet_surface(fragment_surface(in, front), rain, ripples), beads, local_dx, local_dy, world_dx, world_dy);
     // glTF AlphaMode::Mask cutout: hard per-texel discard at alphaCutoff.
     // cutoff == 0 → no cutout (Opaque / Blend materials), so this is a no-op for them.
     if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }

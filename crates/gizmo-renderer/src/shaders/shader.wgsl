@@ -52,7 +52,7 @@
 #ifdef LOBES
 #import gizmo::pbr_ext::{compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 #endif
-#import gizmo::surface::{Surface, tangent_frame, rain_on, rain_ripples, ripple_footprint, wet_surface}
+#import gizmo::surface::{Surface, tangent_frame, rain_on, rain_ripples, ripple_footprint, wet_surface, Beads, bead_density, rain_beads, beaded}
 #ifdef CUSTOM_SURFACE
 #import gizmo::surface::{SurfaceInput}
 #import gizmo::custom_surface::{material_surface}
@@ -232,6 +232,12 @@ struct VertexOutput {
     @location(14) sun_shadow: vec4<f32>,
 #endif
 #endif
+#ifndef SUN_SHADOW_PER_VERTEX
+    // The vertex's position in the model's own space, before skinning: where the rain's beads are laid
+    // out (`rain_beads`), so that they ride with what they landed on. Location 14, which only the phone
+    // path's per-vertex sun shadow takes — and there a bead is under a pixel anyway.
+    @location(14) surface_local: vec3<f32>,
+#endif
 };
 
 @vertex
@@ -274,6 +280,9 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     let skinned_pos = skin_mat * vec4<f32>(input.position, 1.0);
     let world_pos = model * vec4<f32>(skinned_pos.xyz, 1.0);
     out.world_position = world_pos.xyz;
+#ifndef SUN_SHADOW_PER_VERTEX
+    out.surface_local = input.position;
+#endif
     
     // Obje veya animasyon döndürüldüğünde ışık da tepki versin (Non-uniform scale desteği ile).
     // Normaller skin uzayında da inverse-transpose ile taşınmalı — aksi halde non-uniform
@@ -454,9 +463,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 fn shade(in: VertexOutput) -> vec4<f32> {
 #endif
-    // How wide a pixel is on the ground, for the rain's rings on the water (`rain_ripples`) — taken
-    // first, before any pixel of the quad discards.
-    let ripple_px = ripple_footprint(dpdx(in.world_position), dpdy(in.world_position));
+    // How the surface and its own coordinates run across neighbouring pixels, for the rain's rings on the
+    // water (`rain_ripples`) and its beads (`rain_beads`) — taken first, before any pixel of the quad
+    // discards.
+    let world_dx = dpdx(in.world_position);
+    let world_dy = dpdy(in.world_position);
+    let ripple_px = ripple_footprint(world_dx, world_dy);
+#ifndef SUN_SHADOW_PER_VERTEX
+    let local_dx = dpdx(in.surface_local);
+    let local_dy = dpdy(in.surface_local);
+#endif
 #ifdef SUN_SHADOWS
 #ifndef SUN_SHADOW_PER_VERTEX
     // How the surface runs across neighbouring pixels, for the soft shadows (`receiver_axes`) —
@@ -468,11 +484,18 @@ fn shade(in: VertexOutput) -> vec4<f32> {
     let rain = rain_here(in);
     let ripples = rain_ripples(scene.wetness, in.world_position, scene.cascade_params.z, ripple_px, rain);
 #ifdef DETAILS
-    let surface = wet_surface(fragment_surface(in, front), rain, ripples);
+    let wet = wet_surface(fragment_surface(in, front), rain, ripples);
 #else
     // The plain tier draws front faces only. A game's surface is never built on it: only its own code
     // knows whether it cuts (`SurfaceMaterial`).
-    let surface = wet_surface(fragment_surface(in, true), rain, ripples);
+    let wet = wet_surface(fragment_surface(in, true), rain, ripples);
+#endif
+#ifdef SUN_SHADOW_PER_VERTEX
+    let surface = wet;
+#else
+    // The rain's beads on a sealed surface.
+    let beads = rain_beads(in.surface_local, bead_density(scene.wetness, normalize(in.normal).y, rain.z), max(length(world_dx), length(world_dy)));
+    let surface = beaded(wet, beads, local_dx, local_dy, world_dx, world_dy);
 #endif
 #ifdef WIREFRAME
     // `WireframeConfig::color`: one flat colour for every line, readable on any material. Alpha 0

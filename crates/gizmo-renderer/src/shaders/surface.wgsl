@@ -211,7 +211,7 @@ const RIPPLE_JITTER: f32 = 0.1;
 const RIPPLE_LAYERS: u32 = 4u;
 // The steepest a fresh ring's waves stand: their slope, height over run.
 const RIPPLE_SLOPE: f32 = 0.25;
-// How much a soaked surface's film ripples, beside a puddle's 1: a millimetre of water carries less.
+// How much a soaked porous surface's film ripples, beside a puddle's 1: a millimetre of water carries less.
 const FILM_RIPPLES: f32 = 0.3;
 
 // How wide a pixel is on the ground at a fragment whose position runs `dx`, `dy` across neighbouring
@@ -225,7 +225,8 @@ fn ripple_footprint(dx: vec3<f32>, dy: vec3<f32>) -> f32 {
 // x, y = the water's slope along x and z, as the pixel shows it; z = the slope's variance it cannot show.
 fn rain_ripples(wetness: vec4<f32>, world_position: vec3<f32>, clock: f32, footprint: f32, rain: vec3<f32>) -> vec3<f32> {
     let rate = wetness.w;
-    let weight = rain.y + FILM_RIPPLES * rain.x * (1.0 - rain.y);
+    // A puddle's water ripples, and a porous surface's film; a sealed one stands in beads (`rain_beads`).
+    let weight = rain.y + FILM_RIPPLES * rain.x * rain.z * (1.0 - rain.y);
     if (rate <= 0.0 || weight <= 0.0) {
         return vec3<f32>(0.0);
     }
@@ -284,6 +285,149 @@ fn ripple_hash(i: vec3<i32>) -> vec3<f32> {
 // What rain multiplies a surface's colour by: its pores filled, and whatever lies under a puddle.
 fn wet_darkening(rain: vec3<f32>) -> f32 {
     return mix(1.0, WET_DARKENING, max(rain.x * rain.z, rain.y));
+}
+
+// ── Rain beading on a sealed surface ───────────────────────────────────────────────────────────────
+// On paint, glass and metal (`Material::porosity` 0) the rain does not soak in: it stands in beads. They
+// are laid out in the surface's OWN space — the model's coordinates (`surface_local`), so that they stay
+// where they landed as a car drives — as a few grids of 12 mm cells over each other, each cell holding a
+// drop with the likelihood the wetness gives (`bead_density`), at a place and of a size of its own, kept
+// inside its cell so a fragment looks at one cell a grid. Where a surface slices a drop's sphere it shows
+// a hemisphere of the slice's radius: a bead with the steep sides water has on wax. Its slope is that
+// hemisphere's, in closed form; `bead_normal` tilts the surface's normal by it through the positions'
+// screen derivatives alone (Mikkelsen, "Bump Mapping Unparametrized Surfaces on the GPU", 2010), so no
+// tangent frame is needed and the bead itself is never differentiated. Inside a bead the surface is
+// water: as smooth as still water where the pixel is small beside the bead, and as rough as the bead's
+// curvature across the pixel makes it where it is not (`Beads::variance`).
+//
+// On a PBR surface only: a baked-lit one is the still, lit-ahead world — a city — which takes the rain as
+// a film, puddles and rings. Carried on the baked path too, the bead code cost every one of a city's
+// pixels 0.68 ms of forward GPU time a frame where it beaded none of them (`nfsu2-gizmo`, AMD 780M, 1080p,
+// 2026-11-20): code a fragment never runs still holds the registers it would, for every fragment.
+//
+// A bead is a few millimetres across, so from a chase camera it is a pixel or less. It is drawn down to
+// that — fixed on its surface, it is a still detail that TAA's jitter resolves over frames rather than
+// noise — and faded past it (`BEAD_FADE`). Not folded into the roughness the way the rain's rings are: a
+// beaded surface reflects as a sharp lobe between the beads and a broad one off them, which one widened
+// lobe would turn into a matt car.
+const BEAD_CELL: f32 = 0.012;
+// The radius of a bead's sphere, metres: from the first to the second, more of them small.
+const BEAD_RADIUS: vec2<f32> = vec2<f32>(0.0012, 0.0042);
+const BEAD_LAYERS: u32 = 3u;
+// The steepest a bead's side is drawn, height over run: its rim, which on a hemisphere is upright.
+const BEAD_SLOPE_MAX: f32 = 2.5;
+const BEAD_ROUGHNESS: f32 = 0.04;
+// How wide a pixel is when the beads it covers start to fade, and when they are gone, metres.
+const BEAD_FADE: vec2<f32> = vec2<f32>(0.004, 0.012);
+
+struct Beads {
+    // The beads' height field's gradient, in the surface's own space: what `bead_normal` tilts by.
+    slope: vec3<f32>,
+    // How much of the pixel is under a bead, 0 … 1.
+    cover: f32,
+    // How much a bead's normal turns across the pixel, as a slope variance: `(footprint / R)² / 4` for a
+    // sphere of radius R. Water is as smooth as glass, but a bead a pixel or two wide shows the pixel every
+    // way its normal faces at once, and drawn as smooth it caught a light in one pixel as a square of glare.
+    // Folded into the bead's roughness (`bead_roughness`), as geometric specular anti-aliasing does with a
+    // normal's own variance (Kaplanyan et al., "Filtering Distributions of Normals", 2016), here known in
+    // closed form.
+    variance: f32,
+}
+
+// How thickly a surface stands in beads: the scene's wetness (`wetness.x`), on what sheds the rain
+// (`1 − porosity`), the most on top, some on the sides, none underneath. `up` is the geometric normal's
+// height. Not kept off what is under cover: a car that drives under a bridge keeps the rain on it.
+fn bead_density(wetness: vec4<f32>, up: f32, porosity: f32) -> f32 {
+    let facing = smoothstep(-0.3, 0.1, up) * (0.35 + 0.65 * smoothstep(0.2, 0.8, up));
+    return clamp(wetness.x, 0.0, 1.0) * (1.0 - clamp(porosity, 0.0, 1.0)) * facing;
+}
+
+// The beads at `local` (the surface's own coordinates, metres) on a surface beaded `density`
+// (`bead_density`), seen through a pixel `footprint` metres wide.
+fn rain_beads(local: vec3<f32>, density: f32, footprint: f32) -> Beads {
+    var out: Beads;
+    out.slope = vec3<f32>(0.0);
+    out.cover = 0.0;
+    out.variance = 0.0;
+    let resolved = 1.0 - smoothstep(BEAD_FADE.x, BEAD_FADE.y, footprint);
+    if (density <= 0.0 || resolved <= 0.0) {
+        return out;
+    }
+    for (var layer = 0u; layer < BEAD_LAYERS; layer++) {
+        // Each grid shifted by a golden fraction of a cell, so that no two share their edges.
+        let p = local / BEAD_CELL + vec3<f32>(0.381966, 0.618034, 0.236068) * f32(layer);
+        let cell = floor(p);
+        let h = bead_hash(vec4<i32>(vec3<i32>(cell), i32(layer)));
+        if (h.w >= density) {
+            continue;
+        }
+        let size = bead_hash(vec4<i32>(vec3<i32>(cell), i32(layer) + 64)).x;
+        let radius = mix(BEAD_RADIUS.x, BEAD_RADIUS.y, size * size);
+        let r = radius / BEAD_CELL;
+        let offset = (p - (cell + r + h.xyz * (1.0 - 2.0 * r))) * BEAD_CELL;
+        let d2 = dot(offset, offset);
+        if (d2 >= radius * radius) {
+            continue;
+        }
+        // The hemisphere's height is `sqrt(R² − |v|²)`; its gradient `−v / height`, held to the steepest
+        // side drawn.
+        let height = sqrt(radius * radius - d2);
+        out.slope += -offset / max(height, max(sqrt(d2) / BEAD_SLOPE_MAX, 1e-7));
+        out.cover = 1.0;
+        out.variance = max(out.variance, min(0.25 * (footprint / radius) * (footprint / radius), 1.0));
+    }
+    out.slope *= resolved;
+    out.cover *= resolved;
+    return out;
+}
+
+// The normal `n` tilted by `beads`, given how the surface's own coordinates and its world position run
+// across neighbouring pixels (`dpdx`/`dpdy` of each): Mikkelsen's surface gradient, with the height's
+// screen derivatives taken from the beads' own gradient — exact, where differentiating the beads would
+// see only their pixels.
+fn bead_normal(n: vec3<f32>, beads: Beads, local_dx: vec3<f32>, local_dy: vec3<f32>, world_dx: vec3<f32>, world_dy: vec3<f32>) -> vec3<f32> {
+    if (beads.cover <= 0.0) {
+        return n;
+    }
+    let r1 = cross(world_dy, n);
+    let r2 = cross(n, world_dx);
+    let det = dot(world_dx, r1);
+    if (abs(det) < 1e-14) {
+        return n;
+    }
+    let gradient = sign(det) * (dot(beads.slope, local_dx) * r1 + dot(beads.slope, local_dy) * r2);
+    return normalize(abs(det) * n - gradient);
+}
+
+// A roughness with the beads on it: water's where they stand, widened by how much a bead's normal turns
+// across the pixel (`Beads::variance`) — `α² + σ²`, with `α` = roughness².
+fn bead_roughness(roughness: f32, beads: Beads) -> f32 {
+    let a = BEAD_ROUGHNESS * BEAD_ROUGHNESS;
+    return mix(roughness, sqrt(sqrt(a * a + beads.variance)), beads.cover);
+}
+
+// The surface with `beads` on it (`rain_beads`), its own coordinates and world position running
+// `local_dx`/`local_dy` and `world_dx`/`world_dy` across neighbouring pixels.
+fn beaded(s: Surface, beads: Beads, local_dx: vec3<f32>, local_dy: vec3<f32>, world_dx: vec3<f32>, world_dy: vec3<f32>) -> Surface {
+    var out = s;
+    out.N = bead_normal(s.N, beads, local_dx, local_dy, world_dx, world_dy);
+    out.roughness = bead_roughness(s.roughness, beads);
+    return out;
+}
+
+// Four uniform numbers for a cell of a grid (PCG).
+fn bead_hash(i: vec4<i32>) -> vec4<f32> {
+    var v = bitcast<vec4<u32>>(i) * 1664525u + vec4<u32>(1013904223u);
+    v.x += v.y * v.w;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v.w += v.y * v.z;
+    v = v ^ (v >> vec4<u32>(16u));
+    v.x += v.y * v.w;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v.w += v.y * v.z;
+    return vec4<f32>(v) * (1.0 / 4294967296.0);
 }
 
 // A roughness as rain leaves it: no rougher than it was, but for the rain's rings too fine for the pixel

@@ -50,6 +50,39 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rain beads on a sealed surface (`rain_beads` in `surface.wgsl`).** On paint, glass and metal
+  (`Material::porosity` 0) the rain stands in beads.
+  - Laid out in the surface's own space, the model's coordinates, so they stay where they landed as a car drives:
+    three grids of 12 mm cells, each holding a drop with the likelihood the wetness gives, the most on top, some on
+    the sides, none underneath.
+  - Where a surface slices a drop's sphere it shows a hemisphere, a bead with the steep sides water has on wax. Its
+    slope is in closed form and tilts the normal through the positions' screen derivatives alone (Mikkelsen's
+    surface gradient), with no tangent frame and the bead never differentiated.
+  - Inside a bead the surface is water, widened by how much the bead's normal turns across the pixel,
+    `(footprint / R)² / 4` — geometric specular anti-aliasing in closed form. Drawn as smooth, a bead a pixel wide
+    caught a light as a square of glare.
+  - Drawn down to about a pixel: fixed on its surface, a bead is a still detail TAA's jitter resolves. Faded past
+    that, and not folded into the roughness, since a beaded surface reflects as a sharp lobe between the beads and a
+    broad one off them, which one widened lobe would turn matt.
+  - On a PBR surface, deferred and forward. The G-buffer's PBR route carries the model-space position in the vector
+    the baked route uses for its ambient (`route_extra`, chosen by the instance's route): its fragment stage has no
+    location left. The forward shader carries it in location 14, which only the phone path's per-vertex sun shadow
+    takes, so there are no beads there, where one is under a pixel anyway.
+  - Not on a baked-lit surface, the still, lit-ahead world, which takes the rain as a film, puddles and rings. On
+    the baked paths the bead code cost a city's every pixel 0.68 ms of forward GPU time a frame, beading none of
+    them: code a fragment never runs still holds the registers it would.
+  - Measured with `nfsu2-gizmo`'s `nfs_city NFS_TIME` (1080p, wet, AMD 780M, the same view drawn 120 times, three
+    runs each against the build before). A wide view of the city: no cost (forward −0.06 ms). From a chase camera:
+    G-buffer +0.04 ms. A car's boot filling the screen: G-buffer +0.18 ms, forward −0.34, since its glass's film no
+    longer ripples.
+
+  `rain_beads_on_a_sealed_surface_and_the_beads_ride_with_it`, from the G-buffer:
+  - from 40 cm, 1,130 texels tilt on a sealed wet slab, none on a porous or dry one;
+  - moved 42 cm with the camera, 16,383 of 16,384 texels are the same (13,113 with the beads laid out in world
+    space);
+  - closer, the beads are smoother (median 0.443 from 15 cm, 0.733 from 40);
+  - from 3 m none is drawn.
+
 - **A sealed surface sheds the rain (`Material::porosity`).** Rain (`Renderer::wetness`) darkened everything
   that faced up by the same 0.6 and stood puddles on everything flat, so a car's paint went as dark as the road it
   drove on, and a puddle of the world's noise slid across its roof as it drove. Darkening is the pores', water
@@ -418,6 +451,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   material's layer.
 
 ### Fixed
+
+- **Glass keeps the rain off what is under it.** The rain map (`gizmo_renderer::rain_map`) was drawn with the
+  shadow casters, and glass casts no shadow: it lets the light through. So the rain fell through every window, bus
+  shelter and glass roof, and a car's cabin took it under its windows — its parcel shelf soaked to a mirror and
+  beaded behind the rear window (`nfsu2-gizmo`, a still from above its boot). A depth pass now says what it stands
+  for (`Stops::Light`, `Stops::Rain` in `passes/shadow.rs`), and the rain map draws glass too. The rain's drops
+  read the same map, so they no longer fall inside a glass roof either. `glass_keeps_the_rain_off_what_is_under_it`:
+  1,000 texels dry under a pane and 6,912 wet in the open; all 1,000 wet with the glass left out.
+- **A sealed surface's film no longer ripples.** The rain's rings (`rain_ripples`) rippled every soaked surface's
+  film, a car's windows among them; on paint and glass the water stands in beads instead. Only a porous surface's
+  film, and a puddle, ripple.
 
 - **Two shadow-fade tests assumed the desktop's 100 m shadow range** and failed on the forward-only path, whose
   range has been 40 m since 2026-11-12 (`csm::SHADOW_DISTANCE`); nothing ran `gizmo-renderer`'s tests there. Their

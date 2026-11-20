@@ -5504,6 +5504,81 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // Read off the G-buffer.
+    /// **Rain beads on a sealed surface, and the beads ride with it** (`rain_beads` in `surface.wgsl`). A
+    /// slab's top seen from 40 cm above, the G-buffer read back:
+    /// - sealed (`with_porosity(0.0)`) and wet, beads tilt the normal over a share of its texels, and where
+    ///   they stand the surface is water, as smooth as `BEAD_ROUGHNESS`;
+    /// - porous, or dry, none does;
+    /// - moved 37 cm along x and 21 along z, the camera moved with it, the same texels tilt the same way: the
+    ///   beads are laid out in the slab's own space, so they stay where they landed as a car drives;
+    /// - seen from 3 m, where a pixel spans more than a bead, none is drawn.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn rain_beads_on_a_sealed_surface_and_the_beads_ride_with_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // Each texel's normal and roughness (RT1), the slab `shift` from the origin and the camera `height`
+        // above it, straight down.
+        async fn frame(porosity: f32, wet: bool, shift: Vec3, height: f32) -> Vec<(Vec3, f32)> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            renderer.wetness = wet.then(|| crate::renderer::Wetness::new(1.0));
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let e = world.spawn();
+            world.add_component(e, Transform::new(shift + Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(4.0, 0.1, 4.0)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(white.clone()).with_pbr(Vec4::new(0.5, 0.1, 0.1, 1.0), 0.3, 0.5).with_porosity(porosity));
+            world.add_component(e, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle { position: shift + Vec3::new(0.0, height, 0.0), yaw: 0.0, pitch: -1.5, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await;
+            let def = renderer.deferred.as_ref().expect("the desktop path keeps a G-buffer");
+            let rt1 = read_target(&renderer, &def.normal_roughness_tex, 128).await;
+            let half = |t: &[u8], i: usize| f16_bits_to_f32(u16::from_le_bytes([t[2 * i], t[2 * i + 1]]));
+            rt1.as_chunks::<8>().0.iter().map(|r| (Vec3::new(half(r, 0), half(r, 1), half(r, 2)), half(r, 3).abs())).collect()
+        }
+        let tilted = |texels: &[(Vec3, f32)]| texels.iter().filter(|(n, _)| n.y < 0.98).count();
+        pollster::block_on(async {
+            let here = Vec3::ZERO;
+            let beaded = frame(0.0, true, here, 0.4).await;
+            let tilt = tilted(&beaded);
+            assert!(tilt > 800, "sealed and wet, beads tilt the normal: {tilt} of {} texels", beaded.len());
+            // Where they stand the surface is water, smooth where the pixel is small beside a bead and rough
+            // with its curvature where it is not: from 15 cm the beads' texels are smoother than from 40.
+            let bead_roughness = |texels: &[(Vec3, f32)]| {
+                let mut r: Vec<f32> = texels.iter().filter(|(n, _)| n.y < 0.98).map(|(_, r)| *r).collect();
+                r.sort_by(f32::total_cmp);
+                r[r.len() / 2]
+            };
+            let (near, here_r) = (bead_roughness(&frame(0.0, true, here, 0.15).await), bead_roughness(&beaded));
+            // 1,130 tilted, the median bead texel 0.443 from 15 cm and 0.733 from 40, when written.
+            assert!(near < here_r, "closer, smoother beads: {near:.3} from 15 cm, {here_r:.3} from 40");
+            assert_eq!(tilted(&frame(1.0, true, here, 0.4).await), 0, "porous, the rain soaks in and stands in no bead");
+            assert_eq!(tilted(&frame(0.0, false, here, 0.4).await), 0, "dry, no beads");
+
+            let moved = frame(0.0, true, Vec3::new(0.37, 0.0, 0.21), 0.4).await;
+            let same = beaded.iter().zip(&moved).filter(|((a, _), (b, _))| (*a - *b).length() < 0.01).count();
+            // 16,383 when written; 13,113 with the beads laid out in world space.
+            assert!(same * 100 > beaded.len() * 99, "moved with the camera, the beads are where they were: {same} of {} texels", beaded.len());
+
+            let far = tilted(&frame(0.0, true, here, 3.0).await);
+            assert_eq!(far, 0, "from 3 m a pixel spans more than a bead: none drawn");
+        });
+    }
+
     #[cfg(not(gizmo_forward_only))] // Read off the G-buffer's roughness.
     /// **Puddles cover the share of the ground they are asked to.** A wide grey floor seen from above in
     /// the rain, with `puddles` at 0.2 and at 0.5 (a metre across, so the frame holds over a thousand):
@@ -5675,6 +5750,75 @@ mod golden_render_tests {
             }
             assert_eq!(under_changed, 0, "drawn forward, the floor under the roof is the dry frame's");
             assert!(open_darker > 200, "and the open floor is darker: {open_darker} pixels");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no rain map.
+    /// **Glass keeps the rain off what is under it.** A pane of glass 3 m up over part of a floor (alpha
+    /// 0.3, drawn blended), seen from low down: in the rain the floor under it keeps its own roughness and the
+    /// open floor soaks. Glass casts no shadow — it lets the light through — and the rain map was drawn with
+    /// the shadow casters only, so until 2026-11-20 the rain fell through every window, bus shelter and glass
+    /// roof; a car's cabin took it under its windows (`Stops::Rain` in `passes/shadow.rs`).
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn glass_keeps_the_rain_off_what_is_under_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            renderer.fxaa = None;
+            renderer.smaa = None;
+            renderer.wetness = Some(crate::renderer::Wetness::new(1.0));
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            // `create_cube` is ±1: a scale is a half extent. The floor, and a pane 3 m up over x 5 – 9.
+            for (at, half, colour) in [
+                (Vec3::new(10.0, -0.1, 0.0), Vec3::new(20.0, 0.1, 20.0), Vec4::new(0.6, 0.6, 0.6, 1.0)),
+                (Vec3::new(7.0, 3.0, 0.0), Vec3::new(2.0, 0.02, 4.0), Vec4::new(0.7, 0.8, 0.9, 0.3)),
+            ] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(white.clone()).with_pbr(colour, 0.8, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 1.2, 0.0), yaw: 0.0, pitch: -0.12, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await;
+            let def = renderer.deferred.as_ref().expect("the desktop path keeps a G-buffer");
+            let half = |t: &[u8], i: usize| f16_bits_to_f32(u16::from_le_bytes([t[2 * i], t[2 * i + 1]]));
+            let rough = read_target(&renderer, &def.normal_roughness_tex, 128).await;
+            let place = read_target(&renderer, &def.world_position_tex, 128).await;
+            let camera = Vec3::new(0.0, 1.2, 0.0);
+            let texels: Vec<(f32, Vec3)> = rough
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .zip(place.as_chunks::<8>().0)
+                .map(|(r, p)| (half(r, 3).abs(), Vec3::new(half(p, 0), half(p, 1), half(p, 2)) + camera))
+                .collect();
+            // The floor's top under the pane, well inside its edges, and out in the open.
+            let under = |p: Vec3| p.y.abs() < 0.05 && (5.4..8.6).contains(&p.x) && p.z.abs() < 3.4;
+            let open = |p: Vec3| p.y.abs() < 0.05 && (p.x < 4.0 || p.x > 10.0);
+            let count = |region: &dyn Fn(Vec3) -> bool, wet: bool| texels.iter().filter(|(r, p)| region(*p) && (*r < 0.7) == wet).count();
+            let (under_dry, under_wet) = (count(&under, false), count(&under, true));
+            let (open_wet, open_dry) = (count(&open, true), count(&open, false));
+            // 1,000 dry under the glass and 6,912 wet in the open when written; with the glass left out of
+            // the rain map, all 1,000 wet.
+            assert!(under_dry > 200 && under_wet == 0, "under the glass the floor is dry: {under_dry} texels dry, {under_wet} wet");
+            assert!(open_wet > 200 && open_dry == 0, "out in the open it is soaked: {open_wet} texels wet, {open_dry} dry");
         });
     }
 

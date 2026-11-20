@@ -28,9 +28,19 @@ fn bind_caster<'a>(plan: &mut super::plan::PassPlan<'a>, renderer: &'a Renderer,
     plan.set_bind_group(2, skeleton.as_ref());
 }
 
-/// Whether `item` casts into a shadow map at all: its own flag, then its material's say — the same
-/// answer for the cascades and every local light's layer.
-fn casts_into_shadow_maps(renderer: &Renderer, item: &DrawItem) -> bool {
+/// What a depth pass stands for: the light, in a shadow map, or the rain, in the rain map. Glass is the
+/// difference — it lets the light through and stops the rain. The rain map drew none of it until
+/// 2026-11-20, and a car's cabin under its windows took the rain as if it had no roof: its parcel shelf
+/// soaked to a mirror and beaded, behind the rear window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stops {
+    Light,
+    Rain,
+}
+
+/// Whether `item` is drawn into a depth pass that `stops` it: its own flag, then its material's say — the
+/// same answer for the cascades and every local light's layer, and for the rain map but for glass.
+fn casts_into_shadow_maps(renderer: &Renderer, item: &DrawItem, stops: Stops) -> bool {
     // Per-object opt-out, on top of the material rules: `MeshRenderer::shadows`. A flag the editor
     // obeys and the game ignores would make the viewport lie about the build.
     if !item.casts_shadows {
@@ -49,8 +59,9 @@ fn casts_into_shadow_maps(renderer: &Renderer, item: &DrawItem) -> bool {
     match item.custom.map(|id| renderer.custom_materials.get(id).is_some_and(|c| c.casts_shadows)) {
         Some(cast) => cast,
         // Baked-lit geometry casts. It is `unlit` in the sense of skipping the deferred path, but it
-        // is a solid world and a world that does not occlude the sun has no shadows in it at all.
-        None => !((item.unlit && !item.baked_lit) || item.is_transparent),
+        // is a solid world and a world that does not occlude the sun has no shadows in it at all. What
+        // is transparent lets the light through, and not the rain.
+        None => !((item.unlit && !item.baked_lit) || (item.is_transparent && stops == Stops::Light)),
     }
 }
 
@@ -72,6 +83,7 @@ fn record_caster_pass(
     light: &wgpu::BindGroup,
     view_proj: Mat4,
     local: bool,
+    stops: Stops,
 ) -> u32 {
     let frustum = crate::math::Frustum::from_matrix(&view_proj);
     let mut drawn = 0;
@@ -94,7 +106,7 @@ fn record_caster_pass(
     // Through a plan: a run of casters sharing a pipeline, a material and a buffer is one multi-draw.
     let mut plan = super::plan::PassPlan::default();
     for item in draw_items {
-        if !casts_into_shadow_maps(renderer, item) {
+        if !casts_into_shadow_maps(renderer, item, stops) {
             continue;
         }
         let Some(pipeline) = caster_pipeline(renderer, item, item.closed && !local) else { continue };
@@ -120,7 +132,8 @@ fn record_caster_pass(
 /// The rain map (`gizmo_renderer::rain_map`): the scene's depth from straight above, `view_proj`'s, into
 /// the sun array's layer past the cascades, through its pass group (`SceneState::rain_map`, written
 /// before). Every caster by both faces, as a local light's layer: a bridge's deck is often a sheet, and
-/// one face of it would let the rain through. Returns the instances it drew: none while the array has no
+/// one face of it would let the rain through. And glass, which casts no shadow but keeps the rain off what
+/// is under it ([`Stops::Rain`]). Returns the instances it drew: none while the array has no
 /// layer for it (`SceneState::shadow_rain_layer_view`).
 pub fn record_rain_map(
     encoder: &mut wgpu::CommandEncoder,
@@ -142,6 +155,7 @@ pub fn record_rain_map(
         &renderer.scene.rain_map.bind_group,
         view_proj,
         true,
+        Stops::Rain,
     )
 }
 
@@ -171,6 +185,7 @@ pub fn record_shadow_passes(
             renderer.scene.view_shadow_pass_bind_group(i),
             *view_proj,
             false,
+            Stops::Light,
         );
         passes += 1;
     }
@@ -186,6 +201,7 @@ pub fn record_shadow_passes(
             renderer.scene.view_local_shadow_pass_bind_group(i),
             layer.view_proj,
             true,
+            Stops::Light,
         );
         passes += 1;
     }
