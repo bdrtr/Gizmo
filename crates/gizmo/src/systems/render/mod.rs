@@ -8295,6 +8295,72 @@ mod golden_render_tests {
         (air, side as usize)
     }
 
+    #[cfg(not(gizmo_forward_only))] // That path has no volumetric light.
+    /// **A coarse march keeps a lamp's halo off the post in front of it** (`VolumetricState::set_march_divisor`,
+    /// `volumetric_apply.wgsl`). A post 12 cm across, 4 m off, stands in front of a lamp's air: marched at a
+    /// sixteenth of the frame's pixels, the post's pixels are as dark as when every pixel is marched — the
+    /// upsample weighs each texel by how near its surface stands to the pixel's own — where filtered plainly
+    /// the halo beside the post, a texel wider than it, spilled across it.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_coarse_march_keeps_a_lamps_halo_off_the_post_in_front_of_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // The frame's brightness on the post and beside it, marched one pixel of `divisor` × `divisor`.
+        async fn frame(divisor: u32) -> (f64, f64) {
+            let mut renderer = air_renderer().await;
+            {
+                let Renderer { volumetric, device, deferred, .. } = &mut renderer;
+                if let (Some(air), Some(deferred)) = (volumetric.as_mut(), deferred.as_ref()) {
+                    air.set_march_divisor(device, deferred, divisor);
+                }
+            }
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            air_box(&mut world, &renderer, &mut assets, Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.06, 4.0, 0.06));
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(0.0, 1.0, 3.0)));
+            world.add_component(lamp, GlobalTransform::default());
+            world.add_component(lamp, PointLight::new(Vec3::ONE, 40.0, 9.0));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 1.0, -4.0),
+                yaw: std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let pixels = render_world(&mut renderer, &mut world).await;
+            let mean = |xs: std::ops::Range<usize>| {
+                let (mut sum, mut n) = (0.0, 0.0);
+                for y in 24..104 {
+                    for x in xs.clone() {
+                        sum += (0..3).map(|c| f64::from(pixels[(y * 128 + x) * 4 + c])).sum::<f64>();
+                        n += 1.0;
+                    }
+                }
+                sum / n
+            };
+            // The post covers the middle columns; the halo beside it, a few columns off.
+            (mean(63..65), mean(52..56))
+        }
+        pollster::block_on(async {
+            let (post_fine, beside) = frame(1).await;
+            let (post_coarse, _) = frame(4).await;
+            // 498.2, 493.3 and 555.4 when written; filtered plainly, the post read 571.9, brighter than the
+            // halo beside it.
+            assert!(beside > post_fine + 20.0, "the setup: the halo beside the post outshines it ({beside:.1} against {post_fine:.1})");
+            assert!(
+                post_coarse - post_fine < 0.15 * (beside - post_fine),
+                "marched coarse, the post stays dark: {post_coarse:.1} against {post_fine:.1}, the halo beside {beside:.1}"
+            );
+        });
+    }
+
     #[cfg(not(gizmo_forward_only))] // The air tests' own: that path has no volumetric light.
     /// The sum of `air` over columns `xs` and rows `ys` of a `side`-wide target.
     fn air_in(air: &[f32], side: usize, xs: std::ops::Range<usize>, ys: std::ops::Range<usize>) -> f32 {

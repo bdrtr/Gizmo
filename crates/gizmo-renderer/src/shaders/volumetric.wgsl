@@ -4,6 +4,9 @@
 // CPU-computed scene.inv_view_proj instead of inverting view_proj per fragment.
 #import gizmo::common::{SceneUniforms, LightData, rotate_by_quat, spot_cone, spot_cookie_uv, local_shadow_layer, local_shadow_in_air, gizmo_cluster_index}
 
+
+// The distance a ray to the sky reports as its surface's (`MarchOut`'s alpha): past anything, within a half float.
+const SKY_DISTANCE: f32 = 10000.0;
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 // The clustered light lists (`gizmo_renderer::clustered`), on the global group as the lit passes have them:
 // a point of the air takes the lights of its cluster, not every light of the frame.
@@ -83,30 +86,39 @@ fn rand(co: vec2<f32>) -> f32 {
     return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
 }
 
-// Henyey-Greenstein phase function for forward scattering
-// A local light's air over the stretch `x`–`y` of a ray from `origin` along `ray_dir`, the light
-// `off_line` (b) from the ray's line and nearest it at `along`. In the angle the stretch spans from the
-// light, `φ = atan(u / b)`, the inverse square is flat — `du / (b² + u²) = dφ / b` — and what is left
-// (`local_air`: the window, the phase, a spot's cone and cookie, the shadow) turns smoothly; so the
-// stretch's air is `(1/b) ∫ local_air dφ`, taken by three-point Gauss–Legendre over the angle — two points
-// were 11 % out over a 6 m stretch passing a lamp, where the phase falls from forward scattering in front
-// of it (0.61) to back scattering behind (0.02). The same on every frame and every pixel. A single point drawn at random in the angle (equiangular sampling) was
-// unbiased, but left each pixel's halo a grain of its own, which TAA could average only while the camera
-// stood still: driving, the lamps were dust.
-fn stretch_air(light: LightData, j: u32, kind: u32, x: f32, y: f32, along: f32, off_line: f32, origin: vec3<f32>, ray_dir: vec3<f32>) -> vec3<f32> {
+// A local light's air over `x`–`y` of the ray — the light `along` the ray from the camera and `off_line`
+// from its line — short of the scattering coefficient: the inverse square integrated exactly in the angle
+// the stretch spans from the light (`∫du/(b²+u²) = dφ/b`), and what turns with the angle — the window, the
+// phase, the cone and cookie, the shadow (`local_air`) — taken by three-point Gauss–Legendre over each of
+// as many equal pieces of that angle as keep a piece within a quarter turn's half (π/4). A light's whole
+// chord of a ray spans up to half a turn, and the window falls to nothing steeply at its ends: five points
+// over all of it were 10 % low against the stretches, and split at a veil did not add up to unsplit. A ray
+// that passes a light far off spans little of its angle and takes one piece. The same on every frame and
+// every pixel: a point drawn at random in the angle (equiangular sampling) left each pixel's halo a grain of
+// its own, which TAA averaged only while the camera stood still: driving, the lamps were dust.
+fn chord_air(light: LightData, j: u32, kind: u32, x: f32, y: f32, along: f32, off_line: f32, origin: vec3<f32>, ray_dir: vec3<f32>) -> vec3<f32> {
     let first = atan((x - along) / off_line);
     let last = atan((y - along) / off_line);
-    let middle = 0.5 * (first + last);
-    let half_width = 0.5 * (last - first);
-    let side = half_width * 0.7745967;
-    let centre = local_air(light, j, kind, origin + ray_dir * (along + off_line * tan(middle)), ray_dir);
-    let low = local_air(light, j, kind, origin + ray_dir * (along + off_line * tan(middle - side)), ray_dir);
-    let high = local_air(light, j, kind, origin + ray_dir * (along + off_line * tan(middle + side)), ray_dir);
-    return half_width / off_line * (0.8888889 * centre + 0.5555556 * (low + high));
+    let pieces = clamp(ceil((last - first) / 0.7853982), 1.0, 4.0);
+    let piece = (last - first) / pieces;
+    let side = 0.5 * piece * 0.7745967;
+    var sum = vec3<f32>(0.0);
+    for (var k = 0.0; k < pieces; k += 1.0) {
+        let middle = first + (k + 0.5) * piece;
+        sum += 0.8888889 * angle_air(light, j, kind, middle, along, off_line, origin, ray_dir);
+        sum += 0.5555556 * (angle_air(light, j, kind, middle - side, along, off_line, origin, ray_dir)
+            + angle_air(light, j, kind, middle + side, along, off_line, origin, ray_dir));
+    }
+    return 0.5 * piece / off_line * sum;
+}
+
+// `local_air` where the ray is at angle `phi` from the light's nearest point on it.
+fn angle_air(light: LightData, j: u32, kind: u32, phi: f32, along: f32, off_line: f32, origin: vec3<f32>, ray_dir: vec3<f32>) -> vec3<f32> {
+    return local_air(light, j, kind, origin + ray_dir * (along + off_line * tan(phi)), ray_dir);
 }
 
 // What of a local light reaches the point `p` of the air and is scattered along `ray_dir` towards the
-// camera, short of the inverse square (which `stretch_air` integrates) and the scattering coefficient:
+// camera, short of the inverse square (which `chord_air` integrates) and the scattering coefficient:
 // its colour and intensity, the window at its radius, the phase, on a rectangle's lit side only, inside a
 // spot's cone and through its cookie, and past the light's shadow when it casts one.
 fn local_air(light: LightData, j: u32, kind: u32, p: vec3<f32>, ray_dir: vec3<f32>) -> vec3<f32> {
@@ -170,19 +182,23 @@ fn fs_main(in: VertexOutput) -> MarchOut {
 
     var ray_dir = ray_dir_reconstructed;
     var max_dist = params.max_distance; // Far clip for skybox god rays
+    // How far the surface this texel's ray stops at stands, for the apply pass's depth-aware upsample
+    // (`volumetric_apply.wgsl`); the sky, far past anything.
+    var surface = SKY_DISTANCE;
 
     // The surface the ray stops at, from the depth at the centre of the pixel it reads.
     if (depth < 1.0) {
         let uv = (vec2<f32>(iuv) + 0.5) / vec2<f32>(tex_size);
         let h = inv_vp * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
         let diff = h.xyz / h.w - cam_pos;
-        max_dist = min(length(diff), params.max_distance);
+        surface = length(diff);
+        max_dist = min(surface, params.max_distance);
         ray_dir = normalize(diff);
     }
     
     var out: MarchOut;
-    out.front = vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    out.behind = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.front = vec4<f32>(0.0, 0.0, 0.0, surface);
+    out.behind = vec4<f32>(0.0, 0.0, 0.0, surface);
     if (max_dist < 0.1) {
         return out;
     }
@@ -220,6 +236,8 @@ fn fs_main(in: VertexOutput) -> MarchOut {
     let sun_phase = phase_function(params.phase_g, cos_theta);
     let sun_intensity = scene.sun_color.rgb * scene.sun_color.w * params.sun_scatter;
     
+    // The local lights already integrated along this ray, one bit each of the frame's 256 (`chord_air`).
+    var seen = array<u32, 8>();
     for (var i = 0.0; i < steps; i += 1.0) {
         current_pos += ray_dir * step_size;
         var total_scatter = vec3<f32>(0.0);
@@ -280,40 +298,48 @@ fn fs_main(in: VertexOutput) -> MarchOut {
                     * phase_function(params.phase_g, dot(ray_dir, toward)) * step_size;
                 continue;
             }
-            // This sample's stretch of the ray: the k-th step, `[k·step, (k+1)·step]`, which the jittered
-            // sample lies in — so the stretches tile the ray from the camera to where it stops, with no gap
-            // and nothing past the surface. Cut at the veil: what is in front of it is the front's.
+            // Each local light once a ray, over the whole chord its sphere cuts from the ray — however many
+            // of the ray's steps list it, which is most of them for a lamp a ray passes near. Integrated in the
+            // angle the chord spans from the light (`chord_air`): the inverse square exactly, the rest by
+            // quadrature, the same on every frame. Cut at the veil: what is in front of it is the front's. For
+            // a light that casts a shadow, short of the surface the ray ends on by the shadow's bias: the air
+            // there is what its shadow cannot tell from the surface, and a lamp behind a wall lit it as if
+            // the wall were not there.
             //
-            // Over a stretch the light's air is integrated in the angle the stretch spans from it
-            // (`stretch_air`): the inverse square exactly, the rest by quadrature, the same on every frame —
-            // a ray passing a bulb gathers its halo whatever its step. Sampled at the step, one step carried
-            // the whole halo and the next none, and a sky ray's 6 m steps missed it outright. For a light
-            // that casts a shadow, short of the surface the ray ends on by the shadow's bias: the air there
-            // is what its shadow cannot tell from the surface, and a lamp behind a wall lit it as if the wall
-            // were not there. It used to be `(1 - d/r)²` at the sample, with no inverse square and no phase:
-            // inside its radius a lamp lit the air nearly as brightly a radius off as at the bulb, and a
-            // street of them filled the frame with fog (`nfsu2-gizmo`'s 2,233 lamps, 2026-11-20).
+            // Each step integrated its own stretch of every light its cluster listed until 2026-11-20, three
+            // points a stretch: a lamp a ray passed near was integrated once for each step it touched, and a
+            // drive down a lamp-lit street spent 5.7 ms of GPU on the haze (`nfsu2-gizmo`, five steps, 1080p,
+            // AMD 780M). It used to be `(1 - d/r)²` at the sample before that, with no inverse square and no
+            // phase: inside its radius a lamp lit the air nearly as brightly a radius off as at the bulb, and
+            // a street of them filled the frame with fog (`nfsu2-gizmo`'s 2,233 lamps, 2026-11-20).
+            let word = j / 32u;
+            let bit = 1u << (j % 32u);
+            if ((seen[word] & bit) != 0u) {
+                continue;
+            }
+            seen[word] |= bit;
             let along = dot(light.position.xyz - cam_pos, ray_dir);
             // The light's distance from the ray's line, with the inverse square's 10 cm core (`light_falloff`
             // divides by `d² + 0.01`): a ray from a camera standing in the light — a reflection probe at a
             // lamp — gathers what the surfaces round it are lit by, not an infinite halo.
             let off_line = sqrt(max(dot(light.position.xyz - cam_pos, light.position.xyz - cam_pos) - along * along, 0.0) + 0.01);
-            let start = dot(current_pos - cam_pos, ray_dir) - jitter;
-            let casts = local_shadow_layer(scene.light_shadows[j / 4u][j % 4u], vec3<f32>(1.0, 0.0, 0.0)) >= 0;
-            let end = min(start + step_size, select(max_dist, local_end, casts));
-            let cut = clamp(veil_along, start, max(end, start));
-            // The light's sphere misses this stretch (its nearest point is past the radius): nothing to
-            // draw. The cluster lists every light whose sphere touches its cell, most of which a stretch of
-            // one ray passes by.
-            let nearest = clamp(along, start, max(end, start)) - along;
-            if (off_line * off_line + nearest * nearest >= light.color.a * light.color.a) {
+            let radius = light.color.a;
+            if (off_line >= radius) {
                 continue;
             }
-            if (cut > start) {
-                front += params.bulb_scatter * stretch_air(light, j, kind, start, cut, along, off_line, cam_pos, ray_dir);
+            let half_chord = sqrt(radius * radius - off_line * off_line);
+            let casts = local_shadow_layer(scene.light_shadows[j / 4u][j % 4u], vec3<f32>(1.0, 0.0, 0.0)) >= 0;
+            let first = max(along - half_chord, 0.0);
+            let last = min(along + half_chord, select(max_dist, local_end, casts));
+            if (last <= first) {
+                continue;
             }
-            if (end > cut) {
-                behind += params.bulb_scatter * stretch_air(light, j, kind, cut, end, along, off_line, cam_pos, ray_dir);
+            let cut = clamp(veil_along, first, last);
+            if (cut > first) {
+                front += params.bulb_scatter * chord_air(light, j, kind, first, cut, along, off_line, cam_pos, ray_dir);
+            }
+            if (last > cut) {
+                behind += params.bulb_scatter * chord_air(light, j, kind, cut, last, along, off_line, cam_pos, ray_dir);
             }
         }
         if (dot(current_pos - cam_pos, fwd) < veil) {
@@ -323,7 +349,7 @@ fn fs_main(in: VertexOutput) -> MarchOut {
         }
     }
     
-    out.front = vec4<f32>(front, 1.0);
-    out.behind = vec4<f32>(behind, 1.0);
+    out.front = vec4<f32>(front, surface);
+    out.behind = vec4<f32>(behind, surface);
     return out;
 }

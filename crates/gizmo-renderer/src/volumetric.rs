@@ -1,6 +1,6 @@
 
 use crate::deferred::DeferredState;
-use crate::pipeline::{load_shader, load_shader_composed, SceneState};
+use crate::pipeline::{load_shader_composed, SceneState};
 
 /// The six numbers that shape the volumetric march.
 ///
@@ -63,8 +63,10 @@ impl Default for VolumetricParams {
 /// Volumetric lighting — the shafts of light ("god rays") raymarched through the sun's cascades and
 /// the local lights' shadow layers.
 ///
-/// Marched at reduced resolution and then applied over the HDR target: the effect is low-frequency,
-/// so a half-resolution march is not visibly different and is several times cheaper.
+/// Marched at reduced resolution — half by default, [`set_march_divisor`](Self::set_march_divisor) for
+/// less — and applied over the HDR target through a depth-aware upsample: each pixel takes the march's
+/// four nearest texels weighted by how near their surfaces stand to its own, so the air marched past a
+/// lamp post does not spill onto the post. The effect is low-frequency; the cost is the march's pixels.
 pub struct VolumetricState {
     /// The marched scattering term in front of the nearest surface that blends — all of it where
     /// none does — added over the finished frame.
@@ -98,7 +100,8 @@ pub struct VolumetricState {
 
     linear_sampler: wgpu::Sampler,
 
-    /// The width of the frame it was built for, in pixels; the march target is half of it.
+    /// The width of the frame it was built for, in pixels; the march target is this over
+    /// [`march_divisor`](Self::march_divisor).
     pub width: u32,
     /// That frame's height.
     pub height: u32,
@@ -118,6 +121,9 @@ pub struct VolumetricState {
 
     /// The six shaping numbers. Write to them directly; they reach the GPU on the next frame.
     pub params: VolumetricParams,
+    /// The frame's size over the march's, each way: 2 (the default) marches a quarter of its pixels, 4 a
+    /// sixteenth. Set through [`set_march_divisor`](Self::set_march_divisor), which rebuilds the targets.
+    march_divisor: u32,
     /// Their uniform buffer.
     pub params_buffer: wgpu::Buffer,
 }
@@ -139,10 +145,10 @@ impl VolumetricState {
             ..Default::default()
         });
 
-        let half_w = (width / 2).max(1);
-        let half_h = (height / 2).max(1);
-        let (volumetric_texture, volumetric_view) = Self::mk_tex(device, half_w, half_h);
-        let (behind_texture, behind_view) = Self::mk_tex(device, half_w, half_h);
+        let march_divisor = 2;
+        let (march_w, march_h) = ((width / march_divisor).max(1), (height / march_divisor).max(1));
+        let (volumetric_texture, volumetric_view) = Self::mk_tex(device, march_w, march_h);
+        let (behind_texture, behind_view) = Self::mk_tex(device, march_w, march_h);
         let (veil_depth_texture, veil_depth_view) = Self::mk_veil_depth(device, width, height);
 
         let volumetric_bgl = Self::mk_volumetric_bgl(device);
@@ -168,11 +174,12 @@ impl VolumetricState {
         );
 
         let apply_bind_group =
-            Self::mk_apply_bg(device, &apply_bgl, &volumetric_view, &linear_sampler);
-        let behind_apply_bind_group = Self::mk_apply_bg(device, &apply_bgl, &behind_view, &linear_sampler);
+            Self::mk_apply_bg(device, &apply_bgl, &volumetric_view, &linear_sampler, &deferred.depth_view);
+        let behind_apply_bind_group =
+            Self::mk_apply_bg(device, &apply_bgl, &behind_view, &linear_sampler, &deferred.depth_view);
 
         let volumetric_pipeline = Self::mk_volumetric_pipeline(device, scene, &volumetric_bgl);
-        let apply_pipeline = Self::mk_apply_pipeline(device, &apply_bgl);
+        let apply_pipeline = Self::mk_apply_pipeline(device, &apply_bgl, scene);
 
         Self {
             enabled: true,
@@ -194,6 +201,24 @@ impl VolumetricState {
             linear_sampler,
             width,
             height,
+            march_divisor,
+        }
+    }
+
+    /// The frame's size over the march's, each way ([`march_divisor`](Self::march_divisor)).
+    #[must_use]
+    pub fn march_divisor(&self) -> u32 {
+        self.march_divisor
+    }
+
+    /// Marches one pixel of `divisor` × `divisor` of the frame's (1 – 8; 2 is the default), rebuilding the
+    /// targets when it changes. The march's cost is its pixels: 4 is a quarter of 2's. `nfsu2-gizmo`'s
+    /// lamp-lit streets took 4.3 ms of haze at 2 (1080p, AMD 780M).
+    pub fn set_march_divisor(&mut self, device: &wgpu::Device, deferred: &DeferredState, divisor: u32) {
+        let divisor = divisor.clamp(1, 8);
+        if divisor != self.march_divisor {
+            self.march_divisor = divisor;
+            self.resize(device, deferred, self.width, self.height);
         }
     }
 
@@ -205,12 +230,12 @@ impl VolumetricState {
         width: u32,
         height: u32,
     ) {
-        let half_w = (width / 2).max(1);
-        let half_h = (height / 2).max(1);
-        let (t, v) = Self::mk_tex(device, half_w, half_h);
+        let march_w = (width / self.march_divisor).max(1);
+        let march_h = (height / self.march_divisor).max(1);
+        let (t, v) = Self::mk_tex(device, march_w, march_h);
         self.volumetric_texture = t;
         self.volumetric_view = v;
-        let (t, v) = Self::mk_tex(device, half_w, half_h);
+        let (t, v) = Self::mk_tex(device, march_w, march_h);
         self.behind_texture = t;
         self.behind_view = v;
         let (t, v) = Self::mk_veil_depth(device, width, height);
@@ -226,14 +251,10 @@ impl VolumetricState {
             &self.veil_depth_view,
         );
 
-        self.apply_bind_group = Self::mk_apply_bg(
-            device,
-            &self.apply_bgl,
-            &self.volumetric_view,
-            &self.linear_sampler,
-        );
+        self.apply_bind_group =
+            Self::mk_apply_bg(device, &self.apply_bgl, &self.volumetric_view, &self.linear_sampler, &deferred.depth_view);
         self.behind_apply_bind_group =
-            Self::mk_apply_bg(device, &self.apply_bgl, &self.behind_view, &self.linear_sampler);
+            Self::mk_apply_bg(device, &self.apply_bgl, &self.behind_view, &self.linear_sampler, &deferred.depth_view);
 
         self.width = width;
         self.height = height;
@@ -345,6 +366,17 @@ impl VolumetricState {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // The frame's depth: where each pixel's surface stands, for the upsample's weights.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Depth,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -386,6 +418,7 @@ impl VolumetricState {
         layout: &wgpu::BindGroupLayout,
         vol_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
+        depth_view: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("volumetric_apply_bg"),
@@ -398,6 +431,10 @@ impl VolumetricState {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(depth_view),
                 },
             ],
         })
@@ -465,8 +502,10 @@ impl VolumetricState {
     fn mk_apply_pipeline(
         device: &wgpu::Device,
         bgl: &wgpu::BindGroupLayout,
+        scene: &SceneState,
     ) -> wgpu::RenderPipeline {
-        let shader = load_shader(
+        // Composed: it imports the scene's uniform, for the camera.
+        let shader = crate::pipeline::load_shader_composed(
             device,
             "demo/assets/shaders/volumetric_apply.wgsl",
             include_str!("shaders/volumetric_apply.wgsl"),
@@ -474,7 +513,8 @@ impl VolumetricState {
         );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("volumetric_apply_layout"),
-            bind_group_layouts: &[Some(bgl)],
+            // Group 1: the scene's, for the camera that turns a pixel's depth into a distance.
+            bind_group_layouts: &[Some(bgl), Some(&scene.global_bind_group_layout)],
             immediate_size: 0,
         });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

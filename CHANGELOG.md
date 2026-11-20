@@ -50,6 +50,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The volumetric light marches at the resolution it is asked for, upsampled by depth
+  (`VolumetricState::set_march_divisor`).** It marched at half the frame's resolution, filtered plainly onto it.
+  Now the march's size is a setting (2, half, by default; `nfsu2-gizmo` asks for 4, a sixteenth of the pixels), and
+  the apply pass upsamples by depth. Each pixel takes the march's four nearest texels, weighted as bilinear
+  filtering would and by how near the surface each texel's ray stopped at (written in its alpha) stands to the
+  pixel's own. So the air marched past a lamp post does not spill onto the post, however coarse the march. A
+  drive down `nfsu2-gizmo`'s lamp-lit streets: haze 4.4 ms at 2 and 1.4 ms at 4 (1080p, AMD 780M).
+  `a_coarse_march_keeps_a_lamps_halo_off_the_post_in_front_of_it`: a 12 cm post before a lamp's air reads 493.3
+  marched at 4 against 498.2 with every pixel marched; filtered plainly, 571.9, brighter than the halo beside it.
+- **The frame's GPU timer marks what blends part by part.** `gpu.veil`, `gpu.haze`, `gpu.transparent`,
+  `gpu.motion`, `gpu.particles` and `gpu.rain` now lie inside what `gpu.blended` held whole. A drive's 7 ms of
+  `gpu.blended` turned out to be 5.7 ms of haze.
+
 - **Rain beads on a sealed surface (`rain_beads` in `surface.wgsl`).** On paint, glass and metal
   (`Material::porosity` 0) the rain stands in beads.
   - Laid out in the surface's own space, the model's coordinates, so they stay where they landed as a car drives:
@@ -372,6 +385,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   WebGPU's 16, which nothing did.
 
 ### Changed
+
+- **The volumetric light integrates each local light once a ray, over the whole chord its sphere cuts from the
+  ray.** Each step used to integrate its own stretch of every light its cluster listed, so a lamp a ray passed
+  near was integrated once for each step it touched. A drive down a lamp-lit street spent 5.7 ms of GPU on the
+  haze. Now a per-ray set of the lights already done (a bit each of the frame's 256) lets each light be taken
+  once, over its chord ∩ the ray, still cut at the veil and short of the surface for a light that casts a
+  shadow. The quadrature is three-point Gauss–Legendre over each of as many equal pieces of the chord's angle as
+  keep a piece within π/4. Five points over the whole chord were 10 % low and split at a veil did not add up to
+  unsplit. The air is what the stretches gave: `a_smoke_splits_the_volumetric_air_as_a_pane_does` reads 661.4
+  clear against 661.1 before, and the split still adds up within 0.5 %. The same drive: haze 5.7 → 4.3 ms.
 
 - **A local light's air is integrated over each stretch by quadrature, not drawn at a random point: no grain.**
   The volumetric light took each stretch's window, phase, cone, cookie and shadow at one point drawn by the inverse

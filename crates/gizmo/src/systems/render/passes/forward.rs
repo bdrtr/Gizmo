@@ -90,9 +90,14 @@ pub fn record_forward_and_fluid(
         renderer.gpu_mark(encoder, "gpu.forward");
         super::screen_space::record_surface_effects(encoder, renderer);
         renderer.gpu_mark(encoder, "gpu.surface_effects");
+        // The parts of what blends, each to a GPU mark of its own: `gpu.blended`, which the frame's
+        // draw marks after this, held them all — the air's march, the glass, the motion, the particles,
+        // the rain — and a drive's 7 ms of it could not be told apart.
         if volumetric {
             record_veil_depth(encoder, renderer, &draw_items[world_end..], uploaded_instances, simulations);
+            renderer.gpu_mark(encoder, "gpu.veil");
             super::screen_space::record_volumetric_march(encoder, renderer);
+            renderer.gpu_mark(encoder, "gpu.haze");
         }
         if let Some(behind) = renderer.behind.as_ref().filter(|_| has_glass) {
             behind.capture(encoder, &renderer.post.hdr_texture, renderer.depth_texture_view.texture());
@@ -101,6 +106,7 @@ pub fn record_forward_and_fluid(
             let mut render_pass = begin_forward_pass(encoder, renderer, wgpu::LoadOp::Load, wgpu::LoadOp::Load);
             draw_forward_items(&mut render_pass, renderer, &draw_items[world_end..], uploaded_instances, baked);
         }
+        renderer.gpu_mark(encoder, "gpu.transparent");
     }
 
     // How what was drawn forward and opaque moved, into the G-buffer's velocity, for TAA and motion blur
@@ -108,6 +114,7 @@ pub fn record_forward_and_fluid(
     // city, as many draws as the frame itself.
     if velocity_read {
         record_forward_motion(encoder, renderer, draw_items, uploaded_instances, baked);
+        renderer.gpu_mark(encoder, "gpu.motion");
     }
 
     // ── GPU particles (soft: a pass of their own, see `record_gpu_particles`) and the fluid's
@@ -115,8 +122,10 @@ pub fn record_forward_and_fluid(
     if simulations {
         crate::systems::render::record_gpu_particles(encoder, renderer);
         crate::systems::render::record_fluid_surface(encoder, renderer);
+        renderer.gpu_mark(encoder, "gpu.particles");
         // Rain: a probe's face is one still frame, and rain caught in it would hang in every reflection.
         renderer.record_rain(encoder, camera, clock);
+        renderer.gpu_mark(encoder, "gpu.rain");
     }
 
     // ── Volumetrik duman (T6): sahnenin üstüne HDR'ye raymarch (post-process ÖNCESİ). The grid was

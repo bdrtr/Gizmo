@@ -250,5 +250,6 @@ fn apply_volumetric(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer, ter
     });
     pass.set_pipeline(&vol.apply_pipeline);
     pass.set_bind_group(0, term, &[]);
+    pass.set_bind_group(1, renderer.scene.view_bind_group(), &[]);
     pass.draw(0..3, 0..1);
 }
