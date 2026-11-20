@@ -37,6 +37,8 @@ pub fn record_forward_and_fluid(
     // Where the opaque baked-lit surfaces are drawn this view: not here when they went into the
     // G-buffer (`DrawItem::in_gbuffer`) or are drawn with their reflection inputs (`drawn_reflective`).
     baked: BakedRoute,
+    // The view's camera and the frame's clock (the scene block's): what the rain's streaks are measured by.
+    (camera, clock): (gizmo_math::Vec3, f32),
 ) {
     // ── Forward pass (unlit / skybox / GPU subsystems; PBR skipped if deferred) ──
     {
@@ -113,6 +115,8 @@ pub fn record_forward_and_fluid(
     if simulations {
         crate::systems::render::record_gpu_particles(encoder, renderer);
         crate::systems::render::record_fluid_surface(encoder, renderer);
+        // Rain: a probe's face is one still frame, and rain caught in it would hang in every reflection.
+        renderer.record_rain(encoder, camera, clock);
     }
 
     // ── Volumetrik duman (T6): sahnenin üstüne HDR'ye raymarch (post-process ÖNCESİ). The grid was

@@ -1973,7 +1973,7 @@ fn draw_camera_view_with(
     }
     passes::record_forward_and_fluid(
         encoder, renderer, world, &draw_items, uploaded_instances, simulations,
-        inv_view_proj, clear_color, velocity_read, baked,
+        inv_view_proj, clear_color, velocity_read, baked, (cam_pos, elapsed_time),
     );
     // The opaque forward draws (`gpu.forward`) and the screen-space reflections and GI over them
     // (`gpu.surface_effects`, the seen mask with them) are marked inside; this is the rest — glass, what
@@ -5565,6 +5565,100 @@ mod golden_render_tests {
             }
             assert_eq!(under_changed, 0, "drawn forward, the floor under the roof is the dry frame's");
             assert!(open_darker > 200, "and the open floor is darker: {open_darker} pixels");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no rain map: its rain falls everywhere.
+    /// **Rain falls and splashes in the open, and not under a roof** (`Renderer::rainfall`,
+    /// `gizmo_renderer::rain`). A lamp whose reach lies under a carport's roof lights no rain at all: the frame
+    /// is the dry one's to the byte, because no drop falls there and no splash lands on the floor there —
+    /// the rain map has the roof above it, and a splash lands on the roof. Take the roof away and the same lamp
+    /// lights the drops falling round it, and, low down, the splashes on the floor below it. The air lends a
+    /// drop nothing here and the sun scatters off none, so what rain the frame shows is the lamp's.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn rain_falls_and_splashes_in_the_open_and_not_under_a_roof() {
+        use crate::renderer::rain::Rainfall;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // The frame, with a lamp at `lamp` reaching `reach` metres, under a roof or not, and in `rain` or not.
+        async fn frame(lamp: Vec3, reach: f32, roof: bool, rain: Option<Rainfall>) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            renderer.wetness = Some(crate::renderer::Wetness::new(1.0));
+            renderer.rainfall = rain;
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            // `create_cube` is ±1: a scale is a half extent. The floor, and a roof 3 m up over x 5 – 9.
+            let mut boxes = vec![(Vec3::new(10.0, -0.1, 0.0), Vec3::new(20.0, 0.1, 20.0))];
+            if roof {
+                boxes.push((Vec3::new(7.0, 3.0, 0.0), Vec3::new(2.0, 0.1, 4.0)));
+            }
+            for (at, half) in boxes {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(white.clone()).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.8, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            }
+            let light = world.spawn();
+            world.add_component(light, Transform::new(lamp));
+            world.add_component(light, PointLight::new(Vec3::new(1.0, 0.8, 0.5), 50.0, reach));
+            // Low, looking along +X under the roof.
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 1.2, 0.0), yaw: 0.0, pitch: -0.12, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await
+        }
+        let changed = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(p, q)| p[..3] != q[..3]).count();
+        // Dense, so that a lamp's 1.5 m holds a few hundred drops; and no air light, so that an unlit drop adds
+        // nothing.
+        let mut drops = Rainfall::default();
+        drops.drops = 100_000;
+        drops.box_size = [24.0, 10.0, 24.0];
+        drops.ambient = 0.0;
+        drops.splash_cells = 0;
+        let mut splashes = Rainfall::default();
+        splashes.drops = 0;
+        splashes.ambient = 0.0;
+        pollster::block_on(async {
+            // A lamp 1.5 m up, reaching 1.5 m: its air is all under the roof, between the roof and the floor.
+            let (lamp, reach) = (Vec3::new(7.0, 1.5, 0.0), 1.5);
+            for roof in [true, false] {
+                let dry = frame(lamp, reach, roof, None).await;
+                let wet = frame(lamp, reach, roof, Some(drops)).await;
+                let n = changed(&dry, &wet);
+                if roof {
+                    assert_eq!(n, 0, "under the roof no drop falls in the lamp's light: {n} pixels changed");
+                } else {
+                    // 1333 when written (and 1376 under the roof, with the cover test taken out).
+                    assert!(n > 400, "in the open the lamp lights the rain falling round it: {n} pixels changed");
+                }
+            }
+            // Low down, reaching the floor round it and nothing above 1.6 m.
+            let (lamp, reach) = (Vec3::new(7.0, 0.4, 0.0), 1.2);
+            for roof in [true, false] {
+                let dry = frame(lamp, reach, roof, None).await;
+                let wet = frame(lamp, reach, roof, Some(splashes)).await;
+                let n = changed(&dry, &wet);
+                if roof {
+                    assert_eq!(n, 0, "under the roof no splash lands on the floor: {n} pixels changed");
+                } else {
+                    // 143 when written (and 142 under the roof, with a splash put on the floor whatever lies
+                    // above it).
+                    assert!(n > 40, "in the open the rain splashes on the floor in the lamp's light: {n} pixels changed");
+                }
+            }
         });
     }
 

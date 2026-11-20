@@ -188,6 +188,8 @@ pub mod hot_reload;
 pub mod pipeline;
 /// The HDR post-process chain: bloom, depth of field, tone mapping and composite.
 pub mod post_process;
+// Rain falling round the camera and splashing where it lands (`Renderer::rainfall`).
+pub mod rain;
 /// The rain map: the scene's depth from straight above, keeping what is under cover dry.
 pub mod rain_map;
 /// The [`Renderer`] itself — every GPU resource, and the entry points that drive a frame.

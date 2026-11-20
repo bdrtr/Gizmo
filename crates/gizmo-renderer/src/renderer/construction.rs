@@ -748,6 +748,8 @@ impl Renderer {
             fog: None,
             sky: None,
             wetness: None,
+            rainfall: None,
+            rain: None,
             deband_dither: false,
             gpu_particles,
             gpu_physics,

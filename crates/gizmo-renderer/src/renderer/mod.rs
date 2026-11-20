@@ -274,6 +274,12 @@ pub struct Renderer {
     pub sky: Option<crate::frame_uniforms::Sky>,
     /// Rain on the scene — see [`Wetness`](crate::frame_uniforms::Wetness). `None` (the default) is dry.
     pub wetness: Option<crate::frame_uniforms::Wetness>,
+    /// Rain falling — see [`Rainfall`](crate::rain::Rainfall): streaks round the camera and splashes where
+    /// they land. `None` (the default) is none. What [`wetness`](Self::wetness) does to surfaces, this does
+    /// to the air; a wet street wants both.
+    pub rainfall: Option<crate::rain::Rainfall>,
+    /// The rain's pipelines, built the first frame it rains ([`record_rain`](Self::record_rain)).
+    pub rain: Option<crate::rain::RainState>,
 
     // === GIZMO HATA AYIKLAMA (Debug Lines) ===
     /// The debug line renderer — gizmos, wireframes, physics overlays.

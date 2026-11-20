@@ -50,6 +50,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rain falling and splashing (`Renderer::rainfall`, `gizmo_renderer::rain`).** What `Renderer::wetness` does to
+  surfaces, this does to the air. Streaks fall round the camera: each drop is its instance index, a point of a box
+  round the camera moved down with the clock, so nothing is simulated or uploaded. A drop is drawn along where it
+  went relative to the camera while a shutter (`Rainfall::shutter`) was open: its fall, and the camera's own
+  motion. At a car's speed that draws the near drops out into lines streaming past, as much dimmer as they are
+  longer, because its light is spread along them. A drop within two metres of the lens is out of focus and fades.
+  A drop is a few millimetres wide, drawn at least a pixel and a half wide with what it covers of that as its
+  strength. It is lit by its cluster's lights, scattered forward the most, through a spot's cone and cookie: a
+  street's rain shows in its lamps and below a low beam's cut-off, not in the dark between them. Splashes are
+  crowns of water thrown up and falling back on the surface the rain map says the rain lands on, turned to the
+  camera. A ring lying on the ground was under a pixel tall at 7 m seen from a car's height. A drop under cover is
+  not drawn, and a splash lands on the roof, not under it
+  (`rain_falls_and_splashes_in_the_open_and_not_under_a_roof`: 0 pixels changed under a carport's roof, 1333 and
+  143 in the open; 1376 and 142 under it with the cover test taken out). The camera's velocity is each view's own,
+  and nothing across a cut or a pause (`a_views_camera_velocity_is_its_own_and_nothing_across_a_cut_or_a_pause`).
+  `nfsu2-gizmo`'s wet night, 20,000 drops: 0.4 ms of GPU on an AMD 780M.
+
 - **Local exposure: each pixel exposed for its own neighbourhood (`Renderer::local_exposure`).** One exposure for the
   whole frame cannot hold a night street and a car's bumper lit by headlights five metres off: an exposure that keeps
   the street dark burns the bumper. What UE5 calls local exposure, in its bilateral-grid form
