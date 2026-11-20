@@ -39,7 +39,7 @@ pub fn record_deferred_geometry(
         // Through a plan: it binds what changes only, and draws a run sharing a pipeline, a material
         // and a buffer as one multi-draw.
         let mut plan = super::plan::PassPlan::default();
-        let mut bound: Option<(Option<gizmo_renderer::custom_material::SurfaceId>, bool, bool)> = None;
+        let mut bound: Option<(Option<gizmo_renderer::custom_material::SurfaceId>, bool, bool, bool)> = None;
         for item in draw_items {
             // `ShadowCasting::Only`: casts, is not drawn. Checked in the z-prepass as well as the
             // G-buffer below, or the object would still write depth and punch a hole in whatever
@@ -47,34 +47,55 @@ pub fn record_deferred_geometry(
             if !item.visible_in_camera {
                 continue;
             }
-            // Not a baked-lit surface either: it writes its own depth in the G-buffer pass (`fs_baked`'s
-            // pipelines), where shading it again on an overlap costs less than drawing it twice.
-            if !item.in_gbuffer(baked) || item.baked_lit || item.is_skybox || item.is_transparent {
+            // A solid baked-lit surface the forward pass draws (`BakedRoute::Forward`, `Reflective`) lays its
+            // depth here too, through its own vertex stage (`SceneState::baked_lit_depth_pipelines`), so
+            // that the forward pass shades only what is in front of it. It used not to, on the reasoning
+            // that shading an overlap again costs less than drawing everything twice; but a city's streets
+            // are layer on layer, and a wet one's shading is dear. `nfsu2-gizmo`'s city, 1080p, AMD 780M,
+            // 2026-11-21: a street view's forward pass 11.9 → 6.3 ms wet and 8.4 → 4.7 ms dry, for 1.6 ms
+            // of prepass; a wet drive's 5.1 → 3.2 ms, for 0.6 ms.
+            //
+            // A cut-out stays out: laying its depth takes a fragment stage that samples and discards as
+            // the forward draw will, and the leaves and fences that cut hide little — the same views
+            // spent 0.2 ms more on the prepass and not a hundredth less on the forward pass. One on the
+            // G-buffer route writes its depth in the G-buffer pass (`fs_baked`'s pipelines), where the
+            // lighting pass shades each pixel once whatever overlaps.
+            let baked_depth = item.baked_lit
+                && !item.in_gbuffer(baked)
+                && !item.is_transparent
+                && !item.is_skybox
+                && !item.discards
+                && item.surface.is_none();
+            if !baked_depth && (!item.in_gbuffer(baked) || item.baked_lit || item.is_skybox || item.is_transparent) {
                 continue;
             }
-            let key = (item.surface, item.is_double_sided, item.discards);
+            let key = (item.surface, item.is_double_sided, item.discards, baked_depth);
             if bound != Some(key) {
-                let pipeline = match item.surface {
-                    // A game's surface cuts where its own code says, so its prepass always has the
-                    // fragment stage; an id with nothing behind it draws nothing, here as everywhere.
-                    Some(id) => match renderer.custom_materials.surface(id) {
-                        // A surface that never cuts leaves the depth a plain solid does.
-                        Some(s) if s.is_solid() => match (item.discards, item.is_double_sided) {
+                let pipeline = if baked_depth {
+                    &renderer.scene.baked_lit_depth_pipelines[usize::from(item.is_double_sided)]
+                } else {
+                    match item.surface {
+                        // A game's surface cuts where its own code says, so its prepass always has the
+                        // fragment stage; an id with nothing behind it draws nothing, here as everywhere.
+                        Some(id) => match renderer.custom_materials.surface(id) {
+                            // A surface that never cuts leaves the depth a plain solid does.
+                            Some(s) if s.is_solid() => match (item.discards, item.is_double_sided) {
+                                (true, two_sided) => &def.z_prepass_discard_pipelines[usize::from(two_sided)],
+                                (false, true) => &def.z_prepass_double_sided_pipeline,
+                                (false, false) => &def.z_prepass_pipeline,
+                            },
+                            Some(s) => match s.prepass_pipeline(item.is_double_sided) {
+                                Some(pipeline) => pipeline,
+                                None => continue,
+                            },
+                            None => continue,
+                        },
+                        None => match (item.discards, item.is_double_sided) {
                             (true, two_sided) => &def.z_prepass_discard_pipelines[usize::from(two_sided)],
                             (false, true) => &def.z_prepass_double_sided_pipeline,
                             (false, false) => &def.z_prepass_pipeline,
                         },
-                        Some(s) => match s.prepass_pipeline(item.is_double_sided) {
-                            Some(pipeline) => pipeline,
-                            None => continue,
-                        },
-                        None => continue,
-                    },
-                    None => match (item.discards, item.is_double_sided) {
-                        (true, two_sided) => &def.z_prepass_discard_pipelines[usize::from(two_sided)],
-                        (false, true) => &def.z_prepass_double_sided_pipeline,
-                        (false, false) => &def.z_prepass_pipeline,
-                    },
+                    }
                 };
                 plan.set_pipeline(pipeline);
                 bound = Some(key);

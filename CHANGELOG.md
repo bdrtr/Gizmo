@@ -386,6 +386,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The z-prepass lays the solid baked-lit surfaces' depth too, so the forward pass shades each of their
+  pixels once.** They were left out on the reasoning that shading an overlap again costs less than drawing
+  everything twice. But a city's streets are layer on layer, and a wet one's shading (rain, ripples, puddles,
+  every lamp's glint) is dear.
+  - Each is drawn with its own vertex stage, `baked_lit.wgsl`'s, now `@invariant`
+    (`SceneState::baked_lit_depth_pipelines`), so the forward draw meets the depth exactly.
+  - The frame is unchanged: a street view of `nfsu2-gizmo`'s city matches the old one to the byte, and so
+    does one with a car parked in it.
+  - `nfsu2-gizmo`, 1080p, AMD 780M: a wet street view's forward pass went 11.9 → 6.3 ms, and a dry one's
+    8.4 → 4.7 ms, for 1.6 ms of prepass. A wet drive's went 5.1 → 3.2 ms, for 0.6 ms.
+  - A cut-out stays out. Its prepass would need a fragment stage that samples and discards, and the leaves
+    and fences that cut hide little: the same views cost 0.2 ms more and saved nothing.
+  - `a_solid_baked_wall_keeps_the_g_buffer_from_what_stands_behind_it_and_a_cut_out_does_not`.
+
 - **The volumetric light integrates each local light once a ray, over the whole chord its sphere cuts from the
   ray.** Each step used to integrate its own stretch of every light its cluster listed, so a lamp a ray passed
   near was integrated once for each step it touched. A drive down a lamp-lit street spent 5.7 ms of GPU on the

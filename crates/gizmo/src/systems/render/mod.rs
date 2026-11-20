@@ -5229,6 +5229,78 @@ mod golden_render_tests {
         });
     }
 
+    /// **A solid baked-lit wall keeps the G-buffer from what stands behind it; a cut-out does not.** The
+    /// z-prepass lays a solid baked-lit surface's depth (`SceneState::baked_lit_depth_pipelines`), so the
+    /// forward pass shades only what is in front of it, and the G-buffer pass, which follows the prepass,
+    /// writes nothing such a wall hides. A lit box stands behind two baked walls side by side in depth: a
+    /// solid one over its upper half and, over its lower half, one its vertex alpha cuts away whole. The
+    /// box reaches the G-buffer below and nowhere above. Left out of the prepass, the solid wall let the
+    /// box be written whole and then shaded over it; a cut-out laid by the vertex stage alone would hide
+    /// the box behind a wall the forward pass then cut away.
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no z-prepass.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_solid_baked_wall_keeps_the_g_buffer_from_what_stands_behind_it_and_a_cut_out_does_not() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssr = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            // The box, 10 m off: rows and columns 47–81 of the frame.
+            air_box(&mut world, &renderer, &mut assets, Vec3::new(0.0, 0.0, 4.0), Vec3::new(1.5, 1.5, 0.2));
+            // The walls, 6 m off: each as wide as the box's view and half as high, the solid one above the
+            // frame's middle row and the cut one below it, its alpha 0 throughout against a cut at a half.
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            for (y, alpha, cutoff) in [(1.25, 1.0, 0.0), (-1.25, 0.0, 0.5)] {
+                let wall: Vec<crate::renderer::gpu_types::Vertex> = cube_vertices()
+                    .into_iter()
+                    .map(|mut v| {
+                        v.color = [0.5, 0.5, 0.5, alpha];
+                        v.position = (Vec3::from(v.position) * Vec3::new(2.5, 1.25, 0.05) + Vec3::new(0.0, y, 0.0)).to_array();
+                        v
+                    })
+                    .collect();
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::ZERO));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, renderer.mesh_arena.triangle_list(&wall, "baked wall"));
+                world.add_component(e, Material::new(white.clone()).with_baked_lit(Vec4::ONE).with_alpha_cutoff(cutoff));
+                world.add_component(e, MeshRenderer::new());
+            }
+            // Yaw π/2 looks along +Z: at the walls, the box behind them.
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, -6.0),
+                yaw: std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            super::batching::clear_render_cache();
+            render_world(&mut renderer, &mut world).await;
+            super::batching::clear_render_cache();
+            let def = renderer.deferred.as_ref().expect("the deferred path");
+            let albedo = read_target(&renderer, &def.albedo_metallic_tex, 128).await;
+            // Texels of the box's columns, in `rows`, that the G-buffer pass wrote an albedo to.
+            let written = |rows: std::ops::Range<usize>| {
+                rows.flat_map(|y| (52..76).map(move |x| (x, y))).filter(|&(x, y)| albedo[(y * 128 + x) * 4..][..3] != [0, 0, 0]).count()
+            };
+            let (above, below) = (written(50..60), written(68..78));
+            assert_eq!(above, 0, "behind the solid wall the box is not written to the G-buffer: {above} texels");
+            assert!(below > 200, "behind the cut-out it is: {below} texels of 240");
+        });
+    }
+
     /// **A glossy baked floor shows what stands on it and the sky around it, and is never darkened for
     /// it.** With screen-space reflections on, a baked-lit surface goes through the G-buffer
     /// (`baked_in_gbuffer`) and SSR reads it: a smooth one reflects. The lighting pass gives a baked

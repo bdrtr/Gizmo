@@ -542,6 +542,7 @@ impl Renderer {
             unlit_blended_pipeline: scene.unlit_blended_pipeline,
             baked_lit_pipeline: scene.baked_lit_pipeline,
             baked_lit_double_sided_pipeline: scene.baked_lit_double_sided_pipeline,
+            baked_lit_depth_pipelines: scene.baked_lit_depth_pipelines,
             baked_lit_transparent_pipeline: scene.baked_lit_transparent_pipeline,
             sky_pipeline: scene.sky_pipeline,
             backdrop_pipeline: scene.backdrop_pipeline,

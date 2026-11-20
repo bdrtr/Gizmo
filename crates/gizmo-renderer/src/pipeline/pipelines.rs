@@ -54,6 +54,8 @@ pub(super) struct CorePipelines {
     pub(super) baked_lit: wgpu::RenderPipeline,
     pub(super) baked_lit_double_sided: wgpu::RenderPipeline,
     pub(super) baked_lit_transparent: wgpu::RenderPipeline,
+    /// See [`SceneState::baked_lit_depth_pipelines`](super::SceneState::baked_lit_depth_pipelines).
+    pub(super) baked_lit_depth: [wgpu::RenderPipeline; 2],
     pub(super) sky: wgpu::RenderPipeline,
     /// The mesh's own painted sky/panorama — see `crate::backdrop`.
     pub(super) backdrop: wgpu::RenderPipeline,
@@ -135,6 +137,44 @@ pub(crate) fn forward_pipeline(
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// `module`'s vertex stage alone, writing depth: an opaque surface's share of the z-prepass, drawn with the
+/// same vertex stage as its forward draw so that the depths meet exactly (its position is `@invariant`).
+pub(crate) fn depth_only_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    label: &str,
+    cull: Option<wgpu::Face>,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[Some(crate::gpu_types::GpuVertex::desc())],
+        },
+        fragment: None,
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: cull,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
     })
@@ -650,6 +690,10 @@ pub(super) fn build_core_pipelines(
             blended_state.blend,
             wgpu::PolygonMode::Fill,
         ),
+        baked_lit_depth: [
+            depth_only_pipeline(device, &render_pipeline_layout, &baked_lit_shader, "Baked-Lit Depth Pipeline", opaque_state.cull),
+            depth_only_pipeline(device, &render_pipeline_layout, &baked_lit_shader, "Baked-Lit Depth TwoSided Pipeline", None),
+        ],
         sky: create_main(
             &render_pipeline_layout,
             &sky_shader,

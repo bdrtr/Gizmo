@@ -59,6 +59,10 @@ pub struct SceneState {
     /// double-sided one lost its back faces there — and kept them through the G-buffer
     /// (`DeferredState::gbuffer_baked_pipelines`), which had both.
     pub baked_lit_double_sided_pipeline: wgpu::RenderPipeline,
+    /// A solid baked-lit surface's share of the z-prepass, culling back faces and nothing: its depth alone,
+    /// from the same vertex stage as its forward draw (`baked_lit.wgsl`'s position is `@invariant`), so
+    /// that the forward pass shades only what is in front of it.
+    pub baked_lit_depth_pipelines: [wgpu::RenderPipeline; 2],
     /// The same shader with alpha blending and no depth write, for a `BakedLit` material
     /// marked transparent — a decal or skid-mark layer, which the opaque variant would paint
     /// over the road as solid geometry no matter what alpha the shader produced.
@@ -1317,6 +1321,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         unlit_blended_pipeline: core_pipelines.unlit_blended,
         baked_lit_pipeline: core_pipelines.baked_lit,
         baked_lit_double_sided_pipeline: core_pipelines.baked_lit_double_sided,
+        baked_lit_depth_pipelines: core_pipelines.baked_lit_depth,
         baked_lit_transparent_pipeline: core_pipelines.baked_lit_transparent,
         sky_pipeline: core_pipelines.sky,
         backdrop_pipeline: core_pipelines.backdrop,
@@ -1461,6 +1466,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.unlit_blended_pipeline = core_pipelines.unlit_blended;
     renderer.scene.baked_lit_pipeline = core_pipelines.baked_lit;
     renderer.scene.baked_lit_double_sided_pipeline = core_pipelines.baked_lit_double_sided;
+    renderer.scene.baked_lit_depth_pipelines = core_pipelines.baked_lit_depth;
     renderer.scene.baked_lit_transparent_pipeline = core_pipelines.baked_lit_transparent;
     renderer.scene.sky_pipeline = core_pipelines.sky;
     renderer.scene.backdrop_pipeline = core_pipelines.backdrop;
