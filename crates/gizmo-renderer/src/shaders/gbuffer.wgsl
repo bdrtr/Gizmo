@@ -82,7 +82,8 @@ struct VertexOutput {
     // x: `Material::clear_coat_roughness`; y: the instance's cut-out and LOD crossfade
     // (`instance_keeps`). One location for both: the G-buffer's fragment stage has the front-facing
     // flag besides, and a desktop device gives sixteen.
-    @location(11) inst_coat_keep: vec2<f32>,
+    // x = clear coat roughness, y = the cut-out and LOD fade (`instance_keeps`), z = `Material::porosity`.
+    @location(11) inst_coat_keep: vec3<f32>,
     // A baked-lit surface's (`fs_baked`): the instance's ambient in `xyz`, the vertex's alpha in `w`.
     @location(12) baked_extra: vec4<f32>,
     // `Material::specular_tint`, from `1 − optics.xyz`.
@@ -100,7 +101,7 @@ struct VertexOutput {
 
 // The scene's rain on a fragment (`rain_on`), kept off what is under cover where there is a rain map —
 // looked up only on what faces up enough to take rain at all.
-fn rain_at(world_position: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
+fn rain_at(world_position: vec3<f32>, normal: vec3<f32>, porosity: f32) -> vec3<f32> {
     let up = normalize(normal).y;
     var exposure = 1.0;
 #ifdef RAIN_MAP
@@ -108,7 +109,7 @@ fn rain_at(world_position: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
         exposure = rain_exposure(t_shadow, s_shadow, i32(#{RAIN_LAYER}), scene.rain_view_proj, scene.rain_params, world_position);
     }
 #endif
-    return rain_on(scene.wetness, world_position, up, exposure);
+    return rain_on(scene.wetness, world_position, up, exposure, porosity);
 }
 @group(3) @binding(0) var<uniform> skeleton: SkeletonData;
 @group(4) @binding(0) var<storage, read> instances: array<InstanceData>;
@@ -181,7 +182,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr    = inst.pbr;
     out.inst_emissive = inst.emissive;
-    out.inst_coat_keep = inst.ambient.zw;
+    out.inst_coat_keep = vec3<f32>(inst.ambient.zw, 1.0 - inst.texture.y);
     out.inst_tint = vec3<f32>(1.0) - inst.optics.xyz;
     out.base_layer = u32(inst.texture.x);
     out.baked_extra = vec4<f32>(inst.ambient.rgb, input.color.a);
@@ -296,7 +297,7 @@ fn fs_baked(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut 
     }
     // The scene's rain (`Renderer::wetness`): darker, smoother, and flat in a puddle but for the rings the
     // rain falling leaves on it.
-    let rain = rain_at(in.world_position, in.normal);
+    let rain = rain_at(in.world_position, in.normal, in.inst_coat_keep.z);
     let ripples = rain_ripples(scene.wetness, in.world_position, scene.cascade_params.z, ripple_px, rain);
     let base = in.inst_albedo.rgb * tex.rgb * wet_darkening(rain);
     var baked = in.color;
@@ -329,7 +330,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     if (in.inst_pbr.z > 0.5) { discard; }
 
     // The scene's rain (`Renderer::wetness`), on the engine's surface and on a game's alike.
-    let rain = rain_at(in.world_position, in.normal);
+    let rain = rain_at(in.world_position, in.normal, in.inst_coat_keep.z);
     let ripples = rain_ripples(scene.wetness, in.world_position, scene.cascade_params.z, ripple_px, rain);
     let surface = wet_surface(fragment_surface(in, front), rain, ripples);
     // glTF AlphaMode::Mask cutout: hard per-texel discard at alphaCutoff.

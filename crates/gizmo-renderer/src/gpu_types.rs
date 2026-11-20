@@ -604,7 +604,8 @@ pub struct InstanceRaw {
     /// Where the base colour is: x = 0 for the material's own texture (group 1, binding 0), or one
     /// more than its layer in the texture pool's array (binding 8) for a material made from a
     /// [`TexturePool`](crate::texture_pool::TexturePool) — see [`InstanceRaw::with_texture_of`].
-    /// yzw unused, zero.
+    /// y = `1 −` [`Material::porosity`](crate::components::Material::porosity), what of the rain it sheds,
+    /// so that zero is the porous default ([`InstanceRaw::with_lit_extras_of`]). zw unused, zero.
     ///
     /// Per instance because materials from one pool share one bind group, and with it one batch:
     /// which of the array's pictures an object shows is the one thing about its material the bind
@@ -727,15 +728,18 @@ impl InstanceRaw {
 
     /// Carry what only a PBR material has in `ambient.xyz`: [`transmission`] and [`thickness`] for one
     /// that [draws as glass], and [`clear_coat_roughness`] for one with a coat. Only baked-lit reads
-    /// `ambient` as light, so the slot is free on the path these are read on.
+    /// `ambient` as light, so the slot is free on the path these are read on. And, for every material,
+    /// what of the rain it sheds in `texture.y`: `1 −` [`porosity`].
     ///
     /// [`transmission`]: crate::components::Material::transmission
     /// [`thickness`]: crate::components::Material::thickness
     /// [draws as glass]: crate::components::Material::is_transmissive
     /// [`clear_coat_roughness`]: crate::components::Material::clear_coat_roughness
+    /// [`porosity`]: crate::components::Material::porosity
     #[must_use]
     #[inline]
     pub fn with_lit_extras_of(mut self, material: &crate::components::Material) -> Self {
+        self.texture[1] = 1.0 - material.porosity.clamp(0.0, 1.0);
         if material.is_transmissive() {
             self.ambient[0] = material.transmission;
             self.ambient[1] = material.thickness;

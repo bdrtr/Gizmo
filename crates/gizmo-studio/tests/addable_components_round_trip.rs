@@ -210,6 +210,8 @@ fn a_material_description_survives_the_file() {
             attenuation_color: gizmo::math::Vec3::new(0.3, 0.5, 0.7),
             attenuation_distance: 2.0,
             specular_tint: gizmo::math::Vec3::new(1.0, 0.8, 0.6),
+            // Not the porous default, so that a scene that lost it would fail here.
+            porosity: 0.25,
         },
     );
 

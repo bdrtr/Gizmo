@@ -56,6 +56,8 @@ pub fn engine_properties(reg: &mut PropertyRegistry) -> Vec<PropertyError> {
     taken.extend(reg.register::<Material, Vec3>("Material.attenuation_color", |m| m.attenuation_color, |m, v| m.attenuation_color = v).err());
     taken.extend(reg.register::<Material, f32>("Material.attenuation_distance", |m| m.attenuation_distance, |m, v| m.attenuation_distance = v).err());
     taken.extend(reg.register::<Material, Vec3>("Material.specular_tint", |m| m.specular_tint, |m, v| m.specular_tint = v).err());
+    // A surface that soaks the rain in and seals as it is varnished, or the reverse: a per-instance factor too.
+    taken.extend(reg.register::<Material, f32>("Material.porosity", |m| m.porosity, |m, v| m.porosity = v).err());
     // ── Material maps: the strengths and UV transform in the material's own uniform buffer. A change
     // builds the bind group again (`material_sync::rebind_changed_materials`) — a uniform buffer and
     // a bind group per frame the value moves, the textures shared — and the cache keeps only what

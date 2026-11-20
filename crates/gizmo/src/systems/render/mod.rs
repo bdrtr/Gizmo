@@ -5395,6 +5395,115 @@ mod golden_render_tests {
         });
     }
 
+    /// **A sealed surface sheds the rain; a porous one soaks it up** (`Material::porosity`). The same grey
+    /// floor in the rain, porous (the default) and sealed (`with_porosity(0.0)` — paint, glass, metal): the
+    /// porous floor darkens as water fills its pores, as `rain_darkens_what_faces_up_and_leaves_a_wall_dry`
+    /// measures; the sealed one does not darken at all — its film only smooths it, which at this grazing
+    /// angle shows more of the sky. Before porosity a car's paint went as dark as the road it drove on.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_sealed_surface_sheds_the_rain_and_a_porous_one_soaks_it_up() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(porosity: f32, wet: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.ssr = None;
+            renderer.wetness = wet.then(|| crate::renderer::Wetness::new(1.0));
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(10.0, -0.1, 0.0)).with_scale(Vec3::new(20.0, 0.1, 20.0)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(white.clone()).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.8, 0.0).with_porosity(porosity));
+            world.add_component(e, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 1.5, 0.0), yaw: 0.0, pitch: -0.2, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle { intensity: 3.0, ..Default::default() });
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            let dry = frame(1.0, false).await;
+            assert_eq!(frame(0.0, false).await, dry, "dry, porosity changes nothing");
+            let (porous, sealed) = (frame(1.0, true).await, frame(0.0, true).await);
+            // The floor's light, over its pixels: the lower part of the frame, lit in the dry one.
+            let floor: Vec<usize> = (0..128 * 128).filter(|&i| i / 128 > 80 && dry[i * 4..i * 4 + 3].iter().map(|&c| u32::from(c)).sum::<u32>() > 60).collect();
+            assert!(floor.len() > 1000, "the setup: {} floor pixels", floor.len());
+            let light = |f: &[u8]| floor.iter().map(|&i| f[i * 4..i * 4 + 3].iter().map(|&c| f64::from(c)).sum::<f64>()).sum::<f64>();
+            let (porous, sealed) = (light(&porous) / light(&dry), light(&sealed) / light(&dry));
+            // 0.843 and 0.995 when written; the sealed floor at 0.843 with darkening blind to porosity.
+            assert!(porous < 0.9, "the porous floor darkens: {porous:.3} of its dry light");
+            assert!(sealed > 0.97, "the sealed floor does not: {sealed:.3} of its dry light");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // Read off the G-buffer.
+    /// **A sealed surface holds no puddle, and keeps its colour in the rain.** A floor asked to be all
+    /// puddle (`puddles` 1), the G-buffer read back: porous, a share of its texels are as smooth as still
+    /// water (`PUDDLE_ROUGHNESS`, 0.03); sealed, none is — only its film's 0.2 — and its base colour is the
+    /// dry one's, texel for texel. A puddle on a car's roof was the world's noise, and slid across it as
+    /// the car drove.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_sealed_surface_holds_no_puddle_and_keeps_its_colour() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // Each floor texel's base colour (RT0, sRGB bytes) and roughness (RT1's `w`).
+        async fn frame(porosity: f32, wet: bool) -> Vec<([u8; 3], f32)> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.ssr = None;
+            renderer.wetness = wet.then(|| crate::renderer::Wetness::new(1.0).with_puddles(1.0));
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(40.0, 0.1, 40.0)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(white.clone()).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.8, 0.0).with_porosity(porosity));
+            world.add_component(e, MeshRenderer::new());
+            // From above, looking down: every texel is floor.
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 6.0, 0.0), yaw: 0.0, pitch: -1.5, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await;
+            let def = renderer.deferred.as_ref().expect("the desktop path keeps a G-buffer");
+            let colour = read_target(&renderer, &def.albedo_metallic_tex, 128).await;
+            let rough = read_target(&renderer, &def.normal_roughness_tex, 128).await;
+            let half = |t: &[u8], i: usize| f16_bits_to_f32(u16::from_le_bytes([t[2 * i], t[2 * i + 1]]));
+            colour.as_chunks::<4>().0.iter().zip(rough.as_chunks::<8>().0).map(|(c, r)| ([c[0], c[1], c[2]], half(r, 3).abs())).collect()
+        }
+        pollster::block_on(async {
+            let still = |texels: &[([u8; 3], f32)]| texels.iter().filter(|(_, r)| *r < 0.031).count();
+            let porous = frame(1.0, true).await;
+            let (sealed, dry) = (frame(0.0, true).await, frame(0.0, false).await);
+            // 16,247 and 0 when written.
+            assert!(still(&porous) > 4000, "porous, the floor stands under water: {} texels", still(&porous));
+            assert_eq!(still(&sealed), 0, "sealed, none does");
+            let film = sealed.iter().filter(|(_, r)| (*r - 0.2).abs() < 0.01).count();
+            assert_eq!(film, sealed.len(), "sealed, its film's 0.2 everywhere: {film} of {} texels", sealed.len());
+            let same = sealed.iter().zip(&dry).filter(|((a, _), (b, _))| a == b).count();
+            assert_eq!(same, dry.len(), "and its colour the dry one's: {same} of {} texels", dry.len());
+        });
+    }
+
     #[cfg(not(gizmo_forward_only))] // Read off the G-buffer's roughness.
     /// **Puddles cover the share of the ground they are asked to.** A wide grey floor seen from above in
     /// the rain, with `puddles` at 0.2 and at 0.5 (a metre across, so the frame holds over a thousand):

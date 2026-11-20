@@ -218,9 +218,10 @@ struct VertexOutput {
 #endif
     // Flat, for integers an interpolated float would not hold: x = `Material::volume_transmittance`,
     // packed in `optics.w` (read by the glass tier alone, zero elsewhere); y = where the base colour
-    // is (`InstanceRaw::texture.x`, `gizmo::material::base_colour`). One location for both — the
-    // glass tier uses every other one there is, and WebGL2 allows fifteen.
-    @location(12) @interpolate(flat) inst_flat: vec2<u32>,
+    // is (`InstanceRaw::texture.x`, `gizmo::material::base_colour`); z = what of the rain it sheds,
+    // `1 − Material::porosity` in 255ths (`texture.y`). One location for all three — the glass tier
+    // uses every other one there is, and WebGL2 allows fifteen.
+    @location(12) @interpolate(flat) inst_flat: vec3<u32>,
 #ifdef LOBES
     @location(11) inst_coat_roughness: f32,  // Material::clear_coat_roughness
 #endif
@@ -299,9 +300,9 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_emissive = inst.emissive;
 #ifdef TRANSMISSION
     out.inst_glass = inst.ambient.xy;
-    out.inst_flat = vec2<u32>(0xFFFFFFu - u32(inst.optics.w), u32(inst.texture.x));
+    out.inst_flat = vec3<u32>(0xFFFFFFu - u32(inst.optics.w), u32(inst.texture.x), u32(round(clamp(inst.texture.y, 0.0, 1.0) * 255.0)));
 #else
-    out.inst_flat = vec2<u32>(0u, u32(inst.texture.x));
+    out.inst_flat = vec3<u32>(0u, u32(inst.texture.x), u32(round(clamp(inst.texture.y, 0.0, 1.0) * 255.0)));
 #endif
 #ifdef LOBES
     out.inst_coat_roughness = inst.ambient.z;
@@ -365,10 +366,10 @@ fn behind_distance(pixel: vec2<f32>, world_position: vec3<f32>) -> f32 {
 
 // What the material is at this fragment: the engine's own, or the game's `material_surface`.
 // The scene's rain on this fragment (`Renderer::wetness`); none on glass, which water runs off.
-fn rain_here(in: VertexOutput) -> vec2<f32> {
+fn rain_here(in: VertexOutput) -> vec3<f32> {
 #ifdef TRANSMISSION
     if (in.inst_glass.x > 0.0) {
-        return vec2<f32>(0.0);
+        return vec3<f32>(0.0);
     }
 #endif
     let up = normalize(in.normal).y;
@@ -379,7 +380,7 @@ fn rain_here(in: VertexOutput) -> vec2<f32> {
         exposure = rain_exposure(t_shadow, s_shadow, i32(#{RAIN_LAYER}), scene.rain_view_proj, scene.rain_params, in.world_position);
     }
 #endif
-    return rain_on(scene.wetness, in.world_position, up, exposure);
+    return rain_on(scene.wetness, in.world_position, up, exposure, 1.0 - f32(in.inst_flat.z) / 255.0);
 }
 
 fn fragment_surface(in: VertexOutput, front: bool) -> Surface {

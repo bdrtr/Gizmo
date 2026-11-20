@@ -158,7 +158,8 @@ struct VertexOutput {
     @location(6) inst_emissive: vec4<f32>,  // w < 0: receives no shadows
     // x: the cut-out threshold (`instance_keeps`); y: the roughness, which `fs_reflective` hands the
     // screen-space reflections. One location for both, on a path that counts them (WebGL2's fifteen).
-    @location(7) inst_cutoff_roughness: vec2<f32>,
+    // x = the cut-out and LOD fade (`instance_keeps`), y = roughness, z = `Material::porosity`.
+    @location(7) inst_cutoff_roughness: vec3<f32>,
     // Where the base colour is (`InstanceRaw::texture.x`, `base_colour`).
     @location(9) @interpolate(flat) base_layer: u32,
 #ifdef SUN_SHADOWS
@@ -188,7 +189,7 @@ fn vs_main(input: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput 
     out.inst_albedo = inst.albedo_color;
     out.inst_ambient = inst.ambient.rgb;
     out.inst_emissive = inst.emissive;
-    out.inst_cutoff_roughness = vec2<f32>(inst.ambient.w, inst.pbr.x);
+    out.inst_cutoff_roughness = vec3<f32>(inst.ambient.w, inst.pbr.x, 1.0 - inst.texture.y);
     out.base_layer = u32(inst.texture.x);
     // Only for the shadow's normal offset — nothing here shades with it.
     out.world_normal = normalize((model * vec4<f32>(input.normal, 0.0)).xyz);
@@ -252,13 +253,13 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, axes: ReceiverA
 fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     // How wide a pixel is on the ground, for the rain's rings — taken before any pixel of the quad discards.
     let ripple_px = ripple_footprint(dpdx(in.world_pos), dpdy(in.world_pos));
-    let rain = rain_at(in.world_pos, in.world_normal);
+    let rain = rain_at(in.world_pos, in.world_normal, in.inst_cutoff_roughness.z);
     return shade(in, rain, rain_ripples(scene.wetness, in.world_pos, scene.cascade_params.z, ripple_px, rain), front);
 }
 
 // The scene's rain on a fragment (`rain_on`), kept off what is under cover where there is a rain map —
 // looked up only on what faces up enough to take rain at all.
-fn rain_at(world_position: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
+fn rain_at(world_position: vec3<f32>, normal: vec3<f32>, porosity: f32) -> vec3<f32> {
     let up = normalize(normal).y;
     var exposure = 1.0;
 #ifdef RAIN_MAP
@@ -266,7 +267,7 @@ fn rain_at(world_position: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
         exposure = rain_exposure(t_shadow, s_shadow, i32(#{RAIN_LAYER}), scene.rain_view_proj, scene.rain_params, world_position);
     }
 #endif
-    return rain_on(scene.wetness, world_position, up, exposure);
+    return rain_on(scene.wetness, world_position, up, exposure, porosity);
 }
 
 #ifdef REFLECTION_INPUTS
@@ -285,7 +286,7 @@ struct ReflectionInputs {
 @fragment
 fn fs_reflective(in: VertexOutput, @builtin(front_facing) front: bool) -> ReflectionInputs {
     let ripple_px = ripple_footprint(dpdx(in.world_pos), dpdy(in.world_pos));
-    let rain = rain_at(in.world_pos, in.world_normal);
+    let rain = rain_at(in.world_pos, in.world_normal, in.inst_cutoff_roughness.z);
     let ripples = rain_ripples(scene.wetness, in.world_pos, scene.cascade_params.z, ripple_px, rain);
     var out: ReflectionInputs;
     out.colour = shade(in, rain, ripples, front);
@@ -453,7 +454,7 @@ fn baked_light_term(
 // The surface's colour, fogged, with its alpha; `rain` is `rain_on`'s, `ripples` `rain_ripples`'s.
 // `front`: whether the fragment is its triangle's front, the side its normal is on — a double-sided surface
 // seen from behind is lit on the side the camera sees, as the G-buffer route lights it (`fs_baked`).
-fn shade(in: VertexOutput, rain: vec2<f32>, ripples: vec3<f32>, front: bool) -> vec4<f32> {
+fn shade(in: VertexOutput, rain: vec3<f32>, ripples: vec3<f32>, front: bool) -> vec4<f32> {
     // The surface's normal and how it runs across neighbouring pixels, for the sun's shadow
     // (`receiver_axes`) — taken first, before any pixel of the quad discards.
 #ifdef SUN_SHADOWS

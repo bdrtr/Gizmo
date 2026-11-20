@@ -344,6 +344,7 @@ mod tests {
             attenuation_color: gizmo_math::Vec3::new(0.2, 0.6, 0.9),
             attenuation_distance: 0.75,
             specular_tint: gizmo_math::Vec3::new(0.9, 0.4, 0.1),
+            porosity: 0.4,
         };
 
         let text = ron::to_string(&desc).expect("serialize");
@@ -378,10 +379,27 @@ mod tests {
             attenuation_color: gizmo_math::Vec3::ONE,
             attenuation_distance: 0.0,
             specular_tint: gizmo_math::Vec3::ONE,
+            porosity: 1.0,
         };
         let back: MaterialDesc =
             ron::from_str(&ron::to_string(&desc).expect("serialize")).expect("deserialize");
         assert_eq!(back.texture_source, None);
+    }
+
+    /// A scene saved before materials had a porosity opens porous, as it was drawn then: the field is
+    /// `serde(default = 1)`, not the zero a plain default would give, which would have dried every
+    /// surface of every old scene in the rain.
+    #[test]
+    fn a_description_saved_before_porosity_reads_as_porous() {
+        let sealed = MaterialDesc::default().with_porosity(0.0);
+        let text = ron::to_string(&sealed).expect("serialize");
+        let start = text.find("porosity:").expect("porosity is written");
+        let end = start + text[start..].find([',', ')']).expect("the field ends");
+        // The field and the comma before it: what a file written before the field looks like.
+        let old = format!("{}{}", text[..start].trim_end_matches(','), &text[end..]);
+        assert!(!old.contains("porosity"), "cut: {old}");
+        let back: MaterialDesc = ron::from_str(&old).expect("an old scene still reads");
+        assert_eq!(back.porosity, 1.0);
     }
 
     /// A scene saved before materials had maps opens with none: the field is `serde(default)`, and

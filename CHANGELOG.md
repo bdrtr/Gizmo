@@ -50,6 +50,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A sealed surface sheds the rain (`Material::porosity`).** Rain (`Renderer::wetness`) darkened everything
+  that faced up by the same 0.6 and stood puddles on everything flat, so a car's paint went as dark as the road it
+  drove on, and a puddle of the world's noise slid across its roof as it drove. Darkening is the pores', water
+  filling them (Lagarde, "Water drop 2b", 2013). Now a material says how much of the rain soaks in:
+  - 1, the default: asphalt, concrete, wood, cloth. As before: darkens, holds puddles.
+  - 0: paint, glass, metal, plastic, rubber. Takes the water's film — as smooth as a soaked surface, rippled by
+    the rain falling — and neither darkens nor holds a puddle.
+
+  `with_porosity`, the scene file's `porosity` (a scene saved before it is porous, as it was drawn:
+  `a_description_saved_before_porosity_reads_as_porous`), and `Material.porosity` for property animation. It rides
+  `InstanceRaw::texture.y` as `1 −` itself, so zero bytes are the porous default, and reaches every path that wets
+  a surface in a carrier it already had: the forward shader's flat integers (`inst_flat`, now three, in 255ths —
+  its glass tier has no location left), the G-buffer's and the baked-lit shader's coat and cut-out vectors.
+  `a_sealed_surface_sheds_the_rain_and_a_porous_one_soaks_it_up` (both paths: the porous floor at 0.843 of its dry
+  light, the sealed at 0.995) and `a_sealed_surface_holds_no_puddle_and_keeps_its_colour` (G-buffer: 16,247
+  texels of puddle porous, none sealed, which keeps the dry colour texel for texel and its film's 0.2); each fails
+  with porosity taken out of the darkening or the puddles.
+
 - **Rain falling ripples the water it falls on (`Rainfall::ripples`, `rain_ripples` in `surface.wgsl`).** While
   `Renderer::rainfall` falls, a puddle is no longer a still mirror: each drop that lands in it throws out a ring of
   small waves that spreads and dies, and a soaked surface's film ripples at 0.3 of that. Nothing is simulated.

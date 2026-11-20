@@ -136,19 +136,22 @@ const PUDDLE_ROUGHNESS: f32 = 0.03;
 // with (`water_glints` in `baked_lit.wgsl`, the baked branch of `deferred_lighting.wgsl`).
 const WATER_F0: f32 = 0.02;
 
-// How wet a fragment is: x = soaked (0 dry … 1), y = under a puddle (0 … 1). Only what faces up takes
-// rain: `up` is the geometric normal's height, so a wall stays near dry and a normal map does not
-// speckle a road; puddles stand only on the flat. `exposure`: how much of the rain reaches it, 0 under
-// cover (`gizmo::common::rain_exposure`, on a path with a rain map; 1 where there is none).
-fn rain_on(wetness: vec4<f32>, world_position: vec3<f32>, up: f32, exposure: f32) -> vec2<f32> {
+// How wet a fragment is: x = soaked (0 dry … 1), y = under a puddle (0 … 1), z = how much of it soaks
+// in (`Material::porosity`). Only what faces up takes rain: `up` is the geometric normal's height, so a
+// wall stays near dry and a normal map does not speckle a road; puddles stand only on the flat, and only
+// on what is porous — a sealed surface (paint, glass, metal) sheds the rain, keeping the film and nothing
+// more. `exposure`: how much of the rain reaches it, 0 under cover (`gizmo::common::rain_exposure`, on a
+// path with a rain map; 1 where there is none).
+fn rain_on(wetness: vec4<f32>, world_position: vec3<f32>, up: f32, exposure: f32, porosity: f32) -> vec3<f32> {
     let level = clamp(wetness.x, 0.0, 1.0) * clamp(exposure, 0.0, 1.0);
+    let pores = clamp(porosity, 0.0, 1.0);
     if (level <= 0.0) {
-        return vec2<f32>(0.0);
+        return vec3<f32>(0.0, 0.0, pores);
     }
     let soaked = level * smoothstep(0.2, 0.8, up);
     var puddle = 0.0;
     let coverage = clamp(wetness.y, 0.0, 1.0);
-    if (coverage > 0.0) {
+    if (coverage > 0.0 && pores > 0.0) {
         // The noise's value at which `coverage` of the ground lies above it (fitted to the noise's
         // distribution: within 0.005, about 1 % of coverage).
         let x = 1.0 - 2.0 * coverage;
@@ -156,13 +159,13 @@ fn rain_on(wetness: vec4<f32>, world_position: vec3<f32>, up: f32, exposure: f32
         let n = puddle_noise(world_position.xz * wetness.z);
         // The shore is a band either side of the threshold, so that half-way into the water is where
         // the share asked for ends.
-        puddle = smoothstep(threshold - 0.02, threshold + 0.02, n) * smoothstep(0.9, 0.98, up) * level;
+        puddle = smoothstep(threshold - 0.02, threshold + 0.02, n) * smoothstep(0.9, 0.98, up) * level * pores;
     }
-    return vec2<f32>(soaked, puddle);
+    return vec3<f32>(soaked, puddle, pores);
 }
 
 // The surface as rain leaves it (`rain` from `rain_on`, `ripples` from `rain_ripples`).
-fn wet_surface(s: Surface, rain: vec2<f32>, ripples: vec3<f32>) -> Surface {
+fn wet_surface(s: Surface, rain: vec3<f32>, ripples: vec3<f32>) -> Surface {
     var out = s;
     let water = max(rain.x, rain.y);
     if (water <= 0.0) {
@@ -178,7 +181,7 @@ fn wet_surface(s: Surface, rain: vec2<f32>, ripples: vec3<f32>) -> Surface {
 
 // The normal of the water over a surface of normal `n`: a puddle's flat, the rain's rings on it and on a
 // soaked surface's film.
-fn water_normal(n: vec3<f32>, rain: vec2<f32>, ripples: vec3<f32>) -> vec3<f32> {
+fn water_normal(n: vec3<f32>, rain: vec3<f32>, ripples: vec3<f32>) -> vec3<f32> {
     return normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), rain.y) + vec3<f32>(-ripples.x, 0.0, -ripples.y));
 }
 
@@ -220,7 +223,7 @@ fn ripple_footprint(dx: vec3<f32>, dy: vec3<f32>) -> f32 {
 // The rain's rings at `world_position` with the clock at `clock` (`SceneUniforms::cascade_params.z`), for
 // a pixel `footprint` metres wide (`ripple_footprint`), on the water `rain` says lies there (`rain_on`'s):
 // x, y = the water's slope along x and z, as the pixel shows it; z = the slope's variance it cannot show.
-fn rain_ripples(wetness: vec4<f32>, world_position: vec3<f32>, clock: f32, footprint: f32, rain: vec2<f32>) -> vec3<f32> {
+fn rain_ripples(wetness: vec4<f32>, world_position: vec3<f32>, clock: f32, footprint: f32, rain: vec3<f32>) -> vec3<f32> {
     let rate = wetness.w;
     let weight = rain.y + FILM_RIPPLES * rain.x * (1.0 - rain.y);
     if (rate <= 0.0 || weight <= 0.0) {
@@ -278,14 +281,14 @@ fn ripple_hash(i: vec3<i32>) -> vec3<f32> {
     return vec3<f32>(v) * (1.0 / 4294967296.0);
 }
 
-// What rain multiplies a surface's colour by.
-fn wet_darkening(rain: vec2<f32>) -> f32 {
-    return mix(1.0, WET_DARKENING, max(rain.x, rain.y));
+// What rain multiplies a surface's colour by: its pores filled, and whatever lies under a puddle.
+fn wet_darkening(rain: vec3<f32>) -> f32 {
+    return mix(1.0, WET_DARKENING, max(rain.x * rain.z, rain.y));
 }
 
 // A roughness as rain leaves it: no rougher than it was, but for the rain's rings too fine for the pixel
 // (`ripples.z`), whose slopes' variance joins the microfacets' — `α² + σ²`, with `α` = roughness².
-fn wet_roughness(roughness: f32, rain: vec2<f32>, ripples: vec3<f32>) -> f32 {
+fn wet_roughness(roughness: f32, rain: vec3<f32>, ripples: vec3<f32>) -> f32 {
     let soaked = min(roughness, mix(roughness, WET_ROUGHNESS, rain.x));
     let still = mix(soaked, min(soaked, PUDDLE_ROUGHNESS), rain.y);
     let a = still * still;

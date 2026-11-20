@@ -265,6 +265,13 @@ pub struct Material {
     /// `specularColorFactor`. A metal's F0 is its albedo, so this fades out with
     /// [`metallic`](Self::metallic) as `reflectance` does.
     pub specular_tint: gizmo_math::Vec3,
+    /// How much of the rain ([`Renderer::wetness`](crate::Renderer::wetness)) soaks in, 0 … 1. A porous
+    /// surface — asphalt, concrete, wood, cloth, the default 1 — darkens as water fills its pores and
+    /// holds puddles on the flat; a sealed one — paint, glass, metal, plastic, rubber, 0 — sheds it:
+    /// it takes the water's film, as smooth as a soaked surface, and neither darkens nor holds a puddle.
+    /// A car painted 0 is not darkened like the road it drives on, nor a puddle slid across its roof
+    /// with the world (Lagarde, "Water drop 2b", 2013: darkening is the pores').
+    pub porosity: f32,
     /// The maps [`bind_group`](Self::bind_group) was built from. Set by whatever builds it: a
     /// description, the glTF loader ([`Self::mark_maps_bound`]); [`Material::new`] takes it as none.
     /// When [`maps`](Self::maps) differs from it the first time `material_sync` sees the material,
@@ -599,10 +606,17 @@ pub struct MaterialDesc {
     /// See [`Material::specular_tint`].
     #[serde(default = "default_attenuation_color")]
     pub specular_tint: gizmo_math::Vec3,
+    /// See [`Material::porosity`]. A scene saved before it had one is porous, as it was drawn then.
+    #[serde(default = "default_porosity")]
+    pub porosity: f32,
 }
 
 fn default_attenuation_color() -> gizmo_math::Vec3 {
     gizmo_math::Vec3::ONE
+}
+
+fn default_porosity() -> f32 {
+    1.0
 }
 
 fn default_coat_roughness() -> f32 {
@@ -646,6 +660,7 @@ impl From<&Material> for MaterialDesc {
             attenuation_color,
             attenuation_distance,
             specular_tint,
+            porosity,
         } = m;
         Self {
             albedo: *albedo,
@@ -670,6 +685,7 @@ impl From<&Material> for MaterialDesc {
             attenuation_color: *attenuation_color,
             attenuation_distance: *attenuation_distance,
             specular_tint: *specular_tint,
+            porosity: *porosity,
         }
     }
 }
@@ -704,6 +720,7 @@ impl MaterialDesc {
             attenuation_color: self.attenuation_color,
             attenuation_distance: self.attenuation_distance,
             specular_tint: self.specular_tint,
+            porosity: self.porosity,
         }
     }
 }
@@ -737,6 +754,7 @@ impl Default for MaterialDesc {
             attenuation_color: gizmo_math::Vec3::ONE,
             attenuation_distance: 0.0,
             specular_tint: gizmo_math::Vec3::ONE,
+            porosity: 1.0,
         }
     }
 }
@@ -824,6 +842,13 @@ macro_rules! material_builders {
     /// Sets [`Material::specular_tint`], each channel floored at zero.
     pub fn with_specular_tint(mut self, tint: gizmo_math::Vec3) -> Self {
         self.specular_tint = tint.max(gizmo_math::Vec3::ZERO);
+        self
+    }
+
+    /// Sets [`Material::porosity`], clamped into `[0, 1]`: 0 for paint, glass, metal and the like, which
+    /// shed the rain.
+    pub fn with_porosity(mut self, porosity: f32) -> Self {
+        self.porosity = porosity.clamp(0.0, 1.0);
         self
     }
 
