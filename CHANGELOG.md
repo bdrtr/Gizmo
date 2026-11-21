@@ -402,6 +402,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The sun's shadow array is cleared in one pass, where the device can.** Each cascade's pass cleared its
+  own layer, which is a clear of part of the texture. A driver need not fast-clear that: Mesa's RADV does not,
+  and wrote every texel of the four layers instead.
+  - Measured on a wet drive in `nfsu2-gizmo` (1080p, AMD 780M): of the shadow maps' 0.9 ms, the cars drawn into
+    them took 0.25. Replacing the clears with loads, for the measurement, read 0.25.
+  - Now `passes::shadow::clear_sun_layers` clears every layer at once, the cascades and the rain map's, in a
+    multiview pass. The device asks for `MULTIVIEW` and its view count where the adapter has them. The
+    cascades and the rain map then load; without the feature each still clears its own layer.
+  - The same drive: shadow maps 0.9 → 0.3 ms, the rain map 0.2 → 0.1.
+  - `a_shadow_map_forgets_last_frames_casters`: a cube that stops casting leaves no shadow the next frame.
+    With no clear the cascades read nothing at all, and the test fails.
+- **A solid shadow caster binds the pass's one material group.** Its pipeline has no fragment stage and its
+  vertex stage reads no material, so group 1 is there for the layout alone. Bound each its own, a car's two dozen
+  parts were two dozen draws in every cascade where the plan's multi-draws could make them one. The drive's
+  recording of the shadow passes: 0.2 → 0.1 ms of CPU.
+
 - **The bloom is a mip chain, as Unreal's and Call of Duty: Advanced Warfare's are.** It was a 9-tap separable
   blur of the full frame: a halo a couple of pixels wide, which barely left a small source, at three full-frame
   passes.

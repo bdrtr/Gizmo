@@ -810,8 +810,11 @@ impl Renderer {
 /// `INDIRECT_FIRST_INSTANCE` where it has that — what lets a run of draws become one indirect
 /// multi-draw ([`Renderer::multi_draw`](crate::Renderer::multi_draw)).
 pub(crate) fn native_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    // `MULTIVIEW`, where the adapter has it, for one thing: clearing every layer of the sun's shadow array
+    // in one pass (`passes::shadow::clear_sun_layers`), which a driver can do as a fast clear.
     wgpu::Features::POLYGON_MODE_LINE
-        | (adapter.features() & (crate::gpu_timer::GpuTimer::FEATURES | wgpu::Features::INDIRECT_FIRST_INSTANCE))
+        | (adapter.features()
+            & (crate::gpu_timer::GpuTimer::FEATURES | wgpu::Features::INDIRECT_FIRST_INSTANCE | wgpu::Features::MULTIVIEW))
 }
 
 /// The limits every native renderer device is asked for.
@@ -827,6 +830,9 @@ pub(crate) fn native_device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
         max_storage_buffers_per_shader_stage: 8,
         max_storage_buffer_binding_size: 256 << 20, // 256 MB buffer limit
         max_color_attachment_bytes_per_sample: adapter.limits().max_color_attachment_bytes_per_sample.clamp(32, 64),
+        // The sun's shadow array cleared in one multiview pass (`native_device_features`): a view a layer,
+        // the cascades and the rain map's, as many as the adapter allows.
+        max_multiview_view_count: adapter.limits().max_multiview_view_count.min(crate::csm::shadow_array_layers(true) as u32),
         ..wgpu::Limits::default()
     }
 }

@@ -1932,7 +1932,7 @@ fn draw_camera_view_with(
     // The sun's cascades on every path; the local lights' layers where they were planned (not on the
     // forward-only path).
     {
-        let (shadow_passes, shadow_instances) = passes::record_shadow_passes(
+        let (shadow_passes, shadow_instances, cleared) = passes::record_shadow_passes(
             encoder,
             renderer,
             &draw_items,
@@ -1945,7 +1945,7 @@ fn draw_camera_view_with(
         let (rain_passes, rain_instances) = match rain_map {
             Some((view_proj, _)) => {
                 renderer.scene.rain_map.write(&renderer.queue, view_proj, cam_pos, elapsed_time);
-                (1, passes::record_rain_map(encoder, renderer, &draw_items, uploaded_instances, view_proj))
+                (1, passes::record_rain_map(encoder, renderer, &draw_items, uploaded_instances, view_proj, cleared))
             }
             None => (0, 0),
         };
@@ -16233,6 +16233,86 @@ mod golden_render_tests {
             assert!(default > 40, "the cube casts a shadow at all: {default}");
             assert!(depth + 12 < default, "a large depth bias thins the shadow: {default} → {depth}");
             assert!(normal * 2 < default, "a large normal offset thins it further: {default} → {normal}");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // One cascade there, which clears itself.
+    /// **A shadow map forgets last frame's casters.** The sun's shadow array is cleared in one pass where
+    /// the device can (`passes::shadow::clear_sun_layers`, a fast clear for a driver that will not
+    /// fast-clear one layer of an array), and each cascade's pass then loads what is there rather than
+    /// clearing it. A cube casts onto a floor; the next frame, on the same renderer, it stands where it
+    /// stood but casts nothing (`ShadowCasting::Off`) — the scene and its cascades as they were. The floor
+    /// must be as bright where the shadow fell as under a cube that never cast: a clear that did not
+    /// happen would leave the cube's depth in the map, and its shadow on the floor, a frame after it
+    /// stopped casting.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_shadow_map_forgets_last_frames_casters() {
+        use crate::renderer::components::ShadowCasting;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // A floor under the sun with a cube over it, casting as `cube` says.
+        fn scene(renderer: &Renderer, cube: ShadowCasting) -> (World, Entity) {
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+            world.add_component(floor, MeshRenderer::new());
+            let caster = world.spawn();
+            world.add_component(caster, Transform::new(Vec3::new(0.0, 0.7, 0.0)).with_scale(Vec3::splat(0.6)));
+            world.add_component(caster, GlobalTransform::default());
+            world.add_component(caster, AssetManager::create_cube(&renderer.device));
+            world.add_component(caster, Material::new(tex).with_pbr(Vec4::new(0.8, 0.3, 0.3, 1.0), 0.9, 0.0));
+            world.add_component(caster, MeshRenderer::new().with_shadows(cube));
+            world.spawn_bundle(crate::bundles::DirectionalLightBundle {
+                rotation: gizmo_math::Quat::from_rotation_z(-0.3) * gizmo_math::Quat::from_rotation_x(-1.2),
+                intensity: 3.0,
+                ..Default::default()
+            });
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 6.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.8,
+                primary: true,
+                ..Default::default()
+            });
+            (world, caster)
+        }
+        async fn renderer() -> Renderer {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.bloom_intensity = 0.0;
+            renderer
+        }
+        let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+        pollster::block_on(async {
+            let unshadowed = {
+                let mut renderer = renderer().await;
+                let (mut world, _) = scene(&renderer, ShadowCasting::Off);
+                render_world(&mut renderer, &mut world).await
+            };
+            let mut renderer = renderer().await;
+            let (mut world, cube) = scene(&renderer, ShadowCasting::On);
+            let cast = render_world(&mut renderer, &mut world).await;
+            world.query_mut::<&mut MeshRenderer>().get_mut(cube).expect("the cube's renderer").shadows = ShadowCasting::Off;
+            let stopped = render_world(&mut renderer, &mut world).await;
+            let shadowed = |frame: &[u8]| (0..128 * 128).filter(|&i| luma(frame, i) + 20 < luma(&unshadowed, i)).count();
+            let (casting, after) = (shadowed(&cast), shadowed(&stopped));
+            assert!(casting > 40, "the setup: the cube shadows the floor ({casting} pixels darker than with no shadow)");
+            assert_eq!(after, 0, "a frame after the cube stopped casting, {after} pixels of the floor are still in its shadow");
         });
     }
 

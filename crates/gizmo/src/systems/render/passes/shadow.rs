@@ -21,10 +21,24 @@ fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem, front_faces: boo
 
 /// Binds what every shadow pipeline reads per draw — the material for a cut-out's fragment stage,
 /// the skeleton — and the pipeline, through `plan`, which records each only when it changes.
-fn bind_caster<'a>(plan: &mut super::plan::PassPlan<'a>, renderer: &'a Renderer, item: &'a DrawItem, pipeline: &'a wgpu::RenderPipeline) {
+///
+/// A solid caster's pipeline has no fragment stage, and its vertex stage reads no material: its group
+/// 1 is there for the layout alone, so every solid caster of the pass binds the same one, `solid` (the
+/// first solid caster's). Bound each its own, a car's two dozen parts — one material each — were two
+/// dozen draws in every cascade, which runs of casters sharing everything else would draw as one
+/// (`PassPlan`'s multi-draws).
+fn bind_caster<'a>(
+    plan: &mut super::plan::PassPlan<'a>,
+    renderer: &'a Renderer,
+    item: &'a DrawItem,
+    pipeline: &'a wgpu::RenderPipeline,
+    solid: &mut Option<&'a wgpu::BindGroup>,
+) {
     plan.set_pipeline(pipeline);
     let skeleton = item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-    plan.set_bind_group(1, &item.bind_group);
+    let cuts = item.discards || item.surface.is_some_and(|id| renderer.custom_materials.surface(id).is_some_and(|s| !s.is_solid()));
+    let material = if cuts { item.bind_group.as_ref() } else { *solid.get_or_insert(item.bind_group.as_ref()) };
+    plan.set_bind_group(1, material);
     plan.set_bind_group(2, skeleton.as_ref());
 }
 
@@ -84,6 +98,7 @@ fn record_caster_pass(
     view_proj: Mat4,
     local: bool,
     stops: Stops,
+    clear: bool,
 ) -> u32 {
     let frustum = crate::math::Frustum::from_matrix(&view_proj);
     let mut drawn = 0;
@@ -92,7 +107,10 @@ fn record_caster_pass(
         color_attachments: &[],
         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
             view: target,
-            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+            depth_ops: Some(wgpu::Operations {
+                load: if clear { wgpu::LoadOp::Clear(1.0) } else { wgpu::LoadOp::Load },
+                store: wgpu::StoreOp::Store,
+            }),
             stencil_ops: None,
         }),
         timestamp_writes: None,
@@ -105,6 +123,7 @@ fn record_caster_pass(
     pass.set_bind_group(3, renderer.scene.view_instance_bind_group(), &[]);
     // Through a plan: a run of casters sharing a pipeline, a material and a buffer is one multi-draw.
     let mut plan = super::plan::PassPlan::default();
+    let mut solid = None;
     for item in draw_items {
         if !casts_into_shadow_maps(renderer, item, stops) {
             continue;
@@ -118,7 +137,7 @@ fn record_caster_pass(
         // second.
         let mut ranges = gizmo_renderer::shadow_culling::visible_ranges(&item.shadow_chunks, &frustum, uploaded_instances).peekable();
         if ranges.peek().is_some() {
-            bind_caster(&mut plan, renderer, item, pipeline);
+            bind_caster(&mut plan, renderer, item, pipeline, &mut solid);
         }
         for range in ranges {
             drawn += range.end - range.start;
@@ -131,7 +150,8 @@ fn record_caster_pass(
 
 /// The rain map (`gizmo_renderer::rain_map`): the scene's depth from straight above, `view_proj`'s, into
 /// the sun array's layer past the cascades, through its pass group (`SceneState::rain_map`, written
-/// before). Every caster by both faces, as a local light's layer: a bridge's deck is often a sheet, and
+/// before). `cleared`: whether [`record_shadow_passes`] cleared the whole array this frame, the rain's
+/// layer with it; if not, the pass clears its layer itself. Every caster by both faces, as a local light's layer: a bridge's deck is often a sheet, and
 /// one face of it would let the rain through. And glass, which casts no shadow but keeps the rain off what
 /// is under it ([`Stops::Rain`]). Returns the instances it drew: none while the array has no
 /// layer for it (`SceneState::shadow_rain_layer_view`).
@@ -141,6 +161,7 @@ pub fn record_rain_map(
     draw_items: &[DrawItem],
     uploaded_instances: u32,
     view_proj: Mat4,
+    cleared: bool,
 ) -> u32 {
     let Some(target) = renderer.scene.shadow_rain_layer_view.as_ref() else {
         return 0;
@@ -156,7 +177,40 @@ pub fn record_rain_map(
         view_proj,
         true,
         Stops::Rain,
+        !cleared,
     )
+}
+
+/// Clears every layer of the sun's shadow array — the cascades and the rain map's — in one pass, where
+/// the device can (`wgpu::Features::MULTIVIEW`), and says whether it did. A pass of a cascade clearing
+/// its own layer clears a part of the texture, which a driver need not do as a fast clear: Mesa's
+/// RADV does not, and wrote every texel of the four layers instead — 0.65 ms of a wet drive's 0.9 of
+/// shadow maps in `nfsu2-gizmo` (1080p, AMD 780M, 2026-11-21), where the cars drawn into them took 0.25.
+/// One pass over all of them is a clear of the whole texture.
+fn clear_sun_layers(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) -> bool {
+    let layers = renderer.scene.shadow_depth_texture.depth_or_array_layers();
+    let Some(mask) = std::num::NonZeroU32::new(1u32.checked_shl(layers).map_or(u32::MAX, |b| b - 1))
+        .filter(|_| {
+            renderer.device.features().contains(wgpu::Features::MULTIVIEW)
+                && layers > 1
+                && layers <= renderer.device.limits().max_multiview_view_count
+        })
+    else {
+        return false;
+    };
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Shadow Array Clear"),
+        color_attachments: &[],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: &renderer.scene.shadow_texture_view,
+            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+            stencil_ops: None,
+        }),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: Some(mask),
+    });
+    true
 }
 
 /// The frame's shadow maps: one depth pass per cascade when `cascades` holds their matrices
@@ -171,8 +225,10 @@ pub fn record_shadow_passes(
     uploaded_instances: u32,
     cascades: Option<&[Mat4; crate::renderer::CASCADE_COUNT]>,
     local_layers: &[gizmo_renderer::local_shadows::LocalShadowLayer],
-) -> (u32, u32) {
+) -> (u32, u32, bool) {
     let (mut passes, mut drawn) = (0, 0);
+    // The whole array at once where it can be, before any cascade draws into it (`clear_sun_layers`).
+    let cleared = cascades.is_some() && clear_sun_layers(encoder, renderer);
     // As many as this path draws (`CASCADES_DRAWN`: one on the forward-only path).
     for (i, view_proj) in cascades.into_iter().flatten().take(crate::renderer::csm::CASCADES_DRAWN).enumerate() {
         drawn += record_caster_pass(
@@ -186,6 +242,7 @@ pub fn record_shadow_passes(
             *view_proj,
             false,
             Stops::Light,
+            !cleared,
         );
         passes += 1;
     }
@@ -202,8 +259,9 @@ pub fn record_shadow_passes(
             layer.view_proj,
             true,
             Stops::Light,
+            true,
         );
         passes += 1;
     }
-    (passes, drawn)
+    (passes, drawn, cleared)
 }
