@@ -690,6 +690,19 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **The editor's Game panel is the game's own picture.**
+  - It was the studio's forward path drawn from the game camera, with its own cascades and its own
+    shadow and main passes, and in play mode a copy of the Scene panel. Neither was what the game
+    draws: no deferred lighting, no SSAO, SSR or TAA, no HUD.
+  - It is drawn through the game path now, by `gizmo::systems::render::draw_camera_into`. This is
+    the body of the frame's own texture-camera loop, made public: one camera's whole picture, at
+    the texture's size, with its own temporal history, submitted at once.
+  - Covered by `the_game_view_draws_what_the_game_draws_hud_included`. Against the old path, 0 of a
+    HUD box's 4096 pixels were in the panel.
+  - Gone with it: the studio's `record_game_view`, `viewpoint::camera_frame`, and the `EditorOnly`
+    flag its batches were keyed on so the old game view could leave the furniture out.
+  - The Game panel draws one camera, as before: a split-screen game shows its primary camera there.
+
 - **A headless app rolls back.** A `RollbackManager` was serviced by the windowed loop alone: it
   rewound and re-simulated a mispredicted tick there (`service_rollback`), and recorded every fixed
   step through a hook it handed `frame::run_fixed_and_update`. The headless runtime and

@@ -427,30 +427,54 @@ fn draw_camera_targets(world: &World, renderer: &mut Renderer) {
         .collect();
     targets.sort_by_key(|&(order, id, _)| (order, id));
     for (_, camera, target) in targets {
-        let (width, height) = target.size();
-        // Its mirrors, captured for it, just before it.
-        capture_planar_reflections(world, renderer, Some(camera), width as f32 / height.max(1) as f32);
-        let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("camera_target"),
-        });
-        // At the texture's size (`Renderer::with_view_targets`).
-        renderer.with_view_targets((width, height), |renderer| {
-            renderer.with_view_history(Some(camera), |renderer| {
-                draw_camera_view(
-                    world,
-                    &mut encoder,
-                    target.view(),
-                    renderer,
-                    Some(camera),
-                    true,
-                    Some([0.0, 0.0, width as f32, height as f32]),
-                    false,
-                    None,
-                );
-            });
-        });
-        renderer.queue.submit(std::iter::once(encoder.finish()));
+        draw_camera_into(world, renderer, camera, target.view(), target.size(), false);
     }
+}
+
+/// **One camera's whole picture, through the game path's pipeline, into a texture of the host's**:
+/// `view`, of `size` — what a [`CameraTarget`](crate::renderer::components::CameraTarget) camera
+/// gets every frame, for a host that owns the texture itself. The editor's Game panel is this
+/// call; it drew the game camera through the editor's own forward path until 2026-11-22, which
+/// is not the picture the game draws (no deferred lighting, no screen-space effects, no TAA).
+///
+/// At the texture's size ([`Renderer::with_view_targets`]) and aspect, with its mirrors captured
+/// for it just before it, the camera's own temporal history ([`Renderer::with_view_history`]), and
+/// the HUD when `hud`. Recorded into an encoder of its own and **submitted at once**: the draw's
+/// uploads (`queue.write_buffer`) order against submission, so a view recorded into a caller's
+/// encoder would draw whatever the caller wrote last. Call it before recording anything of the
+/// caller's own that writes the same buffers.
+///
+/// Reads the world: a host runs [`prepare_frame`] and [`draw_ahead_of_views`] first, once for every
+/// view of its frame.
+pub fn draw_camera_into(
+    world: &World,
+    renderer: &mut Renderer,
+    camera: Entity,
+    view: &wgpu::TextureView,
+    (width, height): (u32, u32),
+    hud: bool,
+) {
+    // Its mirrors, captured for it, just before it.
+    capture_planar_reflections(world, renderer, Some(camera), width as f32 / height.max(1) as f32);
+    let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("camera_target"),
+    });
+    renderer.with_view_targets((width, height), |renderer| {
+        renderer.with_view_history(Some(camera), |renderer| {
+            draw_camera_view(
+                world,
+                &mut encoder,
+                view,
+                renderer,
+                Some(camera),
+                true,
+                Some([0.0, 0.0, width as f32, height as f32]),
+                hud,
+                None,
+            );
+        });
+    });
+    renderer.queue.submit(std::iter::once(encoder.finish()));
 }
 
 /// Where the cameras that draw into textures stand — for the level of detail the frame's GPU

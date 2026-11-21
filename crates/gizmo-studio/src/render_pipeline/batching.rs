@@ -32,10 +32,6 @@ pub(super) struct BatchKey {
     pub(super) is_transmissive: bool,
     // Its wireframe's colour group, if its lines are drawn.
     pub(super) wire: Option<*const wgpu::BindGroup>,
-    // Editor furniture (`EditorOnly`) is keyed apart for the same reason as the routing flags,
-    // and one more: the game view skips these batches, so a light icon sharing a batch with a
-    // scene mesh would drag the scene mesh out of the game picture with it.
-    pub(super) is_editor_only: bool,
     // Per-object shadow casting: two objects with the same mesh and material can now ask
     // differently, so they cannot share a batch.
     pub(super) casts_shadows: bool,
@@ -92,9 +88,6 @@ pub(super) struct BatchData {
     /// The Gerstner water surface (`gizmo_renderer::routing::Routing::is_water`): its own forward
     /// pipeline, whose vertex stage displaces the mesh. Every other draw loop must skip it.
     pub(super) is_water: bool,
-    /// The editor's own furniture — see [`gizmo::renderer::components::EditorOnly`]. Drawn into
-    /// the scene view, never into the game view.
-    pub(super) is_editor_only: bool,
     /// Goes into the shadow maps (`ShadowCasting::On | Only`).
     pub(super) casts_shadows: bool,
     /// Goes into the camera's picture (`ShadowCasting::On | Off`).
@@ -158,8 +151,6 @@ pub(super) struct FlatBatchData {
     pub(super) is_backdrop: bool,
     /// See [`BatchData::is_water`].
     pub(super) is_water: bool,
-    /// See [`BatchData::is_editor_only`].
-    pub(super) is_editor_only: bool,
     /// See [`BatchData::casts_shadows`].
     pub(super) casts_shadows: bool,
     /// See [`BatchData::visible_in_camera`].

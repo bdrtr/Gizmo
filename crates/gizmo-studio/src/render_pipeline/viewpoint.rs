@@ -93,32 +93,6 @@ pub(super) fn resolve(
     }
 }
 
-/// The frame for one named camera, or `None` if that entity is not one.
-///
-/// [`resolve`] answers "which camera does the viewport draw from"; this answers "what does *that*
-/// camera see", which is what the Game panel needs while the viewport is drawing from another one.
-/// Deliberately no fallback: a missing game camera must not silently become the editor camera in a
-/// picture that claims to be the game.
-pub(super) fn camera_frame(
-    world: &World,
-    entity: Entity,
-    aspect: f32,
-    exposure: f32,
-) -> Option<CameraFrame> {
-    let cameras = world.query::<&Camera>();
-    let transforms = world.query::<&Transform>();
-    let cam = cameras.get(entity)?;
-    let (at, turn) = shaken(world, entity, transforms.get(entity)?);
-    Some(CameraFrame {
-        view_proj: cam.get_projection(aspect) * Camera::view(at, turn),
-        position: at,
-        forward: Camera::front(turn),
-        near: cam.near,
-        far: cam.far,
-        exposure,
-    })
-}
-
 /// The frustum this frame culls against.
 ///
 /// **The game camera's, even in edit mode.** Flying the editor camera around therefore does not

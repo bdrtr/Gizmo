@@ -548,6 +548,16 @@ fn render_with_editor(
     game_view_visible: bool,
     tweak: impl FnOnce(&mut gizmo::editor::EditorState),
 ) -> (Vec<u8>, Vec<u8>) {
+    render_with_world(game_view_visible, tweak, |_| {})
+}
+
+/// [`render_with_editor`], with the world tweaked too, after the cube, the two cameras and the
+/// sun are in it.
+fn render_with_world(
+    game_view_visible: bool,
+    tweak: impl FnOnce(&mut gizmo::editor::EditorState),
+    tweak_world: impl FnOnce(&mut World),
+) -> (Vec<u8>, Vec<u8>) {
     pollster::block_on(async {
         let mut renderer = shared_device_renderer(W, H).await;
         let mut am = AssetManager::new();
@@ -595,6 +605,7 @@ fn render_with_editor(
         );
 
         world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
+        tweak_world(&mut world);
 
         let make_target = |label: &str, device: &wgpu::Device, format: wgpu::TextureFormat| {
             let t = device.create_texture(&wgpu::TextureDescriptor {
@@ -756,6 +767,55 @@ fn the_game_view_shows_the_game_camera_not_the_editor_camera() {
          render happened",
         scene_px.len()
     );
+}
+
+/// **The Game panel is the game's own picture**, drawn through the game path
+/// (`gizmo::systems::render::draw_camera_into`), and the HUD is the plainest part of it to see:
+/// the game draws its UI over every frame, and the editor's own forward path draws none.
+///
+/// Until 2026-11-22 the Game panel was that forward path from the game camera — no deferred
+/// lighting, no screen-space effects, no TAA, no HUD — and in play mode a copy of the Scene
+/// panel. Measured with this test against the old path: the box's colour was nowhere in the Game
+/// panel.
+#[test]
+fn the_game_view_draws_what_the_game_draws_hud_included() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) {
+        return;
+    }
+    if pollster::block_on(Renderer::headless_adapter_is_software()) {
+        return;
+    }
+    // A pure-blue HUD box over the panel's middle, above everything.
+    let (scene_px, game_px) = render_with_world(true, |_| {}, |world| {
+        world.spawn_bundle((
+            gizmo::ui::Node {
+                position: gizmo::math::Vec2::new(W as f32 * 0.25, H as f32 * 0.25),
+                size: gizmo::math::Vec2::new(W as f32 * 0.5, H as f32 * 0.5),
+                visible: true,
+            },
+            gizmo::ui::BackgroundColor(Vec4::new(0.0, 0.0, 1.0, 1.0)),
+            gizmo::ui::ZIndex(1000),
+        ));
+    });
+    // Whatever the target's channel order (RGBA or BGRA), a pure blue is one of the two outer
+    // channels high and the other two low.
+    let blue = |px: &[u8]| {
+        px.as_chunks::<{ BPP as usize }>()
+            .0
+            .iter()
+            .filter(|p| p[1] < 40 && ((p[2] > 200 && p[0] < 40) || (p[0] > 200 && p[2] < 40)))
+            .count()
+    };
+    let in_game = blue(&game_px);
+    let box_px = (W as usize / 2) * (H as usize / 2);
+    assert!(
+        in_game > box_px * 9 / 10,
+        "the HUD box is not in the Game panel ({in_game} of its {box_px} pixels): the panel is not \
+         the game path's picture"
+    );
+    // The scene's red cube is no help to the count: it is lit, not pure, and under the box.
+    let _ = scene_px;
 }
 
 /// The other half: a Game panel nobody is looking at costs nothing.

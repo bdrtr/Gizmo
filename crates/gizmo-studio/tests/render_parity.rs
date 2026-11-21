@@ -619,18 +619,19 @@ fn every_render_capability_is_known_to_both_draw_paths() {
             Path::GameOnly,
             "a camera's rectangle of the target, for split screen: `render_viewports` composes one \
              view per such camera into the game's frame. The editor's viewport draws the one \
-             editor camera by design, and its Game panel previews through the studio's own \
-             single-camera path, so a split-screen game shows its primary camera there and its \
-             split when run.",
+             editor camera by design, and its Game panel draws the game camera alone, through the \
+             game path (`draw_camera_into`, since 2026-11-22), so a split-screen game shows its \
+             primary camera there and its split when run.",
         ),
         (
             "CameraDetail",
             Path::GameOnly,
             "how much of the pipeline draws a secondary view (a minimap, a monitor), read by the game \
              path's own view code (`draw_camera_view`) for the split-screen and texture cameras it \
-             composes. The studio draws no secondary view (see `Viewport` above): its Game panel \
-             previews the primary camera, and a primary camera set to `Simple` shows there in full \
-             and simple when run.",
+             composes. The studio's own path draws no secondary view (see `Viewport` above); its Game \
+             panel draws the primary camera through that same view code (`draw_camera_into`), so a \
+             primary camera set to `Simple` shows simple there as when run (in full until \
+             2026-11-22, when the panel was the studio's own path).",
         ),
         (
             "specular_tint",

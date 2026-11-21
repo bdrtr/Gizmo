@@ -66,6 +66,21 @@ fn draw_studio_frame(
     let (aspect, ed_shading_mode, show_colliders, post_params, game_view_visible) =
         sync_editor_settings(world, renderer);
 
+    // **The Game panel is the game's own picture**: the game camera through the game path's whole
+    // pipeline (`draw_camera_into`), in play mode and out of it. Until 2026-11-22 it was the editor's
+    // forward path from the game camera, and in play mode a copy of the Scene panel's — neither of
+    // them what the game draws: no deferred lighting, no SSAO or SSR, no TAA, no HUD.
+    //
+    // First, before anything of this frame's own is written: `draw_camera_into` submits at once, and
+    // `Queue::write_buffer` orders against submission, so what this frame writes from here on
+    // applies to its own encoder and not to the panel's draw.
+    //
+    // Only for a panel someone can see. In the default layout Scene and Game are tabs of ONE dock
+    // leaf, so at most one of them is on screen, and a second scene draw every frame to fill a
+    // texture behind another tab cost the studio's frame about 40% (2.63/3.02 ms → 1.65/1.69 ms
+    // when the gate went in).
+    let game_view_rendered = game_view_visible && draw_game_view(world, renderer, state.game_camera);
+
     // Hidden entities, INCLUDING everything under one — `collect_hidden` is the engine's own
     // walk, shared with the game path, because two answers to "is this drawn" is what the
     // 2026-08-19 fix was about. The `IsHidden` borrow is still taken here rather than inside the
@@ -172,7 +187,6 @@ fn draw_studio_frame(
     let mut debug_aabbs = Vec::new();
 
     // Set inside the block below: false means the Game panel still needs the fallback copy.
-    let mut game_view_rendered = false;
     // Filled inside the block below, kept with the renderer after it.
     let mut render_stats = gizmo::renderer::components::RenderStats::default();
     // The box around what this walk draws, the next frame's to fit its cascades into — as the game's
@@ -385,9 +399,6 @@ fn draw_studio_frame(
                 // became 1.0 — which `shader.wgsl` reads as "skip the lights" — so leaving this
                 // loop alone would have turned editor water FLAT rather than merely different.
                 let is_water = routing.is_water;
-                // Editor furniture, so the game view can leave it out. Not derivable from the
-                // material: a light icon is an ordinary unlit cube.
-                let is_editor_only = editor_only.get(e).is_some();
                 // Per-object shadow casting. `MeshRenderer` is guaranteed present — the loop above
                 // skips entities without one.
                 let shadows = renderers.get(e).map(|r| r.shadows).unwrap_or_default();
@@ -435,7 +446,6 @@ fn draw_studio_frame(
                         is_water,
                         is_transmissive,
                         wire: wire.as_ref().map(std::sync::Arc::as_ptr),
-                        is_editor_only,
                         casts_shadows,
                         visible_in_camera,
                         blend_mode,
@@ -469,7 +479,6 @@ fn draw_studio_frame(
                         wire,
                         is_backdrop,
                         is_water,
-                        is_editor_only,
                         casts_shadows,
                         visible_in_camera,
                         blend_mode,
@@ -569,7 +578,6 @@ fn draw_studio_frame(
                         is_unlit: batch.is_unlit,
                         is_backdrop: batch.is_backdrop,
                         is_water: batch.is_water,
-                        is_editor_only: batch.is_editor_only,
                         casts_shadows: batch.casts_shadows,
                         visible_in_camera: batch.visible_in_camera,
                         blend_mode: batch.blend_mode,
@@ -657,58 +665,6 @@ fn draw_studio_frame(
                 render_stats = stats;
             }
 
-            // --- GAME VIEW: bu karenin İLK çizimi, kendi encoder'ında ---
-            //
-            // Sırası kasıtlı ve düzeltilmesi gereken kusurun ta kendisi: `Queue::write_buffer`
-            // encoder komutlarıyla araya girmez. Bir submit'ten önce yapılan bütün yazımlar o
-            // submit'teki BÜTÜN geçişler için geçerlidir. Uniform'u kare ortasında ikinci kez
-            // yazıp "artık oyun kamerası" demek bu yüzden çalışmıyor — ilk çizim de o değeri
-            // görüyor ve iki panel yine aynı görüntüyü veriyor (ölçüldü: 65536 baytın 0'ı farklı).
-            //
-            // Doğrusu, oyun görünümünü kendi encoder'ına çizip HEMEN submit etmek: o submit'e
-            // kadar yazılanlar ona, sonrasında yazılanlar çağıranın encoder'ına uygulanır. Böylece
-            // ikinci bir uniform tamponu ya da bind group çoğaltmasına gerek kalmıyor.
-            // Only for a panel someone can see. In the default layout Scene and Game are tabs of
-            // ONE dock leaf, so at most one of them is on screen — and this ran unconditionally,
-            // paying for a second full scene pass (batches, uniforms, its own submit) every frame
-            // to fill a texture behind another tab. Gating it took the studio's frame from
-            // 2.63/3.02 ms to 1.65/1.69 ms, about 40%.
-            //
-            // The flag is this frame's answer, not a stale one: the app loop runs the egui hook
-            // (`event.rs`, `ui_fn`) before the render hook, so the panels have already said whether
-            // they drew. The one cost is the frame you switch tabs on — the Game panel announces
-            // itself and paints in the same frame, so it shows the previous contents once (black,
-            // if it has never rendered) and is correct from the next frame. Rendering a frame early
-            // for a panel that is not there yet is the trade this whole gate exists to refuse.
-            if !is_playing_mode && game_view_visible {
-                let game_batches: Vec<batching::FlatBatchData> = flat_batches
-                    .iter()
-                    .filter(|b| !b.is_editor_only)
-                    .cloned()
-                    .collect();
-                game_view_rendered = record_game_view(
-                    world,
-                    renderer,
-                    &game_batches,
-                    state.game_camera,
-                    aspect,
-                    ed_shading_mode,
-                    elapsed_time,
-                    post_params,
-                );
-                if game_view_rendered {
-                    // Aşağıdaki geçişler için editörün uniform'larını geri yaz. Bu yazımlar
-                    // çağıranın submit'inden önce olduğu için ona uygulanırlar.
-                    renderer.update_post_process(&renderer.queue, post_params.with_camera(&camera));
-                    renderer.queue.write_buffer(
-                        &renderer.scene.global_uniform_buffer,
-                        0,
-                        gizmo::bytemuck::cast_slice(&[scene_uniform_data]),
-                    );
-                }
-            }
-
-            // --- 1. CSM GÖLGE PASS + 2. ANA RENDER PASS (Tier 3: geçişler ayrı fn) ---
             (render_stats.shadow_passes, render_stats.shadow_instances) = record_studio_shadow_passes(
                 encoder,
                 renderer,
@@ -801,8 +757,8 @@ fn draw_studio_frame(
     // In play mode both panels legitimately show the game camera (`viewpoint::resolve` already
     // switched to it), so the cheap path is still the correct one there.
     if !game_view_rendered {
-        // Play mode (both panels legitimately show the game camera), or a scene with no game
-        // camera at all: the HDR texture already holds the only picture there is.
+        // A scene with no game camera at all: the HDR texture already holds the only picture
+        // there is.
         let game_view = world
             .get_resource::<gizmo::renderer::components::GameRenderTarget>()
             .map(|t| t.0.view.clone());
@@ -812,132 +768,16 @@ fn draw_studio_frame(
     }
 }
 
-/// Draws the game camera's view of the scene into `output`, returning false if there is no game
-/// camera to draw from.
-///
-/// Runs the same steps as the main frame — scene setup, cascades, main pass, post — with three
-/// differences, each of which is the point:
-///
-/// - the camera is the **game** camera, resolved by name rather than by mode;
-/// - the batch list has already had `EditorOnly` filtered out by the caller, and `draw_chrome` is
-///   false, so neither the furniture in the batches nor the grid/gizmo/collider draws appear;
-/// - the cascades are refitted to this camera. Reusing the editor camera's would be cheaper and
-///   wrong in a specific way: the shader picks a cascade from view depth, so the splits have to
-///   belong to the camera doing the viewing or the wrong cascade gets sampled.
-///
-/// # Cost
-///
-/// A second full scene render plus four cascades, every frame the Game panel exists — measured on
-/// the default studio scene at 481 → 453 FPS, about 6%. Culling and the instance buffer are shared
-/// with the editor's render, so what is paid twice is pass recording and rasterisation, not the
-/// CPU-side batching. There is deliberately no "is the panel visible" gate: nothing in the editor
-/// state reports that today, and inventing a visibility protocol to save 6% on a preview users
-/// expect to be live is the wrong trade until a heavy scene says otherwise.
-#[allow(clippy::too_many_arguments)]
-fn record_game_view(
-    world: &World,
-    renderer: &mut gizmo::renderer::Renderer,
-    batches: &[batching::FlatBatchData],
-    game_camera: Entity,
-    aspect: f32,
-    ed_shading_mode: u32,
-    elapsed_time: f32,
-    post_params: gizmo::renderer::PostProcessUniforms,
-) -> bool {
-    let Some(output) = world
-        .get_resource::<gizmo::renderer::components::GameRenderTarget>()
-        .map(|t| t.0.view.clone())
-    else {
+/// Draws the game camera into the Game panel's texture through the game path
+/// (`draw_camera_into`). False when there is no panel texture or no game camera to draw from.
+fn draw_game_view(world: &World, renderer: &mut gizmo::renderer::Renderer, game_camera: Entity) -> bool {
+    let Some(target) = world.get_resource::<gizmo::renderer::components::GameRenderTarget>().map(|t| t.0.clone()) else {
         return false;
     };
-    let Some(camera) = viewpoint::camera_frame(world, game_camera, aspect, post_params.exposure)
-    else {
+    if world.query::<&gizmo::renderer::components::Camera>().get(game_camera).is_none() {
         return false;
-    };
-    let cam_fov = {
-        let cameras = world.query::<&gizmo::renderer::components::Camera>();
-        match cameras.get(game_camera) {
-            Some(c) => c.fov,
-            None => return false,
-        }
-    };
-
-    // The game camera's background, as the game draws it (`Camera::clear_color`).
-    let clear_color = world
-        .query::<&gizmo::renderer::components::Camera>()
-        .get(game_camera)
-        .and_then(|c| c.clear_color)
-        .map(|c| c.to_array());
-    renderer.sync_light_cookies(world);
-    let setup = gizmo::systems::render::collect_scene_setup(
-        world,
-        &gizmo::systems::render::SceneSetupInputs {
-            camera,
-            aspect,
-            cam_fov,
-            // The game view is the game's picture: the same environment the game path gives
-            // `SceneSetupInputs`. It dropped all of this until 2026-11-07.
-            environment: gizmo::renderer::EnvironmentFrame {
-                preset: renderer.environment_preset,
-                preset_2: renderer.environment_preset_2,
-                blend_t: renderer.environment_blend_t,
-                shading_mode: ed_shading_mode,
-                clear_color,
-                fog: renderer.fog,
-                sky: renderer.sky,
-                wetness: renderer.wetness,
-                rainfall: renderer.rainfall,
-                // The editor draws no rain map: in its views the rain falls everywhere it falls.
-                rain_map: None,
-                ..Default::default()
-            },
-            sun_shadow_maps: true,
-            local_shadow_maps: true,
-            elapsed_time,
-            light_cookies: renderer.light_cookies.table(),
-            shadow_settings: renderer.shadow_settings,
-            scene_extent: renderer.scene_extent.last(),
-        },
-    );
-    let cascades = setup.cascade_view_projs.map(|m| m.to_cols_array_2d());
-    renderer.scene.ensure_sun_shadow_maps(&renderer.device, setup.draws_cascades(), renderer.shadow_settings.resolution, false);
-    renderer.scene.ensure_local_shadow_layers(&renderer.device, setup.local_shadows.layers().len());
-
-    renderer.update_post_process(&renderer.queue, post_params.with_camera(&camera));
-    let scene_uniform = gizmo::renderer::SceneUniforms::new(&setup.frame);
-    renderer.queue.write_buffer(
-        &renderer.scene.global_uniform_buffer,
-        0,
-        gizmo::bytemuck::cast_slice(&[scene_uniform]),
-    );
-
-    // Its own encoder, submitted before returning — that submission boundary is what makes the
-    // uniform writes above belong to this render and not to the editor's.
-    let mut enc = renderer
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Game View") });
-    record_studio_shadow_passes(
-        &mut enc,
-        renderer,
-        batches,
-        setup.draws_cascades().then_some(&cascades),
-        setup.local_shadows.layers(),
-        camera.position,
-        elapsed_time,
-    );
-    // The GPU bodies the game camera sees, culled against it (see the viewport's cull).
-    if let Some(physics) = &renderer.gpu_physics {
-        physics.cull_pass(&mut enc, renderer.scene.view_bind_group());
     }
-    // The game view never takes the editor's debug shading: it is the picture the game shows.
-    record_studio_main_pass(&mut enc, renderer, world, batches, None, &[], false, false, 0, clear_color);
-    // The particles and the fluid's surface, as the game draws them. They were left out because the
-    // frame's particle step was recorded into the caller's encoder, after this one, so this view
-    // would have drawn last frame's; the step runs ahead of every view now (`draw_ahead_of_views`).
-    gizmo::systems::render::record_gpu_particles(&mut enc, renderer);
-    gizmo::systems::render::record_fluid_surface(&mut enc, renderer);
-    renderer.run_post_processing(&mut enc, &output);
-    renderer.queue.submit(std::iter::once(enc.finish()));
+    gizmo::systems::render::draw_camera_into(world, renderer, game_camera, &target.view, (target.width, target.height), true);
     true
 }
 
