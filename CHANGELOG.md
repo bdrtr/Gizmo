@@ -402,6 +402,33 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The bloom is a mip chain, as Unreal's and Call of Duty: Advanced Warfare's are.** It was a 9-tap separable
+  blur of the full frame: a halo a couple of pixels wide, which barely left a small source, at three full-frame
+  passes.
+  - Now the bright part is filtered down a chain of half-size levels with Jimenez's 13 taps ("Next Generation
+    Post Processing", 2014), seven of them at 1080p. On the way back up each level takes
+    `Renderer::bloom_scatter` (0–1, default 0.7) of the one below it, spread by a tent, and keeps the rest
+    (the up pass's blend constant). The first level, half the frame's size, is the bloom the composite adds.
+  - The weights add to one, so the light it spreads is the same at any scatter: 2,560 of a square's 2,560 at
+    scatter 0, 2,554 at 0.7, 2,549 at 0.95, with 0, 20 and 60 % of it beyond 32 px
+    (`the_bloom_keeps_the_light_it_spreads_and_spreads_it_further_with_the_scatter`, in `gizmo-renderer`).
+  - Round a saturated cube a ring 32–56 px out reads 82.6 at the default against 57.3 without bloom; the old
+    blur never reached 25 px (`bloom_reaches_across_the_frame_as_far_as_the_scatter_sends_it`).
+  - **Breaking:** `Renderer::bloom_radius` and `bloom_iterations` are gone, and with them
+    `post_process::blur_steps`, `create_blur_buffers` and the blur's buffers, groups and pipelines. In their
+    place are `bloom_scatter`, `PostProcessState::bloom` (a `BloomChain`) and `bloom_pipelines`.
+    `create_post_textures` returns the chain.
+  - **The default intensity is 0.5, from 0.8** (`post_process::DEFAULT_BLOOM_INTENSITY`, which the renderer,
+    `PostProcess` and the uniforms' defaults all read): Unreal's share. Its bloom adds six blurs at 0.675,
+    tinted to about 0.54 of the frame's light; these levels add to one, so the intensity is that share. 0.8
+    suited a blur a couple of pixels wide, where most of what it added fell back on the clipped highlight that
+    made it; spread across the frame, 0.8 of the sun's reflection in a mirror whitened the whole mirror.
+  - Five tests that measure something else turn the bloom off: two mirrors' colours, a sphere light's
+    saturated area, a volume's depth glow and the fluid's extent. The wide bloom spread their highlights over
+    what they read.
+  - The forward-only path builds no bloom pipelines at all; its shader's empty stand-ins are gone.
+  - A wet drive in `nfsu2-gizmo` (1080p, AMD 780M): bloom 1.0 → 0.4 ms.
+
 - **The bloom's extract blurs along X on the way.** The bright part used to be written whole into its own
   target and read back by the first horizontal blur: a full frame's write and read. Now `fs_bright_extract`
   takes the first round's horizontal blur straight off the frame. A tap between two pixels weighs the bright

@@ -563,7 +563,7 @@ impl Default for PostProcessUniforms {
     /// knob added later reaches every site without an edit.
     fn default() -> Self {
         Self {
-            bloom_intensity: 0.8,
+            bloom_intensity: crate::post_process::DEFAULT_BLOOM_INTENSITY,
             // Below 1.0 on purpose: catches highlights, not just clipped pixels.
             bloom_threshold: 0.85,
             // Raised above 1.0 because ACES tone mapping otherwise reads flat.

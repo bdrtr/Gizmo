@@ -12,6 +12,9 @@ pub use crate::post_process::PostProcessState;
 // Each module holds `impl Renderer` blocks (private-field access preserved).
 mod assets;
 mod construction;
+// For a test device that binds what the renderer's does (`test_gpu::headless_native_device`).
+#[cfg(test)]
+pub(crate) use construction::native_device_limits;
 mod textures;
 
 // ============================================================
@@ -336,19 +339,18 @@ pub struct Renderer {
     pub bloom_intensity: f32,
     /// The luminance above which a texel blooms.
     pub bloom_threshold: f32,
-    /// How far apart the bloom blur's taps are, in texels of the full frame: 1 (the default) is
-    /// the blur this engine always had; 2 doubles the halo's reach at the cost of a coarser
-    /// falloff. Clamped to 0..=16. Native only, as is bloom.
-    pub bloom_radius: f32,
+    /// How far the bloom spreads, 0–1 ([`DEFAULT_BLOOM_SCATTER`](crate::post_process::DEFAULT_BLOOM_SCATTER)
+    /// by default): the share each of its levels takes of the wider one below it, coming back up the
+    /// chain ([`PostProcessState::record_bloom`](crate::post_process::PostProcessState::record_bloom)). 0 keeps
+    /// the glow to the first level, a few pixels round a light; towards 1 it reaches across the frame. The
+    /// light it spreads is the same at any scatter. Native only, as is bloom.
+    pub bloom_scatter: f32,
     /// How far below `bloom_threshold` bloom starts, as a share of it: 0 is a hard edge, 1 starts from
     /// black. 0.3 is the curve this engine always had. Native only, as is bloom.
     pub bloom_softness: f32,
     /// Whether bloom replaces light rather than adding to it: the glow comes out of the light that made it,
     /// so a bright thing dims as it spreads and the total holds, where added it can only brighten.
     pub bloom_energy_conserving: bool,
-    /// How many times the separable blur runs (1–8, default 1). Each round spreads the halo
-    /// again — wider and smoother than a larger radius, at two passes a round.
-    pub bloom_iterations: u32,
     /// How many objects the last view's occluders hid from the camera
     /// ([`Occluder`](crate::components::Occluder)); they drew nothing, or shadows only.
     pub occluded_objects: u32,
@@ -1188,7 +1190,7 @@ impl Renderer {
         self.post.composite_bloom_bind_group = crate::post_process::composite_bloom_group(
             &self.device,
             &self.post.composite_bloom_bind_group_layout,
-            &self.post.bloom_extract_texture_view,
+            &self.post.bloom.view,
             &sampler,
             &self.depth_texture_view,
             &self.post.lut_view,
@@ -1294,7 +1296,7 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let (hdr_t, hdr_tv, hdr_bg, be_tv, be_bg, bb_tv, bb_bg, cb_bg) = crate::post_process::create_post_textures(
+        let (hdr_t, hdr_tv, hdr_bg, bloom, cb_bg) = crate::post_process::create_post_textures(
             &self.device,
             &self.post.post_bind_group_layout,
             &self.post.composite_bloom_bind_group_layout,
@@ -1307,18 +1309,8 @@ impl Renderer {
         self.post.hdr_texture = hdr_t;
         self.post.hdr_texture_view = hdr_tv;
         self.post.hdr_bind_group = hdr_bg;
-        self.post.bloom_extract_texture_view = be_tv;
-        self.post.bloom_extract_bind_group = be_bg;
-        self.post.bloom_blur_texture_view = bb_tv;
-        self.post.bloom_blur_bind_group = bb_bg;
+        self.post.bloom = bloom;
         self.post.composite_bloom_bind_group = cb_bg;
-
-        let (buf, v_buf, h_bg, v_bg) =
-            crate::post_process::create_blur_buffers(&self.device, &self.post.blur_params_bind_group_layout, width, height);
-        self.post.blur_params_buffer = buf;
-        self.post.blur_v_params_buffer = v_buf;
-        self.post.blur_h_bind_group = h_bg;
-        self.post.blur_v_bind_group = v_bg;
 
         // SSR samples the HDR target and the G-buffer, both rebuilt above. It was left to the
         // draw, which rebuilds it only when its size differs from the renderer's — so a resize

@@ -10719,6 +10719,8 @@ mod golden_render_tests {
         pollster::block_on(async {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
+            // No bloom: the sun's highlight in the mirror would spread over the mirror's colour this counts.
+            renderer.bloom_intensity = 0.0;
             renderer.ssgi = None;
             renderer.ssr = None;
             let mut world = World::new();
@@ -10953,6 +10955,8 @@ mod golden_render_tests {
         pollster::block_on(async {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
+            // No bloom: the sun's highlight in a mirror would spread over the colour this reads.
+            renderer.bloom_intensity = 0.0;
             renderer.ssgi = None;
             renderer.ssr = None;
             let mut world = World::new();
@@ -11563,6 +11567,8 @@ mod golden_render_tests {
         async fn highlight(source_radius: f32) -> (usize, f32) {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
+            // No bloom: it would spread the highlight whose saturated area this measures.
+            renderer.bloom_intensity = 0.0;
             renderer.ssgi = None;
             renderer.ssr = None;
             let mut world = World::new();
@@ -12958,6 +12964,8 @@ mod golden_render_tests {
         pollster::block_on(async {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
+            // No bloom: it would spread the water's highlights over the frame round it.
+            renderer.bloom_intensity = 0.0;
             renderer.ssgi = None;
             renderer.ssr = None;
             renderer.ssao = None;
@@ -16279,19 +16287,22 @@ mod golden_render_tests {
             let dark = frame(0.0, 0.3, false).await;
             eprintln!("a bright square: added {added}, conserving {conserving}, background {}", total(&dark));
             assert!(conserving < added, "added {added}, conserving {conserving}");
-            assert_eq!(conserving_frame[4], dark[4], "what does not bloom is not taken away: a corner's pixel");
+            // The bloom reaches the corner (it reaches across the frame), so it may brighten it; conserving,
+            // it takes nothing from it, where nothing blooms.
+            assert!(conserving_frame[4] >= dark[4], "what does not bloom is not taken away: a corner's pixel");
         });
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no bloom.
-    /// `bloom_radius` and `bloom_iterations` widen the halo. A small, very bright cube (about
-    /// 12 px across) in a dark scene; the halo is the mean brightness of a ring 8–24 px from its
-    /// centre. The default blur's taps are one full-frame texel apart, so its halo barely leaves
-    /// the cube — a ring at 25 px read the same with bloom on and off. Before these two existed
-    /// that reach was fixed (`bloom_3d`: exactly 0.00 beyond 80 px at every intensity).
+    /// **The bloom reaches across the frame, as far as `bloom_scatter` sends it.** A small, very bright
+    /// cube (about 12 px across) in a dark scene; the halo is the mean brightness of a ring 8–24 px from
+    /// its centre and of one 32–56 px out. The bloom was a 9-tap blur of the full frame, its taps a
+    /// texel apart: it barely left the cube, and a ring at 25 px read the same with it on and off.
+    /// Through the chain of half-size levels (`PostProcessState::record_bloom`) it reaches the far ring at
+    /// the default scatter, and further the higher the scatter.
     #[test]
     #[ignore = "needs a GPU adapter"]
-    fn bloom_radius_and_iterations_widen_the_halo() {
+    fn bloom_reaches_across_the_frame_as_far_as_the_scatter_sends_it() {
         let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available())
             || pollster::block_on(Renderer::headless_adapter_is_software())
@@ -16299,16 +16310,14 @@ mod golden_render_tests {
             eprintln!("skipping: no usable GPU adapter");
             return;
         }
-        // Mean luma of the ring's horizontal arms, of its vertical arms (the blur is separable, so
-        // each axis has its own step), and of the cube's centre.
-        async fn halo(radius: f32, iterations: u32, intensity: f32) -> ([f32; 2], f32) {
+        // Mean luma of the near ring, of the far ring, and of the cube's centre.
+        async fn halo(scatter: f32, intensity: f32) -> ([f32; 2], f32) {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
             renderer.ssgi = None;
             renderer.ssr = None;
             renderer.volumetric = None;
-            renderer.bloom_radius = radius;
-            renderer.bloom_iterations = iterations;
+            renderer.bloom_scatter = scatter;
             renderer.bloom_intensity = intensity;
             let mut world = World::new();
             let mut assets = AssetManager::new();
@@ -16335,48 +16344,38 @@ mod golden_render_tests {
                 let p = &frame[(y * 128 + x) * 4..];
                 (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0
             };
-            let (mut arms, mut n) = ([0.0f32; 2], [0.0f32; 2]);
+            let (mut rings, mut n) = ([0.0f32; 2], [0.0f32; 2]);
             for y in 0..128 {
                 for x in 0..128 {
                     let (dx, dy) = (x as f32 - 63.5, y as f32 - 63.5);
                     let d = (dx * dx + dy * dy).sqrt();
-                    if (8.0..24.0).contains(&d) {
-                        // Horizontal arm: within 30° of the X axis; vertical: of the Y axis.
-                        let axis = if dy.abs() < dx.abs() * 0.577 {
-                            0
-                        } else if dx.abs() < dy.abs() * 0.577 {
-                            1
-                        } else {
-                            continue;
-                        };
-                        arms[axis] += luma(x, y);
-                        n[axis] += 1.0;
-                    }
+                    let ring = if (8.0..24.0).contains(&d) {
+                        0
+                    } else if (32.0..56.0).contains(&d) {
+                        1
+                    } else {
+                        continue;
+                    };
+                    rings[ring] += luma(x, y);
+                    n[ring] += 1.0;
                 }
             }
-            ([arms[0] / n[0], arms[1] / n[1]], luma(64, 64))
+            ([rings[0] / n[0], rings[1] / n[1]], luma(64, 64))
         }
         pollster::block_on(async {
-            let (none, _) = halo(1.0, 1, 0.0).await;
-            let (base, centre) = halo(1.0, 1, 0.8).await;
-            let (wide, _) = halo(3.0, 1, 0.8).await;
-            let (soft, _) = halo(1.0, 4, 0.8).await;
-            // The halo grows with the radius smoothly, not in steps: at 2 every tap falls on a pixel, at
-            // 1.99 every one but the middle falls between two, and each must weigh both. The extract's
-            // horizontal blur (`fs_bright_extract`) taking the nearer one alone read 90.15 there.
-            let (two, _) = halo(2.0, 1, 0.8).await;
-            let (under, _) = halo(1.99, 1, 0.8).await;
-            // Measured (horizontal / vertical arm), 2026-11-21: no bloom 59.16 / 59.15, default 65.95 /
-            // 65.94 (centre 255), radius 3 131.60 / 131.60, four rounds 99.49 / 99.50, radius 2 94.73 /
-            // 94.71 and 1.99 94.61 / 94.60. Caught: either step never rewritten (that arm stays at the
-            // default's), the rounds ignored, and a fractional tap rounded to a pixel.
+            let (none, _) = halo(0.7, 0.0).await;
+            let (tight, _) = halo(0.0, 0.8).await;
+            let (base, centre) = halo(0.7, 0.8).await;
+            let (wide, _) = halo(0.95, 0.8).await;
+            // Measured (near / far ring), 2026-11-21: no bloom 59.16 / 57.26, scatter 0 68.28 / 57.26, the
+            // default 0.7 197.14 / 82.57, 0.95 217.02 / 108.51. The 9-tap blur read 65.95 near.
             assert!(centre > 250.0, "the cube is saturated: {centre:.1}");
-            for (axis, name) in [(0, "horizontal"), (1, "vertical")] {
-                assert!(base[axis] > none[axis] + 3.0, "the default bloom reaches the {name} arm: {none:?} → {base:?}");
-                assert!(wide[axis] > base[axis] + 20.0, "radius 3 spreads the {name} arm: {base:?} → {wide:?}");
-                assert!(soft[axis] > base[axis] + 10.0, "four rounds spread the {name} arm: {base:?} → {soft:?}");
-                assert!((two[axis] - under[axis]).abs() < 1.0, "radius 1.99 spreads the {name} arm as 2 does: {under:?} against {two:?}");
-            }
+            assert!(base[0] > none[0] + 3.0, "the default bloom reaches the near ring: {none:?} → {base:?}");
+            assert!(base[1] > none[1] + 1.0, "and the far one, 32–56 px out: {none:?} → {base:?}");
+            assert!(
+                tight[1] < base[1] && base[1] < wide[1],
+                "the far ring brightens with the scatter (0, 0.7, 0.95): {tight:?}, {base:?}, {wide:?}"
+            );
         });
     }
 
@@ -21002,6 +21001,8 @@ fn material_surface(input: SurfaceInput) -> Surface {
         pollster::block_on(async {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
+            // No bloom: it would spread each cube's glow over the other's.
+            renderer.bloom_intensity = 0.0;
             renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::uniform([0.0, 0.0, 0.0]));
             let mut frames = Vec::new();
             for (label, wgsl) in [("thin", THIN), ("water", WATER), ("depth", DEPTH)] {

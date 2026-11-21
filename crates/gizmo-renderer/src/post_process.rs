@@ -1,14 +1,12 @@
 use crate::gpu_types::PostProcessUniforms;
 use wgpu::util::DeviceExt;
 
-/// The post-processing state — the HDR, bloom, blur and composite pipelines and their
-/// resources.
+/// The post-processing state — the HDR target, the bloom's chain and the composite, their pipelines
+/// and their resources.
 pub struct PostProcessState {
     /// Layout of the "one HDR texture + sampler" group every pass in the chain binds.
     pub post_bind_group_layout: wgpu::BindGroupLayout,
-    /// Layout of the blur pass's direction group.
-    pub blur_params_bind_group_layout: wgpu::BindGroupLayout,
-    /// Layout of the composite pass's group: the blurred bloom, and the depth for DoF.
+    /// Layout of the composite pass's group: the bloom, and the depth for DoF.
     pub composite_bloom_bind_group_layout: wgpu::BindGroupLayout,
     /// The [`PostProcessUniforms`] buffer, rewritten each frame.
     pub post_params_buffer: wgpu::Buffer,
@@ -16,13 +14,11 @@ pub struct PostProcessState {
     pub post_params_bind_group_layout: wgpu::BindGroupLayout,
     /// Its bind group. Never rebuilt — the buffer outlives every resize.
     pub post_params_bind_group: wgpu::BindGroup,
-    /// The bloom extract pass: everything above the threshold, at half resolution.
-    pub bloom_extract_pipeline: wgpu::RenderPipeline,
-    /// The separable blur pass, run twice — horizontally, then vertically.
-    pub bloom_blur_pipeline: wgpu::RenderPipeline,
+    /// The bloom's passes ([`BloomPipelines`]); `None` on the forward-only path, which has no bloom.
+    pub bloom_pipelines: Option<BloomPipelines>,
     /// The composite pass: tone map, add bloom, and apply DoF, grain, vignette and aberration.
     pub composite_pipeline: wgpu::RenderPipeline,
-    /// The module the three pipelines were built from, kept to build them again for another
+    /// The module the pipelines were built from, kept to build them again for another
     /// [`CompositeVariant`].
     pub(crate) shader: wgpu::ShaderModule,
     /// What the composite was last built for. See [`sync_composite`].
@@ -45,26 +41,166 @@ pub struct PostProcessState {
     /// The composite pass's group 5: local exposure's grid. `None` in the browser. See
     /// [`crate::local_exposure`].
     pub local: Option<crate::local_exposure::LocalExposureBinding>,
-    /// The extract pass's output.
-    pub bloom_extract_texture_view: wgpu::TextureView,
-    /// It as an input to the blur.
-    pub bloom_extract_bind_group: wgpu::BindGroup,
-    /// The blur's output — the ping half of the two-pass blur.
-    pub bloom_blur_texture_view: wgpu::TextureView,
-    /// It as an input.
-    pub bloom_blur_bind_group: wgpu::BindGroup,
-    /// The blurred bloom and the depth buffer, as the composite pass reads them.
+    /// The bloom's levels, the first of which is the bloom the composite adds.
+    pub bloom: BloomChain,
+    /// The bloom and the depth buffer, as the composite pass reads them.
     pub composite_bloom_bind_group: wgpu::BindGroup,
-    /// The horizontal blur's step (this said "both steps"; it only ever held the horizontal one).
-    /// Rewritten every frame from `Renderer::bloom_radius`.
-    pub blur_params_buffer: wgpu::Buffer,
-    /// The vertical blur's step, likewise.
-    pub blur_v_params_buffer: wgpu::Buffer,
-    /// The horizontal blur's parameters — a texel step along X.
-    pub blur_h_bind_group: wgpu::BindGroup,
-    /// The vertical blur's — a texel step along Y. One separable blur run twice costs `2n`
-    /// samples where a true 2-D kernel costs `n²`.
-    pub blur_v_bind_group: wgpu::BindGroup,
+}
+
+/// The bloom's three passes, all drawn from `post_process.wgsl`: the first level from the frame's bright
+/// part (`fs_bloom_prefilter`), each level after from the one above it (`fs_bloom_down`), and each level
+/// taking in the one below it, coming back up (`fs_bloom_up`, blended by the scatter).
+pub struct BloomPipelines {
+    /// The first level, from the frame.
+    pub prefilter: wgpu::RenderPipeline,
+    /// A level from the one above it.
+    pub down: wgpu::RenderPipeline,
+    /// A level's share of the one below it, blended in by the constant ([`Renderer::bloom_scatter`](crate::Renderer::bloom_scatter)).
+    pub up: wgpu::RenderPipeline,
+}
+
+/// The most levels the bloom's chain has.
+pub const BLOOM_LEVELS: u32 = 8;
+/// The short side, in texels, that the chain halves down to and no further.
+pub const BLOOM_SMALLEST: u32 = 8;
+/// The bloom's default strength (`Renderer::bloom_intensity`, `PostProcess::bloom_intensity`): Unreal's.
+/// Its bloom adds six blurs of the frame at an intensity of 0.675, tinted 0.35, 0.14, 0.12, 0.07, 0.07 and
+/// 0.06 — about 0.54 of the frame's light, all told. This chain's levels add to one, so its intensity is
+/// that share. It was 0.8 while the bloom was a blur a couple of pixels wide, where most of what it added
+/// fell back on the clipped highlight that made it; spread across the frame, 0.8 of a sun's reflection in
+/// a mirror whitened the whole mirror.
+pub const DEFAULT_BLOOM_INTENSITY: f32 = 0.5;
+/// [`Renderer::bloom_scatter`](crate::Renderer::bloom_scatter)'s default: as Unity's bloom has it, wide
+/// enough that a street lamp's glow reaches across the road, and most of the light still near the lamp.
+pub const DEFAULT_BLOOM_SCATTER: f32 = 0.7;
+
+/// The size of the bloom's first level for a `width × height` frame, half each way, and how many levels
+/// its chain has: halving until the short side would fall under [`BLOOM_SMALLEST`], at most
+/// [`BLOOM_LEVELS`]. Seven for 1080p, from 960×540 down to 15×8.
+#[must_use]
+pub fn bloom_levels(width: u32, height: u32) -> ((u32, u32), u32) {
+    let first = ((width / 2).max(1), (height / 2).max(1));
+    let (mut short, mut levels) = (first.0.min(first.1), 1);
+    while levels < BLOOM_LEVELS && short / 2 >= BLOOM_SMALLEST {
+        short /= 2;
+        levels += 1;
+    }
+    (first, levels)
+}
+
+/// The bloom's levels: one texture, its first mip half the frame's size and each after half the one
+/// before ([`bloom_levels`]). Each level is a render target and, in a group of its own, a source.
+#[derive(Clone)]
+pub struct BloomChain {
+    texture: wgpu::Texture,
+    targets: Vec<wgpu::TextureView>,
+    sources: Vec<wgpu::BindGroup>,
+    /// The first level: the finished bloom, as the composite reads it.
+    pub view: wgpu::TextureView,
+}
+
+impl BloomChain {
+    /// The chain for a `width × height` frame, each level's source group in `post_bgl` with `sampler`. A
+    /// texel on the forward-only path, which has no bloom: its composite binds it and never samples it.
+    pub fn new(device: &wgpu::Device, post_bgl: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, width: u32, height: u32) -> Self {
+        let ((w, h), levels) = if cfg!(gizmo_forward_only) { ((1, 1), 1) } else { bloom_levels(width, height) };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Bloom Chain"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let level = |mip: u32| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("Bloom Level"),
+                base_mip_level: mip,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        };
+        let targets: Vec<wgpu::TextureView> = (0..levels).map(level).collect();
+        let sources = targets
+            .iter()
+            .map(|view| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("bloom_level_bind_group"),
+                    layout: post_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                    ],
+                })
+            })
+            .collect();
+        Self { view: level(0), texture, targets, sources }
+    }
+
+    /// How many levels the chain has.
+    #[must_use]
+    pub fn levels(&self) -> u32 {
+        self.targets.len() as u32
+    }
+
+    /// The texture, every level a mip of it: for reading the bloom back.
+    #[must_use]
+    pub fn texture(&self) -> &wgpu::Texture {
+        &self.texture
+    }
+}
+
+impl PostProcessState {
+    /// Records the bloom: the bright part of the HDR target filtered down the chain level by level and
+    /// back up, each level on the way up taking `scatter` (0–1) of the one below it and keeping the rest
+    /// of its own — weights that add to one, so the bloom holds the bright part's light at any scatter,
+    /// tight at 0 and wide towards 1. Into [`BloomChain::view`]. Nothing on the forward-only path.
+    pub fn record_bloom(&self, encoder: &mut wgpu::CommandEncoder, scatter: f32) {
+        let Some(pipelines) = self.bloom_pipelines.as_ref() else { return };
+        let scatter = f64::from(if scatter.is_finite() { scatter.clamp(0.0, 1.0) } else { DEFAULT_BLOOM_SCATTER });
+        let chain = &self.bloom;
+        let mut draw = |label: &str,
+                        target: &wgpu::TextureView,
+                        pipeline: &wgpu::RenderPipeline,
+                        source: &wgpu::BindGroup,
+                        params: bool,
+                        blend: Option<f64>| {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        // On the way up the level keeps what it holds, which the blend weighs.
+                        load: if blend.is_some() { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(wgpu::Color::BLACK) },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, source, &[]);
+            if params {
+                pass.set_bind_group(2, &self.post_params_bind_group, &[]);
+            }
+            if let Some(s) = blend {
+                pass.set_blend_constant(wgpu::Color { r: s, g: s, b: s, a: s });
+            }
+            pass.draw(0..3, 0..1);
+        };
+        let levels = chain.targets.len();
+        draw("Bloom Prefilter", &chain.targets[0], &pipelines.prefilter, &self.hdr_bind_group, true, None);
+        for i in 1..levels {
+            draw("Bloom Down", &chain.targets[i], &pipelines.down, &chain.sources[i - 1], false, None);
+        }
+        for i in (0..levels.saturating_sub(1)).rev() {
+            draw("Bloom Up", &chain.targets[i], &pipelines.up, &chain.sources[i + 1], false, Some(scatter));
+        }
+    }
 }
 
 /// Builds the whole post-process chain: shaders, three pipelines, every target and every bind
@@ -102,21 +238,6 @@ pub fn build_post_process_resources(
                     count: None,
                 },
             ],
-        });
-
-    let blur_params_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("blur_params_bind_group_layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
         });
 
     // WASM: depth texture'ı composite layout'tan kaldır (textureLoad kullanılıyor, sampler gerekmez)
@@ -246,11 +367,10 @@ pub fn build_post_process_resources(
     let local: Option<crate::local_exposure::LocalExposureBinding> = None;
 
     let composite_variant = CompositeVariant::default();
-    let (bloom_extract_pipeline, bloom_blur_pipeline, composite_pipeline) = build_post_pipelines(
+    let (bloom_pipelines, composite_pipeline) = build_post_pipelines(
         device,
         &post_shader,
         &post_bind_group_layout,
-        &blur_params_bind_group_layout,
         &composite_bloom_bind_group_layout,
         &post_params_bind_group_layout,
         exposure.as_ref().map(|e| &e.layout),
@@ -262,16 +382,7 @@ pub fn build_post_process_resources(
 
     let post_sampler = create_post_sampler(device);
     let lut_view = crate::color_lut::unset_view(device);
-    let (
-        hdr_texture,
-        hdr_texture_view,
-        hdr_bind_group,
-        bloom_extract_texture_view,
-        bloom_extract_bind_group,
-        bloom_blur_texture_view,
-        bloom_blur_bind_group,
-        composite_bloom_bind_group,
-    ) = create_post_textures(
+    let (hdr_texture, hdr_texture_view, hdr_bind_group, bloom, composite_bloom_bind_group) = create_post_textures(
         device,
         &post_bind_group_layout,
         &composite_bloom_bind_group_layout,
@@ -282,18 +393,13 @@ pub fn build_post_process_resources(
         &lut_view,
     );
 
-    let (blur_params_buffer, blur_v_params_buffer, blur_h_bind_group, blur_v_bind_group) =
-        create_blur_buffers(device, &blur_params_bind_group_layout, width, height);
-
     PostProcessState {
         post_bind_group_layout,
-        blur_params_bind_group_layout,
         composite_bloom_bind_group_layout,
         post_params_buffer,
         post_params_bind_group_layout,
         post_params_bind_group,
-        bloom_extract_pipeline,
-        bloom_blur_pipeline,
+        bloom_pipelines,
         composite_pipeline,
         shader: post_shader,
         composite_variant,
@@ -301,15 +407,8 @@ pub fn build_post_process_resources(
         hdr_texture,
         hdr_texture_view,
         hdr_bind_group,
-        bloom_extract_texture_view,
-        bloom_extract_bind_group,
-        bloom_blur_texture_view,
-        bloom_blur_bind_group,
+        bloom,
         composite_bloom_bind_group,
-        blur_params_buffer,
-        blur_v_params_buffer,
-        blur_h_bind_group,
-        blur_v_bind_group,
         exposure,
         velocity,
         local,
@@ -427,7 +526,6 @@ fn build_post_pipelines(
     device: &wgpu::Device,
     post_shader: &wgpu::ShaderModule,
     post_bgl: &wgpu::BindGroupLayout,
-    blur_bgl: &wgpu::BindGroupLayout,
     composite_bloom_bgl: &wgpu::BindGroupLayout,
     post_params_bgl: &wgpu::BindGroupLayout,
     exposure_bgl: Option<&wgpu::BindGroupLayout>,
@@ -435,77 +533,59 @@ fn build_post_pipelines(
     local_bgl: Option<&wgpu::BindGroupLayout>,
     surface_format: wgpu::TextureFormat,
     variant: CompositeVariant,
-) -> (
-    wgpu::RenderPipeline,
-    wgpu::RenderPipeline,
-    wgpu::RenderPipeline,
-) {
-    let extract_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Bloom Extract Pipeline Layout"),
-        bind_group_layouts: &[Some(post_bgl), Some(blur_bgl), Some(post_params_bgl)],
-        immediate_size: 0,
-    });
-    let bloom_extract_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Bloom Extract Pipeline"),
-        layout: Some(&extract_layout),
-        vertex: wgpu::VertexState {
-            module: post_shader,
-            entry_point: Some("vs_fullscreen"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: post_shader,
-            entry_point: Some("fs_bright_extract"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba16Float,
-                blend: Some(wgpu::BlendState::REPLACE),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-            cache: None,
-    });
-
-    let blur_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Bloom Blur Pipeline Layout"),
-        bind_group_layouts: &[Some(post_bgl), Some(blur_bgl)],
-        immediate_size: 0,
-    });
-    let bloom_blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Bloom Blur Pipeline"),
-        layout: Some(&blur_layout),
-        vertex: wgpu::VertexState {
-            module: post_shader,
-            entry_point: Some("vs_fullscreen"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: post_shader,
-            entry_point: Some("fs_blur"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba16Float,
-                blend: Some(wgpu::BlendState::REPLACE),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-            cache: None,
+) -> (Option<BloomPipelines>, wgpu::RenderPipeline) {
+    // The bloom's, on the desktop path: the forward-only shader has no bloom to draw them from.
+    let bloom_pipelines = (!cfg!(gizmo_forward_only)).then(|| {
+        let pipeline = |label: &str, layout: &wgpu::PipelineLayout, entry: &str, blend: wgpu::BlendState| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: post_shader,
+                    entry_point: Some("vs_fullscreen"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: post_shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        // The prefilter reads the frame and the parameters (its threshold), at group 2 as the composite
+        // reads them; the levels read a level.
+        let prefilter_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Bloom Prefilter Pipeline Layout"),
+            bind_group_layouts: &[Some(post_bgl), None, Some(post_params_bgl)],
+            immediate_size: 0,
+        });
+        let level_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Bloom Level Pipeline Layout"),
+            bind_group_layouts: &[Some(post_bgl)],
+            immediate_size: 0,
+        });
+        // Up the chain: the scatter (the blend constant) of what the pass draws, the rest of what the level holds.
+        let scatter = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Constant,
+            dst_factor: wgpu::BlendFactor::OneMinusConstant,
+            operation: wgpu::BlendOperation::Add,
+        };
+        BloomPipelines {
+            prefilter: pipeline("Bloom Prefilter Pipeline", &prefilter_layout, "fs_bloom_prefilter", wgpu::BlendState::REPLACE),
+            down: pipeline("Bloom Down Pipeline", &level_layout, "fs_bloom_down", wgpu::BlendState::REPLACE),
+            up: pipeline("Bloom Up Pipeline", &level_layout, "fs_bloom_up", wgpu::BlendState { color: scatter, alpha: scatter }),
+        }
     });
 
     let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -558,22 +638,17 @@ fn build_post_pipelines(
             cache: None,
     });
 
-    (
-        bloom_extract_pipeline,
-        bloom_blur_pipeline,
-        composite_pipeline,
-    )
+    (bloom_pipelines, composite_pipeline)
 }
 
-/// Recompiles just the three post-process pipelines against a new shader module, leaving every
-/// texture and bind group in place — what shader hot-reload calls.
+/// Recompiles just the post-process pipelines against a new shader module, leaving every texture and
+/// bind group in place — what shader hot-reload calls.
 pub fn rebuild_post_pipelines(renderer: &mut crate::Renderer, post_shader: &wgpu::ShaderModule) {
     let variant = renderer.post.composite_variant;
-    let (e, b, c) = build_post_pipelines(
+    let (bloom, c) = build_post_pipelines(
         &renderer.device,
         post_shader,
         &renderer.post.post_bind_group_layout,
-        &renderer.post.blur_params_bind_group_layout,
         &renderer.post.composite_bloom_bind_group_layout,
         &renderer.post.post_params_bind_group_layout,
         renderer.post.exposure.as_ref().map(|e| &e.layout),
@@ -582,8 +657,7 @@ pub fn rebuild_post_pipelines(renderer: &mut crate::Renderer, post_shader: &wgpu
         renderer.config.format,
         variant,
     );
-    renderer.post.bloom_extract_pipeline = e;
-    renderer.post.bloom_blur_pipeline = b;
+    renderer.post.bloom_pipelines = bloom;
     renderer.post.composite_pipeline = c;
     renderer.post.shader = post_shader.clone();
     renderer.post.composite_variant = variant;
@@ -683,9 +757,8 @@ fn create_post_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 // WASM: composite-bloom bind group'un depth girdisi native dalında — `depth_view`
 // web'de kullanılmaz (hedefli allow, native lint gücü korunur).
 #[cfg_attr(gizmo_forward_only, allow(unused_variables))]
-/// (Re)creates every size-dependent target in the chain and the bind groups that read them,
-/// returning them in the order the caller assigns them: HDR texture, view and group; the extract
-/// view and group; the blur view and group; and the composite group.
+/// (Re)creates every size-dependent target in the chain and the bind groups that read them, in the order
+/// the caller assigns them: the HDR texture, view and group; the bloom's chain; and the composite group.
 pub fn create_post_textures(
     device: &wgpu::Device,
     post_bgl: &wgpu::BindGroupLayout,
@@ -695,62 +768,29 @@ pub fn create_post_textures(
     height: u32,
     depth_view: &wgpu::TextureView,
     lut_view: &wgpu::TextureView,
-) -> (
-    wgpu::Texture,
-    wgpu::TextureView,
-    wgpu::BindGroup,
-    wgpu::TextureView,
-    wgpu::BindGroup,
-    wgpu::TextureView,
-    wgpu::BindGroup,
-    wgpu::BindGroup,
-) {
-    let make = |label: &str, width: u32, height: u32| -> (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup) {
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: post_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-            label: Some(&format!("{}_bind_group", label)),
-        });
-        (tex, view, bg)
-    };
-
-    let (hdr_t, hdr_v, hdr_bg) = make("HDR Texture", width, height);
-    // The forward-only path has no bloom: its composite binds the extract target and never samples it,
-    // and nothing draws into either. A texel each there — they were the frame's size, two HDR targets
-    // (14 MiB on a phone) that nothing wrote or read, until 2026-11-12.
-    let (bloom_w, bloom_h) = if cfg!(gizmo_forward_only) { (1, 1) } else { (width, height) };
-    let (_be_t, be_v, be_bg) = make("Bloom Extract Texture", bloom_w, bloom_h);
-    let (_bb_t, bb_v, bb_bg) = make("Bloom Blur Texture", bloom_w, bloom_h);
-
-    let cb_bg = composite_bloom_group(device, composite_bloom_bgl, &be_v, sampler, depth_view, lut_view);
-
-    (hdr_t, hdr_v, hdr_bg, be_v, be_bg, bb_v, bb_bg, cb_bg)
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup, BloomChain, wgpu::BindGroup) {
+    let hdr = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("HDR Texture"),
+        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let hdr_view = hdr.create_view(&wgpu::TextureViewDescriptor::default());
+    let hdr_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout: post_bgl,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&hdr_view) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+        ],
+        label: Some("HDR Texture_bind_group"),
+    });
+    let bloom = BloomChain::new(device, post_bgl, sampler, width, height);
+    let cb_bg = composite_bloom_group(device, composite_bloom_bgl, &bloom.view, sampler, depth_view, lut_view);
+    (hdr, hdr_view, hdr_bg, bloom, cb_bg)
 }
 
 /// The composite's group 1: the bloom, its sampler, the depth (the desktop's, for depth of field) and the
@@ -780,53 +820,6 @@ pub(crate) fn composite_bloom_group(
     })
 }
 
-/// Builds the blur direction buffer and its two bind groups — one stepping a texel along X, one
-/// along Y. Size-dependent, because a texel step is `1 / width`.
-pub fn create_blur_buffers(
-    device: &wgpu::Device,
-    bgl: &wgpu::BindGroupLayout,
-    width: u32,
-    height: u32,
-) -> (wgpu::Buffer, wgpu::Buffer, wgpu::BindGroup, wgpu::BindGroup) {
-    let [h_data, v_data] = blur_steps(width, height, 1.0);
-
-    let h_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Blur H Params"),
-        contents: bytemuck::cast_slice(&h_data),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
-    let v_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Blur V Params"),
-        contents: bytemuck::cast_slice(&v_data),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
-    let h_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: bgl,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: h_buf.as_entire_binding(),
-        }],
-        label: Some("blur_h_bind_group"),
-    });
-    let v_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: bgl,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: v_buf.as_entire_binding(),
-        }],
-        label: Some("blur_v_bind_group"),
-    });
-    (h_buf, v_buf, h_bg, v_bg)
-}
-
-/// The bloom blur's horizontal and vertical steps, in UV, for a `width × height` frame and a
-/// [`Renderer::bloom_radius`](crate::Renderer::bloom_radius) of `radius` (1 = one texel of the
-/// full frame between taps, the blur this engine always had).
-pub fn blur_steps(width: u32, height: u32, radius: f32) -> [[f32; 4]; 2] {
-    let r = if radius.is_finite() { radius.clamp(0.0, 16.0) } else { 1.0 };
-    [[r / width.max(1) as f32, 0.0, 0.0, 0.0], [0.0, r / height.max(1) as f32, 0.0, 0.0]]
-}
-
 /// Runs the post-processing render passes in order: the bloom ([`run_bloom`]), then the composite
 /// ([`run_composite`]).
 #[tracing::instrument(skip_all, level = "trace")]
@@ -840,93 +833,10 @@ pub fn run_post_processing(
     run_composite(renderer, encoder, output_view, region);
 }
 
-/// The bloom: the frame's bright parts, extracted and blurred into the texture the composite reads. The
-/// forward-only path has none.
+/// The bloom ([`PostProcessState::record_bloom`]), spread as [`Renderer::bloom_scatter`](crate::Renderer::bloom_scatter)
+/// says. The forward-only path has none.
 pub fn run_bloom(renderer: &crate::Renderer, encoder: &mut wgpu::CommandEncoder) {
-    #[cfg(gizmo_forward_only)]
-    let _ = (renderer, encoder);
-    // The blur's steps (`bloom_radius` spreads the taps), which the extract's horizontal blur reads too.
-    #[cfg(not(gizmo_forward_only))]
-    {
-        let [h, v] = blur_steps(renderer.config.width, renderer.config.height, renderer.bloom_radius);
-        renderer.queue.write_buffer(&renderer.post.blur_params_buffer, 0, bytemuck::cast_slice(&h));
-        renderer.queue.write_buffer(&renderer.post.blur_v_params_buffer, 0, bytemuck::cast_slice(&v));
-    }
-    // Pass 1: the bright part, blurred along X on the way (`fs_bright_extract`): the first round's
-    // horizontal blur, into the blur target. (WASM'da KAPALI)
-    #[cfg(not(gizmo_forward_only))]
-    {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Bloom Extract Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.post.bloom_blur_texture_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-        pass.set_pipeline(&renderer.post.bloom_extract_pipeline);
-        pass.set_bind_group(0, &renderer.post.hdr_bind_group, &[]);
-        pass.set_bind_group(1, &renderer.post.blur_h_bind_group, &[]);
-        pass.set_bind_group(2, &renderer.post.post_params_bind_group, &[]);
-        pass.draw(0..3, 0..1);
-    }
-    // Pass 2: the separable blur, horizontal then vertical, `bloom_iterations` times — the first round's
-    // horizontal half already done by the extract (WASM'da KAPALI). Each round widens the halo by about
-    // the kernel's reach again, so three rounds reach roughly √3 as far as one.
-    #[cfg(not(gizmo_forward_only))]
-    for round in 0..renderer.bloom_iterations.clamp(1, 8) {
-        // Pass 2a: Yatay Blur (WASM'da KAPALI)
-        #[cfg(not(gizmo_forward_only))]
-        if round > 0 {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Bloom Blur Horizontal"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &renderer.post.bloom_blur_texture_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
-            pass.set_pipeline(&renderer.post.bloom_blur_pipeline);
-            pass.set_bind_group(0, &renderer.post.bloom_extract_bind_group, &[]);
-            pass.set_bind_group(1, &renderer.post.blur_h_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        // Pass 2b: Dikey Blur (ping-pong) (WASM'da KAPALI)
-        #[cfg(not(gizmo_forward_only))]
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Bloom Blur Vertical"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &renderer.post.bloom_extract_texture_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
-            pass.set_pipeline(&renderer.post.bloom_blur_pipeline);
-            pass.set_bind_group(0, &renderer.post.bloom_blur_bind_group, &[]);
-            pass.set_bind_group(1, &renderer.post.blur_v_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-    }
-
+    renderer.post.record_bloom(encoder, renderer.bloom_scatter);
 }
 
 /// The composite: the frame with its bloom, exposed, tone-mapped and finished (motion blur, depth of
@@ -996,13 +906,7 @@ pub fn run_composite(
         pass.draw(0..3, 0..1);
     }
 
-    // Native records bloom extract + H/V blur + composite; WASM strips bloom and
-    // records only the composite/tonemap pass.
-    #[cfg(not(gizmo_forward_only))]
-    let passes = 4u32;
-    #[cfg(gizmo_forward_only)]
-    let passes = 1u32;
-    tracing::trace!(passes, "[PostProcess] recorded post-processing chain");
+    tracing::trace!("[PostProcess] recorded the composite");
 }
 
 /// The reduced path's composite constants: the sRGB encode when the surface will not do it
@@ -1040,15 +944,8 @@ crate::view_targets::screen_targets! {
         hdr_texture: wgpu::Texture,
         hdr_texture_view: wgpu::TextureView,
         hdr_bind_group: wgpu::BindGroup,
-        bloom_extract_texture_view: wgpu::TextureView,
-        bloom_extract_bind_group: wgpu::BindGroup,
-        bloom_blur_texture_view: wgpu::TextureView,
-        bloom_blur_bind_group: wgpu::BindGroup,
+        bloom: BloomChain,
         composite_bloom_bind_group: wgpu::BindGroup,
-        blur_params_buffer: wgpu::Buffer,
-        blur_v_params_buffer: wgpu::Buffer,
-        blur_h_bind_group: wgpu::BindGroup,
-        blur_v_bind_group: wgpu::BindGroup,
     }
 }
 
@@ -1407,5 +1304,167 @@ mod reduced_composite_tests {
         let halving = ColorLut::from_cube(&half_text).unwrap().with_domain(LutDomain::Reinhard);
         let halved = run_with(3.0, false, with(LutDomain::Reinhard), &input, Some(&halving)).unwrap();
         check(&halved, &|x| 0.5 * x / (1.0 + x), "a table that halves");
+    }
+}
+
+#[cfg(all(test, not(gizmo_forward_only)))]
+mod bloom_tests {
+    use crate::gpu_types::PostProcessUniforms;
+
+    fn f32_to_f16(v: f32) -> u16 {
+        let bits = v.to_bits();
+        let sign = ((bits >> 16) & 0x8000) as u16;
+        let exp = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+        let mantissa = bits & 0x7f_ffff;
+        if v == 0.0 {
+            sign
+        } else if exp >= 31 {
+            sign | 0x7c00
+        } else if exp <= 0 {
+            sign
+        } else {
+            sign | ((exp as u16) << 10) | ((mantissa >> 13) as u16)
+        }
+    }
+
+    fn f16_to_f32(h: u16) -> f32 {
+        let sign = if h >> 15 == 1 { -1.0 } else { 1.0 };
+        let exp = i32::from((h >> 10) & 0x1f);
+        let frac = f32::from(h & 0x3ff);
+        sign * match exp {
+            0 => frac * 2f32.powi(-24),
+            31 => f32::INFINITY,
+            _ => (1.0 + frac / 1024.0) * 2f32.powi(exp - 15),
+        }
+    }
+
+    /// The bloom's first level (the red channel of each texel, and the level's width) after the chain ran at
+    /// `scatter` over a `side`² frame that is black but for a `patch`² square of 10 at its middle.
+    fn bloom(side: u32, patch: u32, scatter: f32) -> Option<(Vec<f32>, u32)> {
+        let _gpu = crate::test_gpu::gpu_lock();
+        pollster::block_on(async {
+            let (device, queue) = crate::test_gpu::headless_native_device().await?;
+            let depth = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("bloom_test_depth"),
+                size: wgpu::Extent3d { width: side, height: side, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+            let mut post = super::build_post_process_resources(&device, wgpu::TextureFormat::Rgba8UnormSrgb, side, side, &depth_view);
+            // The frame, as the HDR target would hold it, bound where the chain reads the HDR target.
+            let (lo, hi) = ((side - patch) / 2, (side + patch) / 2);
+            let bytes: Vec<u8> = (0..side * side)
+                .flat_map(|i| {
+                    let (x, y) = (i % side, i / side);
+                    let v = if (lo..hi).contains(&x) && (lo..hi).contains(&y) { 10.0 } else { 0.0 };
+                    [v, v, v, 1.0].map(f32_to_f16).into_iter().flat_map(u16::to_le_bytes)
+                })
+                .collect();
+            let frame = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("bloom_test_frame"),
+                size: wgpu::Extent3d { width: side, height: side, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: &frame, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                &bytes,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(side * 8), rows_per_image: Some(side) },
+                wgpu::Extent3d { width: side, height: side, depth_or_array_layers: 1 },
+            );
+            let view = frame.create_view(&wgpu::TextureViewDescriptor::default());
+            let sampler = super::create_post_sampler(&device);
+            post.hdr_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("bloom_test_frame_group"),
+                layout: &post.post_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                ],
+            });
+            // The defaults' threshold (0.85) and softness: all of a 10 blooms, none of a 0.
+            queue.write_buffer(&post.post_params_buffer, 0, bytemuck::cast_slice(&[PostProcessUniforms::default()]));
+            let first = side / 2;
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("bloom_test_readback"),
+                size: u64::from(first * first * 8),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("bloom_test") });
+            post.record_bloom(&mut encoder, scatter);
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo { texture: post.bloom.texture(), mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(first * 8), rows_per_image: Some(first) },
+                },
+                wgpu::Extent3d { width: first, height: first, depth_or_array_layers: 1 },
+            );
+            queue.submit([encoder.finish()]);
+            let slice = readback.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+            let data = slice.get_mapped_range().ok()?;
+            let red = data.as_chunks::<8>().0.iter().map(|t| f16_to_f32(u16::from_le_bytes([t[0], t[1]]))).collect();
+            Some((red, first))
+        })
+    }
+
+    /// **The bloom keeps the light it spreads, at any scatter, and spreads it further the higher the
+    /// scatter.** A 16-pixel square of 10 on a black 256² frame: its bright part is all of it, 2,560. The
+    /// first level is half the frame's size, so each texel stands for four pixels; its light, four times
+    /// its sum, must be that 2,560 whatever the scatter — the levels' shares add to one going up the
+    /// chain — and the share of it lying more than 32 pixels from the square's middle must grow with the
+    /// scatter.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_bloom_keeps_the_light_it_spreads_and_spreads_it_further_with_the_scatter() {
+        let (side, patch) = (256, 16);
+        let mut far_shares = Vec::new();
+        for scatter in [0.0, 0.7, 0.95] {
+            let Some((red, first)) = bloom(side, patch, scatter) else {
+                eprintln!("skipping: no usable GPU adapter");
+                return;
+            };
+            let light: f32 = red.iter().sum::<f32>() * 4.0;
+            let middle = first as f32 / 2.0;
+            let far: f32 = red
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| {
+                    let (x, y) = ((i % first as usize) as f32 + 0.5 - middle, (i / first as usize) as f32 + 0.5 - middle);
+                    (x * x + y * y).sqrt() > 16.0
+                })
+                .map(|(_, v)| v)
+                .sum::<f32>()
+                * 4.0;
+            eprintln!("BLOOM scatter {scatter}: light {light:.1}, beyond 32 px {:.3}", far / light);
+            let expected = (patch * patch) as f32 * 10.0;
+            assert!((light - expected).abs() < 0.02 * expected, "at a scatter of {scatter} the bloom holds {light:.1} of the square's {expected}");
+            far_shares.push(far / light);
+        }
+        assert!(
+            far_shares[0] < far_shares[1] && far_shares[1] < far_shares[2],
+            "the share past 32 px grows with the scatter (0, 0.7, 0.95): {far_shares:?}"
+        );
+    }
+
+    /// The chain for 1080p: seven levels, from half the frame down to eight texels on the short side.
+    #[test]
+    fn a_1080p_frame_blooms_through_seven_levels() {
+        assert_eq!(super::bloom_levels(1920, 1080), ((960, 540), 7));
+        assert_eq!(super::bloom_levels(1, 1), ((1, 1), 1));
+        assert_eq!(super::bloom_levels(16, 16).1, 1, "a level of eight is where it stops");
+        assert_eq!(super::bloom_levels(32, 32).1, 2);
     }
 }

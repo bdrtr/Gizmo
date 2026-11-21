@@ -92,6 +92,20 @@ fn hold_machine_gpu_lock() {
 /// **Does not lock** — the caller must already hold [`gpu_lock`]. `std::sync::Mutex` is not
 /// reentrant, so locking here as well would deadlock every test that holds the guard.
 pub(crate) async fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    headless_adapter().await?.request_device(&wgpu::DeviceDescriptor::default()).await.ok()
+}
+
+/// [`headless_device`] with the limits the renderer asks of a native adapter
+/// ([`native_device_limits`](crate::renderer::native_device_limits)): the desktop's post chain binds six
+/// groups where the default allows four. **Does not lock**, likewise.
+pub(crate) async fn headless_native_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    let adapter = headless_adapter().await?;
+    let required_limits = crate::renderer::native_device_limits(&adapter);
+    adapter.request_device(&wgpu::DeviceDescriptor { required_limits, ..Default::default() }).await.ok()
+}
+
+/// The adapter both of them open.
+async fn headless_adapter() -> Option<wgpu::Adapter> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
         flags: wgpu::InstanceFlags::default(),
@@ -99,7 +113,7 @@ pub(crate) async fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
         backend_options: Default::default(),
         display: None,
     });
-    let adapter = instance
+    instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
@@ -109,10 +123,6 @@ pub(crate) async fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
             // its own hardware, and bucketing would cost real limits for a threat it does not have.
             apply_limit_buckets: false,
         })
-        .await
-        .ok()?;
-    adapter
-        .request_device(&wgpu::DeviceDescriptor::default())
         .await
         .ok()
 }

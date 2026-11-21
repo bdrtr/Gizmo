@@ -164,38 +164,13 @@ fn local_exposure(colour: vec3<f32>, uv: vec2<f32>, exposure: f32) -> vec3<f32> 
 
 
 // ============================
-// Pass 1: Bright Extract
+// Bloom: a chain of levels, each half the size of the one above (`post_process::BloomChain`)
 // ============================
-// The bright part, blurred along X on the way: the first round's horizontal blur (`fs_blur`'s taps and
-// weights, `blur_params` stepping along X) taken straight off the frame, rather than off a copy of the
-// bright part written whole and read back — a full frame's write and read, of 1.3 ms of bloom (a wet
-// drive in `nfsu2-gizmo`, 1080p, AMD 780M). A tap that falls between two pixels takes the bright parts
-// of both, weighted as bilinear filtering weighed them in the copy, at the frame's edge clamped as its
-// sampler clamped: the same sums.
-@fragment
-fn fs_bright_extract(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
-    let dims = vec2<i32>(textureDimensions(t_source));
-    let pixel = vec2<i32>(in.position.xy);
-    // Texels between taps (`post_process::blur_steps`).
-    let step = blur_params.direction.x * f32(dims.x);
-    var result = vec3<f32>(0.0);
-    for (var k = -4; k <= 4; k++) {
-        let at = f32(k) * step;
-        let left = floor(at);
-        let f = at - left;
-        let x = pixel.x + i32(left);
-        var tap = bright_part(textureLoad(t_source, vec2<i32>(clamp(x, 0, dims.x - 1), pixel.y), 0).rgb);
-        if (f > 0.0) {
-            let right = bright_part(textureLoad(t_source, vec2<i32>(clamp(x + 1, 0, dims.x - 1), pixel.y), 0).rgb);
-            tap = mix(tap, right, f);
-        }
-        result += tap * BLUR_WEIGHTS[abs(k)];
-    }
-    return vec4<f32>(result, 1.0);
-}
-
-// `fs_blur`'s weights, from the middle tap out.
-const BLUR_WEIGHTS = array<f32, 5>(0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+// Down the chain the frame's bright part is filtered into ever smaller levels; up it, each level takes
+// the one below it in, spread by a tent, in the share `Renderer::bloom_scatter` gives (the up pass's
+// blend). The first level, half the frame's size, is the bloom the composite adds: the bright part
+// blurred at every scale at once, wide or tight as the scatter has it — the bloom of Unreal's and of Call
+// of Duty: Advanced Warfare's (Jimenez, "Next Generation Post Processing", 2014).
 
 // The share of a colour that blooms.
 fn bright_part(color: vec3<f32>) -> vec3<f32> {
@@ -206,37 +181,66 @@ fn bright_part(color: vec3<f32>) -> vec3<f32> {
     return color * clamp(knee * knee, 0.0, 1.0);
 }
 
-// ============================
-// Pass 2: Gaussian Blur
-// ============================
-struct BlurParams {
-    direction: vec2<f32>,
-    _padding: vec2<f32>,
-};
+// Jimenez's 13 taps, each a bilinear tap between four texels of `t_source`, around `uv`.
+fn taps13(uv: vec2<f32>) -> array<vec3<f32>, 13> {
+    let t = 1.0 / vec2<f32>(textureDimensions(t_source));
+    return array<vec3<f32>, 13>(
+        textureSampleLevel(t_source, s_source, uv + t * vec2<f32>(-2.0, -2.0), 0.0).rgb,
+        textureSampleLevel(t_source, s_source, uv + t * vec2<f32>(0.0, -2.0), 0.0).rgb,
+        textureSampleLevel(t_source, s_source, uv + t * vec2<f32>(2.0, -2.0), 0.0).rgb,
+        textureSampleLevel(t_source, s_source, uv + t * vec2<f32>(-1.0, -1.0), 0.0).rgb,
+        textureSampleLevel(t_source, s_source, uv + t * vec2<f32>(1.0, -1.0), 0.0).rgb,
+        textureSampleLevel(t_source, s_source, uv + t * vec2<f32>(-2.0, 0.0), 0.0).rgb,
+        textureSampleLevel(t_source, s_source, uv, 0.0).rgb,
+        textureSampleLevel(t_source, s_source, uv + t * vec2<f32>(2.0, 0.0), 0.0).rgb,
+        textureSampleLevel(t_source, s_source, uv + t * vec2<f32>(-1.0, 1.0), 0.0).rgb,
+        textureSampleLevel(t_source, s_source, uv + t * vec2<f32>(1.0, 1.0), 0.0).rgb,
+        textureSampleLevel(t_source, s_source, uv + t * vec2<f32>(-2.0, 2.0), 0.0).rgb,
+        textureSampleLevel(t_source, s_source, uv + t * vec2<f32>(0.0, 2.0), 0.0).rgb,
+        textureSampleLevel(t_source, s_source, uv + t * vec2<f32>(2.0, 2.0), 0.0).rgb,
+    );
+}
 
-@group(1) @binding(0) var<uniform> blur_params: BlurParams;
+// The 13 taps weighed: the 4×4 box in the middle 0.5, the four 2×2 boxes round it 0.125 each — a 6×6
+// footprint whose weights add to one, so a level holds the light of the one above it.
+fn weigh13(taps: array<vec3<f32>, 13>) -> vec3<f32> {
+    let middle = (taps[3] + taps[4] + taps[8] + taps[9]) * 0.125;
+    let corners = (taps[0] + taps[1] + taps[5] + taps[6]) + (taps[1] + taps[2] + taps[6] + taps[7])
+        + (taps[5] + taps[6] + taps[10] + taps[11]) + (taps[6] + taps[7] + taps[11] + taps[12]);
+    return middle + corners * 0.03125;
+}
 
+// The first level, from the frame: its bright part, each tap's, filtered down to half its size.
 @fragment
-fn fs_blur(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
-    var result = textureSample(t_source, s_source, in.uv) * 0.227027;
-    
-    let o1 = blur_params.direction * 1.0;
-    result += textureSample(t_source, s_source, in.uv + o1) * 0.1945946;
-    result += textureSample(t_source, s_source, in.uv - o1) * 0.1945946;
-    
-    let o2 = blur_params.direction * 2.0;
-    result += textureSample(t_source, s_source, in.uv + o2) * 0.1216216;
-    result += textureSample(t_source, s_source, in.uv - o2) * 0.1216216;
-    
-    let o3 = blur_params.direction * 3.0;
-    result += textureSample(t_source, s_source, in.uv + o3) * 0.054054;
-    result += textureSample(t_source, s_source, in.uv - o3) * 0.054054;
-    
-    let o4 = blur_params.direction * 4.0;
-    result += textureSample(t_source, s_source, in.uv + o4) * 0.016216;
-    result += textureSample(t_source, s_source, in.uv - o4) * 0.016216;
-    
-    return vec4<f32>(result.rgb, 1.0);
+fn fs_bloom_prefilter(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    var taps = taps13(in.uv);
+    for (var k = 0; k < 13; k++) {
+        taps[k] = bright_part(taps[k]);
+    }
+    return vec4<f32>(weigh13(taps), 1.0);
+}
+
+// A level from the one above it.
+@fragment
+fn fs_bloom_down(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(weigh13(taps13(in.uv)), 1.0);
+}
+
+// A level's share of the one below it, `t_source`, spread by a 3×3 tent a texel of it wide: what the up
+// pass's blend weighs by the scatter against what the level holds.
+@fragment
+fn fs_bloom_up(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    let t = 1.0 / vec2<f32>(textureDimensions(t_source));
+    var sum = textureSampleLevel(t_source, s_source, in.uv, 0.0).rgb * 4.0;
+    sum += (textureSampleLevel(t_source, s_source, in.uv + vec2<f32>(t.x, 0.0), 0.0).rgb
+        + textureSampleLevel(t_source, s_source, in.uv - vec2<f32>(t.x, 0.0), 0.0).rgb
+        + textureSampleLevel(t_source, s_source, in.uv + vec2<f32>(0.0, t.y), 0.0).rgb
+        + textureSampleLevel(t_source, s_source, in.uv - vec2<f32>(0.0, t.y), 0.0).rgb) * 2.0;
+    sum += textureSampleLevel(t_source, s_source, in.uv + t, 0.0).rgb
+        + textureSampleLevel(t_source, s_source, in.uv - t, 0.0).rgb
+        + textureSampleLevel(t_source, s_source, in.uv + vec2<f32>(t.x, -t.y), 0.0).rgb
+        + textureSampleLevel(t_source, s_source, in.uv + vec2<f32>(-t.x, t.y), 0.0).rgb;
+    return vec4<f32>(sum / 16.0, 1.0);
 }
 
 // ============================

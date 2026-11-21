@@ -301,7 +301,7 @@ fn main() {
         .with_simple_scene(|scene, _state| {
             let r = &mut *scene.renderer;
             r.fog = Some(Fog::new([0.05, 0.06, 0.12], 0.02).with_height(0.15, -1.0));
-            r.bloom_radius = 2.0;
+            r.bloom_scatter = 0.8;
             r.bloom_intensity = 1.2;
             r.deband_dither = true;
             let font = load_font(r);

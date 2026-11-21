@@ -20,16 +20,6 @@ fn vs_fullscreen(@builtin(vertex_index) vertex_index: u32) -> FullscreenVertexOu
 @group(0) @binding(0) var t_source: texture_2d<f32>;
 @group(0) @binding(1) var s_source: sampler;
 
-@fragment
-fn fs_bright_extract(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-}
-
-@fragment
-fn fs_blur(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-}
-
 // `PostProcessParams`, `params` (group 2), the tone curves, the vignette and the dither are in
 // `post_common.wgsl`, which `post_process::post_shader_source` puts in front of this file, so this
 // composite gives a pixel the colour the desktop's does. What it leaves out needs a pass or a texture

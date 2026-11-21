@@ -126,7 +126,7 @@ impl DofBlur {
 impl Default for PostProcess {
     fn default() -> Self {
         Self {
-            bloom_intensity: 0.8,
+            bloom_intensity: crate::post_process::DEFAULT_BLOOM_INTENSITY,
             bloom_threshold: 0.85,
             vignette: 0.0,
             chromatic_aberration: 0.0,
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn the_default_is_the_no_component_behaviour() {
         let p = PostProcess::default();
-        assert_eq!(p.bloom_intensity, 0.8, "the renderer's bloom_intensity");
+        assert_eq!(p.bloom_intensity, crate::post_process::DEFAULT_BLOOM_INTENSITY, "the renderer's bloom_intensity");
         assert_eq!(p.bloom_threshold, 0.85, "the renderer's bloom_threshold");
         assert_eq!(p.chromatic_aberration, 0.0);
         assert_eq!(p.film_grain, 0.012, "the renderer's film_grain_intensity");
