@@ -337,8 +337,15 @@ mod receiver_tests {
     }
 
     /// A one-UV-set glTF quad (no `TEXCOORD_1`) — a model a lightmap could not be read on.
+    ///
+    /// In a directory of its own each call: two tests write it, and they run on threads of one process.
+    /// Sharing one (`gizmo-gltf-uv1-<pid>`), one test rewrote the files while the other's import read
+    /// them, and that import failed now and then — "the mesh source does not load", on CI's macOS
+    /// runner (2026-11-21).
     fn write_one_uv_gltf() -> String {
-        let dir = std::env::temp_dir().join(format!("gizmo-gltf-uv1-{}", std::process::id()));
+        static CALL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let call = CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("gizmo-gltf-uv1-{}-{call}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let mut bin: Vec<u8> = Vec::new();
         let f32s = |bin: &mut Vec<u8>, v: &[f32]| v.iter().for_each(|x| bin.extend_from_slice(&x.to_le_bytes()));
