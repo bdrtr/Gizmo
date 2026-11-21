@@ -3,6 +3,7 @@ name = "demo-android"
 description = "The games as an Android app: an APK built with cargo-apk, one game per APK."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -13,8 +14,7 @@ publish = false
 # also builds (and is linted) on the desktop, where it is empty.
 crate-type = ["cdylib", "lib"]
 
-[dependencies]
-games = { path = "../games" }
+[target.'cfg(target_os = "android")'.dependencies]
 gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features = false, features = [
     "window",
     "render",
@@ -26,8 +26,8 @@ gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features =
     # in; the bundled Noto Sans keeps Turkish letters drawn either way.
     "bundled-font",
 ] }
-
-[target.'cfg(target_os = "android")'.dependencies]
+# The game itself: only `android_main` names it, and that exists only on Android.
+games = { path = "../games" }
 # The engine logs through `tracing`; with no subscriber, its `log` feature forwards every event to
 # `log`, and `android_logger` writes those to logcat (`adb logcat -s gizmo`).
 tracing = { version = "0.1", features = ["log"] }

@@ -861,15 +861,6 @@ pub fn update_vehicle_with_query(
 // YARDIMCI FONKSİYONLAR
 // ============================================================
 
-/// Merkezi kuvvet (tork olmadan)
-#[allow(dead_code)]
-fn apply_force_central(rb: &RigidBody, vel: &mut Velocity, force: Vec3, dt: f32) {
-    if rb.is_static() {
-        return;
-    }
-    vel.linear += force * rb.inv_mass() * dt;
-}
-
 /// Applies a force at a point, which produces a torque.
 fn apply_force_at_point(
     rb: &RigidBody,

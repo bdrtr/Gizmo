@@ -2,6 +2,7 @@
 name = "gizmo-physics-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 # Own description/keywords rather than the workspace's: this crate is publishable on its own
 # merits — with `default-features = false` it is a dependency-light collision and geometry

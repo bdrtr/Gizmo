@@ -22,25 +22,20 @@ pub(crate) fn cap_web_render_size(
     size
 }
 
-/// The web's render budget, in pixels: what a 640 × 360 frame costs. (Each target's reduced path
-/// reads one of the two budgets, so the other is dead there; both are read by the tests.)
-#[allow(dead_code)]
+/// The web's render budget, in pixels: what a 640 × 360 frame costs.
 pub(crate) const WEB_RENDER_PIXELS: u32 = 640 * 360;
 
 /// An Android app's render budget: what a 1280 × 720 frame costs, four times the web's. The
 /// browser's budget is set by what a page can spend beside everything else a browser does; an app
 /// has the GPU to itself, and at the web's 640 × 360 an upright phone (1080 × 2400) showed a frame
 /// of 328 × 701 stretched 3.3 times — soft edges and blurred text.
-#[allow(dead_code)]
 pub(crate) const ANDROID_RENDER_PIXELS: u32 = 1280 * 720;
 
-/// The budget this target's reduced path renders at.
-#[cfg(target_os = "android")]
+/// The budget this target's reduced path renders at. Chosen with `cfg!` rather than two `#[cfg]`
+/// items, so both budgets are named on every target and neither needs a dead-code allowance.
 #[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
-const FORWARD_ONLY_RENDER_PIXELS: u32 = ANDROID_RENDER_PIXELS;
-#[cfg(not(target_os = "android"))]
-#[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
-const FORWARD_ONLY_RENDER_PIXELS: u32 = WEB_RENDER_PIXELS;
+const FORWARD_ONLY_RENDER_PIXELS: u32 =
+    if cfg!(target_os = "android") { ANDROID_RENDER_PIXELS } else { WEB_RENDER_PIXELS };
 
 /// `size` scaled down, aspect kept, until it has at most `budget` pixels.
 ///

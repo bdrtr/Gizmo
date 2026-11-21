@@ -1575,12 +1575,8 @@ dependencies = [
 name = "cradle"
 version = "0.11.0"
 dependencies = [
- "gizmo-core",
  "gizmo-engine",
- "gizmo-math",
  "mimalloc",
- "pollster 1.0.1",
- "winit",
 ]
 
 [[package]]
@@ -1775,7 +1771,6 @@ dependencies = [
  "gizmo-studio",
  "image",
  "mimalloc",
- "pollster 1.0.1",
  "rand 0.10.2",
  "serde",
  "tracing",
@@ -2625,10 +2620,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "wasi",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2776,10 +2769,8 @@ dependencies = [
  "gizmo-scripting",
  "icu_locale_core",
  "icu_plurals",
- "icu_provider",
  "image",
  "jni 0.21.1",
- "js-sys",
  "log",
  "pollster 1.0.1",
  "rfd",
@@ -2827,7 +2818,6 @@ dependencies = [
  "subsecond",
  "tracing",
  "tracing-subscriber",
- "uuid",
  "web-time",
 ]
 
@@ -2844,7 +2834,6 @@ dependencies = [
  "gizmo-physics-core",
  "gizmo-physics-rigid",
  "gizmo-renderer",
- "gizmo-scene",
  "gizmo-scripting",
  "pollster 1.0.1",
  "rfd",
@@ -2900,7 +2889,6 @@ dependencies = [
  "bevy_mesh",
  "bevy_picking",
  "criterion",
- "getrandom 0.2.17",
  "glam",
  "rand 0.10.2",
  "serde",
@@ -2954,7 +2942,6 @@ version = "0.11.0"
 dependencies = [
  "bevy_reflect",
  "criterion",
- "crossbeam-queue",
  "getrandom 0.4.3",
  "gizmo-core",
  "gizmo-math",
@@ -2967,7 +2954,6 @@ dependencies = [
  "serde_json",
  "tracing",
  "web-time",
- "wide",
 ]
 
 [[package]]
@@ -2980,7 +2966,6 @@ dependencies = [
  "gizmo-physics-core",
  "gizmo-physics-rigid",
  "naga",
- "pollster 1.0.1",
  "proptest",
  "rayon",
  "serde",
@@ -3023,7 +3008,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "web-time",
  "wgpu",
  "winit",
 ]
@@ -3067,7 +3051,6 @@ dependencies = [
  "image",
  "mimalloc",
  "pollster 1.0.1",
- "rand 0.10.2",
  "serde",
  "serde_json",
  "tracing",
@@ -5718,15 +5701,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "safe_arch"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42c6efa15875e6ecb39ca61fb0b0c1a40b84fac5a5ffe71eef7d1000c8eb3f5f"
-dependencies = [
- "bytemuck",
-]
-
-[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5829,10 +5803,7 @@ name = "server"
 version = "0.11.0"
 dependencies = [
  "gizmo-core",
- "gizmo-math",
  "gizmo-net",
- "gizmo-physics-core",
- "gizmo-physics-rigid",
  "renet",
 ]
 
@@ -7263,16 +7234,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f3ef584124b911bcc3875c2f1472e80f24361ceb789bd1c62b3e9a3df9ff43c"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "wide"
-version = "1.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d920ac99c3c8edce110cb8d07dbb324d6d026011dce85b1e9355b70f0adacc4f"
-dependencies = [
- "bytemuck",
- "safe_arch",
 ]
 
 [[package]]

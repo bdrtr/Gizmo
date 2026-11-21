@@ -46,7 +46,7 @@ pub mod error;
 /// WGPU compute-shader path for stepping [`soft_body::SoftBodyMesh`] on the GPU.
 ///
 /// Only compiled when the `gpu_physics` feature is enabled; that feature also pulls in
-/// `wgpu`, `bytemuck` and `pollster`. The CPU path in [`soft_body`] remains available and
+/// `wgpu` and `bytemuck`. The CPU path in [`soft_body`] remains available and
 /// is what the [`system`] drivers use.
 #[cfg(feature = "gpu_physics")]
 pub mod gpu_compute;

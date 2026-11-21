@@ -6,9 +6,9 @@
 //! name was ever reported and the whole binary (and with it the workspace run) went down.
 //! Nineteen tests, spread over **seven** test modules in six files, each requested their own
 //! wgpu adapter and device, and `cargo test` runs a binary's tests in parallel. The module
-//! count is worth stating precisely: `gpu_fluid::fluid_tests` is pure CPU and stays out, but
-//! `gpu_fluid::system::gpu_dispatch_tests` is a DIFFERENT module in the same subtree and is
-//! GPU — it was nearly missed for exactly that reason.
+//! count is worth stating precisely: `gpu_fluid` also held a pure-CPU test module then (deleted
+//! 2026-11-21), and `gpu_fluid::system::gpu_dispatch_tests`, a DIFFERENT module in the same
+//! subtree, is GPU — it was nearly missed for exactly that reason.
 //!
 //! Measured on this machine (16 cores, so the default is 16 test threads):
 //!
@@ -38,8 +38,8 @@
 //!
 //! # Scope
 //!
-//! `gpu_fluid::fluid_tests` deliberately does NOT take the lock: those ~20 tests are pure CPU
-//! math and never touch a device, so serialising them would cost wall-clock for nothing.
+//! A test that never touches a device does not take the lock: serialising it would cost
+//! wall-clock for nothing.
 
 /// Serialises every test in this crate that owns a wgpu device.
 ///

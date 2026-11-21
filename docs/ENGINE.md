@@ -1915,7 +1915,9 @@ its precision, and a section that silently rewrites itself cannot be checked.
   and `crossbeam-queue` in `gizmo-physics-rigid`, and `uuid` in `gizmo-core` (declared twice) and
   `getrandom` in `gizmo-math`, have **zero** source references — dead dependencies, not leaks, but
   they should be dropped in a separate build-graph pass. (Re-confirmed for `gizmo-physics-rigid`
-  on 2026-08-09 during the rustc-hash seal.)
+  on 2026-08-09 during the rustc-hash seal.) **Dropped 2026-11-21** — all but `dashmap`, which had
+  already gone — when cargo 1.100's `unused_dependencies` lint and rustc's
+  `unused_crate_dependencies` were run over the workspace; see the CHANGELOG's Removed.
 
 - **`gizmo-physics-rigid` swept for the other two shapes of criterion 2, 2026-08-09** — the two
   the audit demonstrably nearly missed, done while the rustc-hash seal was open. **Nothing found.**
@@ -3153,7 +3155,9 @@ the *slope* gate is the one that guards it.
   wants the type without the physics vocabulary.
 - **The prototype's four egui-0.34 limits** (left-aligned button labels, Lucide icons, a 2 px
   separator between sections, an offset focus ring). Not defects, toolkit limits — recorded in
-  code as `gizmo_editor::theme::UNIMPLEMENTED_SYSTEM_RULES` so they are not rediscovered as bugs.
+  the `gizmo_editor::theme` module docs so they are not rediscovered as bugs. (Until 2026-11-21
+  they were the doc comment of a `pub const UNIMPLEMENTED_SYSTEM_RULES: () = ()`, a public item
+  with no value that existed only to carry the text.)
 
 ## 8. Working Method
 

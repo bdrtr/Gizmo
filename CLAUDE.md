@@ -31,9 +31,10 @@ cargo test --workspace --no-fail-fast   # ALWAYS --no-fail-fast — see below
 # a machine-wide flock on its first GPU test (`hold_machine_gpu_lock`, in every `gpu_lock`) — the
 # driver does not survive several live devices, see `gizmo-renderer/src/test_gpu.rs`. That GPU
 # chain (`gizmo` lib + `studio_render_pixels` + `gizmo-renderer` lib) is now the floor.
-# Tests that assert on WALL-CLOCK time (`EXCLUSIVE` in the script) are skipped in the pool and run
-# alone afterwards: next to three other binaries on a loaded desktop, `test_performance_10k_particles`
-# took 30–54 s against a 30 s ceiling, and 6 s alone (measured 2026-11-01).
+# Do not add a test that asserts on WALL-CLOCK time: in the pool it measures its neighbours.
+# The one that did (`test_performance_10k_particles`: 6 s alone, 30–54 s next to three other
+# binaries, against a 30 s ceiling) ran a CPU SPH that existed only in its own test module, and
+# was deleted with it on 2026-11-21. That retired the script's run-alone list.
 # CI still runs plain `cargo test`; this is the local gate.
 scripts/test-parallel.py                         # = cargo test --workspace --no-fail-fast
 scripts/test-parallel.py -p gizmo-net --features client-server,rollback
@@ -206,7 +207,7 @@ gizmo-math ─┬─ gizmo-core ─┬─ gizmo-physics-{core,rigid,dynamics,sof
             │              ├─ gizmo-{scene,net,ai}       (over physics-{core,rigid})
             │              ├─ gizmo-renderer             (over gizmo-animation)
             │              ├─ gizmo-scripting            (over ai + animation + physics-rigid)
-            │              └─ gizmo-editor               (over renderer + scene + scripting + ai)
+            │              └─ gizmo-editor               (over renderer + scripting + ai)
             └── gizmo-app (over renderer/editor/scene/scripting/audio/net/physics)
                   ├─ gizmo-ui, gizmo-analysis
                   └─ gizmo (facade, published as `gizmo-engine`) ─ demo / cradle / studio

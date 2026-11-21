@@ -3,6 +3,7 @@ publish = false
 name = "demo"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 default-run = "3d_scene"
 
@@ -12,7 +13,6 @@ games = { path = "../games" }
 # `dunya_studio`: a game opened in the editor on itself (`gizmo_studio::run`).
 gizmo-studio = { path = "../crates/gizmo-studio" }
 mimalloc = { workspace = true }
-pollster = "1.0"
 rand = "0.10.1"
 winit = { workspace = true }
 bytemuck = "1.14"

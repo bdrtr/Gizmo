@@ -27,6 +27,22 @@
 //!   design, not the design, and inventing them from a mockup would be guessing at behaviour.
 //! - **Per-widget accent placement** (a primary button, a hot tab). The palette below is `pub` so
 //!   the editor's own UI code can reach for it; this module only sets what egui applies globally.
+//!
+//! And what the design system asks for that egui cannot express (checked against egui 0.34):
+//!
+//! - **Flush-left button labels** ("even inside buttons", says the system's guide). `egui::Button`
+//!   centres its content and exposes no alignment: the `align2` setter lives on the private
+//!   `AtomLayout` field. Matching it means a custom button widget, which is a real piece of work
+//!   and not a theme setting.
+//! - **Lucide icons throughout.** egui's bundled font has none of them — the prototype's ✥/⟳/⤢ and
+//!   the editor's old 🖐/🔀/🔄/📏 all render as empty boxes. Short words are used instead; real
+//!   icons mean vendoring a font file.
+//! - **2 px rules between major sections.** `Separator` draws with
+//!   `widgets.noninteractive.bg_stroke`, which is also every widget's outline — raising it to 2 px
+//!   would thicken the 1 px borders the prototype uses everywhere else.
+//! - **`:focus-visible` as a 2 px accent outline with a 2 px offset.** egui has no separate focus
+//!   stroke; a focused widget is drawn with `selection.stroke`, which this theme already sets to
+//!   the accent, but without the offset.
 
 use egui::{CornerRadius, Stroke};
 
@@ -102,24 +118,6 @@ pub const SPACE_2: f32 = 8.0;
 pub const SPACE_3: f32 = 12.0;
 /// See [`SPACE_1`].
 pub const SPACE_4: f32 = 16.0;
-
-/// What the design system asks for that egui 0.34 cannot express, recorded so it is not
-/// rediscovered as a bug.
-///
-/// - **Flush-left button labels** ("even inside buttons", says the system's guide). `egui::Button`
-///   centres its content and exposes no alignment: the `align2` setter lives on the private
-///   `AtomLayout` field. Matching it means a custom button widget, which is a real piece of work
-///   and not a theme setting.
-/// - **Lucide icons throughout.** egui's bundled font has none of them — the prototype's ✥/⟳/⤢ and
-///   the editor's old 🖐/🔀/🔄/📏 all render as empty boxes. Short words are used instead; real
-///   icons mean vendoring a font file.
-/// - **2 px rules between major sections.** `Separator` draws with
-///   `widgets.noninteractive.bg_stroke`, which is also every widget's outline — raising it to 2 px
-///   would thicken the 1 px borders the prototype uses everywhere else.
-/// - **`:focus-visible` as a 2 px accent outline with a 2 px offset.** egui has no separate focus
-///   stroke; a focused widget is drawn with `selection.stroke`, which this theme already sets to
-///   the accent, but without the offset.
-pub const UNIMPLEMENTED_SYSTEM_RULES: () = ();
 
 /// Applies the design to an egui context.
 ///

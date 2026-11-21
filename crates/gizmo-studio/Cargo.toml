@@ -2,6 +2,7 @@
 name = "gizmo-studio"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 authors.workspace = true
@@ -19,11 +20,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 # behind gizmo-core's default-off subscriber feature (see its manifest). Without it the editor
 # console would only show `gizmo_log!` records, not `tracing` events.
 gizmo = { package = "gizmo-engine", path = "../gizmo", features = ["editor", "scene", "audio", "scripting", "tracing-layer"] , version = "0.11.0" }
-# NOT the workspace version. This got caught twice by a blanket version bump whose "is this a
-# gizmo crate?" check matched the FILENAME (which contains "gizmo") instead of the dependency
-# name, so every line in every gizmo-*/Cargo.toml looked like ours. 0.9.0 -> 0.9.1 was harmless;
-# 0.9.1 -> 0.10.0 silently asked for a rand major that removed `random_range`.
-rand = "0.10.1"
 mimalloc = { workspace = true }
 tracing = "0.1.44"
 

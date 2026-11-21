@@ -143,7 +143,7 @@ mod tests {
         ] {
             assert!(AssetManager::rebuilds_mesh(key), "{key} is built again and was not recognised");
         }
-        for key in ["extrusion_6", "sweep_4_12", "editor_grid", "gizmo_arrow", "terrain:hm.png", "sphere_0.5_20", "sphere_x_1_1", "sphere_1_0_8", "cylinder_1_2_nan"] {
+        for key in ["extrusion_6", "sweep_4_12", "editor_grid", "terrain:hm.png", "sphere_0.5_20", "sphere_x_1_1", "sphere_1_0_8", "cylinder_1_2_nan"] {
             assert!(!AssetManager::rebuilds_mesh(key), "{key} is not a key anything builds from");
         }
     }

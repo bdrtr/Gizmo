@@ -2,6 +2,7 @@
 name = "gizmo-app"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 description.workspace = true
 license.workspace = true
@@ -15,7 +16,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 [dependencies]
 icu_plurals = "2"
 icu_locale_core = "2"
-icu_provider = { version = "2", features = ["sync"] }
 gizmo-core = { path = "../gizmo-core" , version = "0.11.0" }
 gizmo-math = { path = "../gizmo-math" , version = "0.11.0" }
 # The animation clock (`gizmo_animation::system::advance_animation`): tweens and keyed players,
@@ -42,7 +42,6 @@ gizmo-scene = { path = "../gizmo-scene" , version = "0.11.0", optional = true }
 gizmo-net = { path = "../gizmo-net", version = "0.11.0", optional = true, default-features = false }
 winit = { version = "0.30", optional = true }
 wgpu = { version = "30", features = ["fragile-send-sync-non-atomic-wasm", "webgl"], optional = true }
-pollster = { version = "1.0", optional = true }
 egui = { version = "0.36", optional = true }
 egui-winit = { version = "0.36", default-features = false, features = ["links"], optional = true }
 egui-wgpu = { version = "0.36", optional = true }
@@ -52,11 +51,9 @@ image = { version = "0.25", optional = true }
 default = ["window", "render", "audio", "physics", "scene", "editor", "network", "gamepad"]
 headless = ["physics", "network"]
 network = ["dep:gizmo-net", "gizmo-net/rollback"]
-window = ["dep:winit", "dep:jni"]
+window = ["dep:winit", "dep:jni", "dep:backtrace", "dep:rfd"]
 render = ["dep:wgpu", "dep:gizmo-renderer", "dep:pollster", "dep:image", "window"]
 audio = ["dep:gizmo-audio"]
-# Navigation components in the scene format. Nothing else in this crate uses `gizmo-ai`.
-ai = ["dep:gizmo-ai"]
 physics = ["dep:gizmo-physics-core", "dep:gizmo-physics-rigid", "dep:gizmo-physics-dynamics"]
 # `egui` is the immediate-mode overlay UI layer (the egui runtime + `set_ui`
 # hook + dev console). It does NOT pull in the editor crate, so a game can use
@@ -66,7 +63,10 @@ egui = ["dep:egui", "dep:egui-winit", "dep:egui-wgpu", "render"]
 # management, scene save/load). It is layered on top of `egui`, and needs
 # `scene` for its save/load request handling.
 editor = ["egui", "scene", "dep:gizmo-editor"]
-scene = ["dep:gizmo-scene", "dep:gizmo-scripting"]
+# `gizmo-ai` with it: its `NavAgent` and `BehaviorTree` are scene components, and registering them is
+# all this crate does with it. (They were a separate `ai` feature until 2026-11-21, which meant
+# nothing without `scene` and which the facade always turned on.)
+scene = ["dep:gizmo-scene", "dep:gizmo-scripting", "dep:gizmo-ai"]
 # Physical game controllers, through gilrs — on every target, including the browser.
 #
 # It WAS target-gated off wasm32, on the grounds that "browsers expose gamepads through a
@@ -85,11 +85,14 @@ gamepad = ["dep:gilrs"]
 hotpatching = ["gizmo-core/hotpatching", "dep:dioxus-devtools"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Blocks on the renderer's async set-up; the browser awaits it instead (`render` enables it).
+pollster = { version = "1.0", optional = true }
 # Where `SaveData` keeps a game's save on the desktop.
 dirs = "6.0.0"
 # The `hotpatching` feature's connection to the Dioxus CLI. The 0.7 line, as gizmo-core's subsecond.
 dioxus-devtools = { version = "0.7.10", optional = true, default-features = false }
-backtrace = "0.3.76"
+# The panic hook's backtrace; it is installed with a window (`window` enables it).
+backtrace = { version = "0.3.76", optional = true }
 # Default features on purpose: gilrs's default is `wgi` (Windows.Gaming.Input), and with BOTH
 # `wgi` and `xinput` off its platform module raises a `compile_error!` — one that is not gated on
 # Windows, so `default-features = false` breaks the build on every OS.
@@ -102,10 +105,10 @@ gilrs = { version = "0.11.2", optional = true }
 # feature is a no-op on wasm32.
 gizmo-scripting = { path = "../gizmo-scripting" , version = "0.11.0", optional = true }
 
-# The panic dialog. A desktop has a native message box; Android has none rfd can show (it does not
-# build there at all), and a phone app's crash goes to logcat instead.
+# The panic dialog, with a window (`window` enables it). A desktop has a native message box; Android
+# has none rfd can show (it does not build there at all), and a phone app's crash goes to logcat.
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
-rfd = "0.17.2"
+rfd = { version = "0.17.2", optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Android: the window is a `NativeActivity`, and winit can only build its event loop there with the
@@ -127,7 +130,6 @@ gilrs = { version = "0.11.2", optional = true }
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
 console_log = "1.0"
-js-sys = "0.3"
 log = "0.4"
 tracing-wasm = "0.2"
 wasm-bindgen-futures = "0.4"

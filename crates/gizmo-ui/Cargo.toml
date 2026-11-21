@@ -2,6 +2,7 @@
 name = "gizmo-ui"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 # Deliberately NOT `description.workspace = true`. The workspace description
 # ("A custom ECS and physics engine...") would let a crates.io visitor assume

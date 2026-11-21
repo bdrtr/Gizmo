@@ -286,10 +286,6 @@ fn noop(mut report: ResMut<AbsentReport>) {
     let _ = &mut *report;
 }
 
-/// `World`'ün bu demoda kullanılan yüzeyi tek yerde dursun diye.
-#[allow(dead_code)]
-fn _world_surface_note(_: &World) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

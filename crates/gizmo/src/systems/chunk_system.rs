@@ -1,4 +1,4 @@
-use crate::core::World;
+use crate::core::{Entity, World};
 use gizmo_math::Vec3;
 use std::collections::{HashMap, HashSet};
 
@@ -11,20 +11,14 @@ pub const CHUNK_LOAD_RADIUS: i32 = 2; // Oyuncunun etrafındaki 5x5'lik grid yü
 /// A chunk's grid coordinate, `(x, z)`. Chunk `(0, 0)` is the one containing the world origin.
 pub type ChunkCoord = (i32, i32);
 
-/// Component that holds which Entity belongs to which Chunk
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ChunkEntity {
-    /// The chunk this entity belongs to; unloading that chunk despawns it.
-    pub coord: ChunkCoord,
-}
-
 /// System Resource that manages all map loading/deletion operations
 #[derive(Debug, Clone)]
 pub struct ChunkManager {
     /// Coordinates of the Chunks loaded in RAM at that moment
     pub active_chunks: HashSet<ChunkCoord>,
-    /// Which Entities are in which Chunk (we will use this for deleting)
-    pub chunk_entities: HashMap<ChunkCoord, Vec<u64>>,
+    /// The entities each loaded chunk owns, as [`register_entity`](Self::register_entity) recorded
+    /// them: handed to the unload callback when the chunk goes.
+    pub chunk_entities: HashMap<ChunkCoord, Vec<Entity>>,
     /// The player's position in the previous frame (Only to do work when the Chunk changes)
     pub last_player_chunk: ChunkCoord,
 }
@@ -57,12 +51,10 @@ impl ChunkManager {
         )
     }
 
-    /// Registers an Entity into the Chunk system when it is created
-    pub fn register_entity(&mut self, coord: ChunkCoord, entity_id: u64) {
-        self.chunk_entities
-            .entry(coord)
-            .or_default()
-            .push(entity_id);
+    /// Records that chunk `coord` owns `entity`: the unload callback gets it back when the chunk
+    /// goes.
+    pub fn register_entity(&mut self, coord: ChunkCoord, entity: Entity) {
+        self.chunk_entities.entry(coord).or_default().push(entity);
     }
 }
 
@@ -97,7 +89,7 @@ pub fn open_world_chunk_system<F, U>(
     mut unload_callback: U,
 ) where
     F: FnMut(&mut World, ChunkCoord),
-    U: FnMut(&mut World, ChunkCoord, Vec<u64>),
+    U: FnMut(&mut World, ChunkCoord, Vec<Entity>),
 {
     // ChunkManager resource'unu al (Yoksa oluştur)
     if world.get_resource::<ChunkManager>().is_none() {
@@ -305,11 +297,12 @@ mod tests {
     #[test]
     fn register_entity_creates_then_appends_preserving_order() {
         let mut m = ChunkManager::default();
-        m.register_entity((0, 0), 10);
-        m.register_entity((0, 0), 20);
-        m.register_entity((1, 1), 30);
-        assert_eq!(m.chunk_entities[&(0, 0)], vec![10, 20]);
-        assert_eq!(m.chunk_entities[&(1, 1)], vec![30]);
+        let [a, b, c] = [10, 20, 30].map(|id| Entity::new(id, 0));
+        m.register_entity((0, 0), a);
+        m.register_entity((0, 0), b);
+        m.register_entity((1, 1), c);
+        assert_eq!(m.chunk_entities[&(0, 0)], vec![a, b]);
+        assert_eq!(m.chunk_entities[&(1, 1)], vec![c]);
         assert_eq!(m.chunk_entities.len(), 2);
     }
 

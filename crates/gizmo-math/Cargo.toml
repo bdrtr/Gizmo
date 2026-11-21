@@ -2,6 +2,7 @@
 name = "gizmo-math"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 description.workspace = true
 license.workspace = true
@@ -15,7 +16,6 @@ readme.workspace = true
 # production tree for no public-API benefit. It remains a dev-dependency below
 # purely as a comparison baseline for the benches (dev-deps do not propagate to
 # downstream consumers).
-getrandom = { version = "0.2", features = ["js"] }
 glam = { version = "0.32", features = ["serde", "bytemuck", "rand"] }
 serde = { version = "1.0.228", features = ["derive"] }
 

@@ -2,6 +2,7 @@
 name = "gizmo-renderer"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 authors.workspace = true
 description.workspace = true
@@ -23,7 +24,6 @@ wgpu = { version = "30", features = ["fragile-send-sync-non-atomic-wasm", "webgl
 naga_oil = "0.23"
 naga = { version = "30", features = ["wgsl-in", "wgsl-out"] }
 log = "0.4"
-pollster = "1.0"
 winit = { workspace = true }
 bytemuck = { version = "1.14", features = ["derive"] }
 gizmo-math = { path = "../gizmo-math" , version = "0.11.0" }
@@ -103,4 +103,3 @@ web-sys = { version = "0.3", features = ["Window", "Response"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 uuid = { version = "1.23.0", features = ["v4", "serde", "js"] }
-web-time = "1"

@@ -3,6 +3,7 @@ name = "demo-android-satranc"
 description = "satranc as an Android app: chess against the engine's own search, in an APK (see demo-android/README.md)."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -11,8 +12,7 @@ publish = false
 [lib]
 crate-type = ["cdylib", "lib"]
 
-[dependencies]
-games = { path = "../games" }
+[target.'cfg(target_os = "android")'.dependencies]
 gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features = false, features = [
     "window",
     "render",
@@ -22,8 +22,8 @@ gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features =
     "audio",
     "bundled-font",
 ] }
-
-[target.'cfg(target_os = "android")'.dependencies]
+# The game itself: only `android_main` names it, and that exists only on Android.
+games = { path = "../games" }
 tracing = { version = "0.1", features = ["log"] }
 log = "0.4"
 android_logger = "0.14"

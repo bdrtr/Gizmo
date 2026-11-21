@@ -93,7 +93,7 @@ pub(crate) fn native_render_defs() -> HashMap<String, ShaderDefValue> {
 ///
 /// Not cfg-gated to wasm: `core_shaders_compile` composes the web-path shaders under these
 /// defs on native too, so the web variant's validity is verified without a browser.
-#[allow(dead_code)] // used on wasm (load_shader_composed_web) and by the native validation test
+#[cfg_attr(not(any(gizmo_forward_only, test)), allow(dead_code))] // the reduced path's, and the tests'
 pub(crate) fn web_render_defs() -> HashMap<String, ShaderDefValue> {
     HashMap::from([
         ("SKELETON_GROUP".to_string(), ShaderDefValue::UInt(2)),

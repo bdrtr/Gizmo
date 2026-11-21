@@ -2,6 +2,7 @@
 name = "gizmo-analysis"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 description = "Deep observability / analysis module for the Gizmo engine — per-frame metrics, ECS introspection, statistics and trace export so that the smallest detail of a running engine is analyzable."
 license.workspace = true

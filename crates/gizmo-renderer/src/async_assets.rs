@@ -6,7 +6,7 @@ use crate::asset::error::AssetError;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::asset::{decode_obj_vertices_for_async, decode_rgba_image_file};
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -145,8 +145,9 @@ struct LoaderShared {
 pub struct AsyncAssetLoader {
     shared: Arc<Mutex<LoaderShared>>,
     _worker: Option<thread::JoinHandle<()>>,
-    #[allow(dead_code)]
-    result_tx: Sender<WorkerMsg>,
+    /// The web's fetches send their results through this; on native the worker owns the sender.
+    #[cfg(target_arch = "wasm32")]
+    result_tx: mpsc::Sender<WorkerMsg>,
 }
 
 impl AsyncAssetLoader {
@@ -158,7 +159,7 @@ impl AsyncAssetLoader {
         #[cfg(not(target_arch = "wasm32"))]
         let worker_job_rx = job_rx;
         #[cfg(not(target_arch = "wasm32"))]
-        let worker_result_tx = result_tx.clone();
+        let worker_result_tx = result_tx;
         #[cfg(not(target_arch = "wasm32"))]
         let _worker = Some(
             thread::Builder::new()
@@ -218,6 +219,7 @@ impl AsyncAssetLoader {
                 gltf_inflight: HashSet::new(),
             })),
             _worker,
+            #[cfg(target_arch = "wasm32")]
             result_tx,
         }
     }

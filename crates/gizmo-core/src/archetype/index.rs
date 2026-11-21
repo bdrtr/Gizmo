@@ -60,22 +60,6 @@ impl ArchetypeIndex {
         self.entity_archetype.insert(entity.id(), 0);
     }
 
-    /// Component addition — move the entity to the new archetype
-    /// NOTE: The data move is performed by the World, this method only tracks the structural transition.
-    #[allow(dead_code)]
-    pub(crate) fn get_or_create_archetype(&mut self, infos: &[ComponentInfo]) -> usize {
-        let mut new_types: Vec<ComponentKey> = infos.iter().map(|i| i.key).collect();
-        new_types.sort();
-        
-        if let Some(&id) = self.set_to_id.get(&new_types) {
-            id
-        } else {
-            let id = self.push_archetype(infos);
-            self.set_to_id.insert(new_types, id);
-            id
-        }
-    }
-
     pub(crate) fn get_add_component_target(
         &mut self,
         entity_id: u32,
@@ -165,17 +149,6 @@ impl ArchetypeIndex {
         Some(new_arch_id)
     }
 
-    /// Entity despawn — remove from the archetype
-    #[allow(dead_code)]
-    pub(crate) fn on_despawn(&mut self, entity_id: u32) {
-        if let Some(_arch_id) = self.entity_archetype.remove(&entity_id) {
-            // Satır bilgisini EntityLocation'dan alacağız, burada sadece remove edebiliriz
-            // Ama Archetype::detach_entity_row row bekler.
-            // World::despawn içinde location bilgisi olduğu için oradan çağırmak daha sağlıklı.
-            self.cache_dirty = true;
-        }
-    }
-
     /// Returns the indices of the archetypes satisfying the specified logical query filter.
     /// Used by the query system.
     pub(crate) fn matching_archetypes(
@@ -242,17 +215,9 @@ impl ArchetypeIndex {
     }
 
     /// Total archetype count
-    #[inline]
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn archetype_count(&self) -> usize {
         self.archetypes.len()
-    }
-
-    /// Returns the entity's current archetype index
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn entity_archetype_id(&self, entity_id: u32) -> Option<usize> {
-        self.entity_archetype.get(&entity_id).copied()
     }
 
     pub(crate) fn gc_empty_archetypes(&mut self, entity_locations: &mut [EntityLocation]) -> usize {

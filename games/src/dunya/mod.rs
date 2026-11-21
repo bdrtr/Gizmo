@@ -334,7 +334,7 @@ fn load_chunk(world: &mut World, coord: ChunkCoord, collected: &HashSet<(i32, i3
     canli::populate_chunk(world, coord, visual, &mut spawned);
     if let Some(mut manager) = world.get_resource_mut::<ChunkManager>() {
         for e in spawned {
-            manager.register_entity(coord, e.to_bits());
+            manager.register_entity(coord, e);
         }
     }
 }
@@ -359,9 +359,9 @@ fn spawn_tree(world: &mut World, at: Vec3, scale: f32, kind: f32, visual: bool) 
     tree
 }
 
-fn unload_chunk(world: &mut World, ids: Vec<u64>) {
-    for bits in ids {
-        if let Some(e) = world.live(Entity::from_bits(bits)) {
+fn unload_chunk(world: &mut World, entities: Vec<Entity>) {
+    for e in entities {
+        if world.is_alive(e) {
             world.despawn_recursive(e);
         }
     }

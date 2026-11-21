@@ -1,5 +1,3 @@
-#[cfg(test)]
-mod fluid_tests;
 /// The fluid solver's compute and render pipelines.
 pub mod pipeline;
 /// The solver itself: its buffers, its passes and its screen-space surface.

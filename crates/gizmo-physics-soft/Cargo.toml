@@ -2,6 +2,7 @@
 name = "gizmo-physics-soft"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 description = "Soft-body physics for the Gizmo engine: FEM tetrahedral meshes, XPBD cloth and ropes. Usable without an ECS."
 keywords = ["physics", "soft-body", "cloth", "fem", "xpbd"]
@@ -31,7 +32,7 @@ ecs = ["dep:gizmo-core", "gizmo-physics-core/ecs"]
 # argument. Turn the feature off (or `default-features = false`) to get the standalone
 # soft-body crate back, dependency-for-dependency.
 rigid-coupling = ["ecs", "dep:gizmo-physics-rigid"]
-gpu_physics = ["wgpu", "bytemuck", "pollster"]
+gpu_physics = ["wgpu", "bytemuck"]
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
@@ -46,7 +47,6 @@ gizmo-physics-core = { path = "../gizmo-physics-core", version = "0.11.0", defau
 gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.11.0", default-features = false, features = ["ecs"], optional = true }
 wgpu = { version = "30", optional = true }
 bytemuck = { version = "1.14", features = ["derive"], optional = true }
-pollster = { version = "1.0", optional = true }
 tracing = "0.1.44"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

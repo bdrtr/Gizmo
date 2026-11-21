@@ -326,7 +326,6 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
 
             // --- CHUNK ZEMİNİ ---
             let ground = get_pooled_entity(w);
-            let ground_id = ground.to_bits();
             let ground_scale = Vec3::new(50.0, 1.0, 50.0);
             w.add_component(
                 ground,
@@ -350,7 +349,7 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
             w.add_component(ground, Velocity::default());
             w.get_resource_mut::<gizmo::systems::chunk_system::ChunkManager>()
                 .unwrap()
-                .register_entity(coord, ground_id);
+                .register_entity(coord, ground);
 
             // Her chunk'a 5 ağaç dikelim
             for _ in 0..5 {
@@ -362,7 +361,6 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
                 }
 
                 let tree = get_pooled_entity(w);
-                let tree_id = tree.to_bits();
                 let tree_scale = Vec3::new(2.0, 5.0, 2.0);
                 w.add_component(
                     tree,
@@ -382,7 +380,7 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
                 w.add_component(tree, Velocity::default());
                 w.get_resource_mut::<gizmo::systems::chunk_system::ChunkManager>()
                     .unwrap()
-                    .register_entity(coord, tree_id);
+                    .register_entity(coord, tree);
 
                 let lod_group = LodGroup::new(vec![
                     LodLevel::new(assets.0.clone(), 30.0),
@@ -394,8 +392,7 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
         // --- UNLOAD CHUNK (Object Pooling) ---
         |w, _coord, entities| {
             w.resource_scope(|w, pool: &mut gizmo::core::PoolManager| {
-                for entity_bits in &entities {
-                    let e = gizmo::core::Entity::from_bits(*entity_bits);
+                for e in entities {
                     pool.destroy(w, "chunk_obj", e);
                 }
             });

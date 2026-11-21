@@ -234,7 +234,6 @@ pub fn blend_poses(
 /// matrix silently decomposes into the nearest unsheared one. Negative determinants (mirrored
 /// transforms) are likewise not represented: the lengths are unsigned, so a mirror comes back
 /// as a rotation.
-#[allow(dead_code)]
 pub fn decompose_mat4(m: Mat4) -> (Vec3, Quat, Vec3) {
     let t = Vec3::new(m.w_axis.x, m.w_axis.y, m.w_axis.z);
     let sx = Vec3::new(m.x_axis.x, m.x_axis.y, m.x_axis.z).length().max(1e-6);

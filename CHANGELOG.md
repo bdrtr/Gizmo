@@ -439,6 +439,41 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Every crate declares the MSRV.** `[workspace.package]` said `rust-version = "1.96"` and the `msrv` CI job
+  builds on it, but no crate inherited it, so crates.io showed none and a dependent's MSRV-aware resolver saw
+  none. All workspace members now carry `rust-version.workspace = true`, and `gizmo-engine` the workspace's
+  keywords and categories. Cargo 1.100 says so itself: it warns about a `workspace.package` field no member
+  uses, which is how this was found.
+
+- **The chunk streamer hands out entities, not their bits.** `ChunkManager::register_entity` took an `u64`
+  and the unload callback got a `Vec<u64>`, so every caller wrote `e.to_bits()` going in and
+  `Entity::from_bits` coming out. **Breaking:** `register_entity(coord, entity: Entity)`,
+  `chunk_entities: HashMap<ChunkCoord, Vec<Entity>>`, and the unload callback takes `Vec<Entity>`.
+
+- **`PhysicsMetrics::print_hud` is `PhysicsMetrics::log_debug`.** It drew nothing and printed nothing: it
+  emits one `tracing` event at debug level, which its own doc had to explain. **Breaking** for the name.
+
+- **The fluid shaders' struct sizes are checked at compile time** (`gpu_fluid::types`), on every target. They
+  were four unit tests, which said nothing on a target that does not run tests.
+
+- **Host-only dependencies sit in the target tables that use them.** `demo-android` (and its two siblings)
+  name `gizmo` and `games` only in `android_main`, and `demo-web` names `gizmo`, `games` and `log` only in its
+  wasm entry point. They were plain `[dependencies]`, so a desktop build compiled the engine and every game
+  for a crate that is empty there. `gizmo-editor`'s `rfd` likewise moves to its native table: every file
+  dialog is native-only. Cargo 1.100's `unused_dependencies` lint found them. `gizmo-app`'s `pollster` moves to its native
+  table too: only the desktop blocks on the renderer's set-up.
+
+- **Feature sets that linked a crate and never used it.** The feature-powerset gate, run with cargo 1.100,
+  showed four:
+  - `gizmo-app`'s `backtrace` and `rfd` were unconditional, but only the panic hook installed with a window
+    uses them. `window` now enables both.
+  - `gizmo-app`'s `ai` feature registered `NavAgent` and `BehaviorTree` with the scene format and did
+    nothing else, so without `scene` it linked `gizmo-ai` for nothing. The facade always turned it on. It is
+    part of `scene` now, which also means a `scene` build without `ai` no longer drops those two components
+    on save. **Breaking:** `gizmo-app`'s `ai` feature is gone.
+  - The facade's `physics-dynamics` and `physics-soft` did not turn on `physics`, while everything they feed
+    (`gizmo::physics`, the scene registration, the vehicle step) is behind it. They imply it now.
+
 - **`SceneState` holds the forward pipelines as one `CorePipelines` (`SceneState::core`), and the renderer is
   put together from its parts without copying them field by field.**
   - The 23 forward pipelines `build_core_pipelines` makes were copied into as many `SceneState` fields twice:
@@ -613,6 +648,45 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   builds a `SurfaceInput` sets `base_layer`; `CustomMaterial::from_wgsl` names both sizes when the struct is
   short. A shader-graph `Texture` node reads the base colour through `base_colour`, so it follows a pooled
   material's layer.
+
+### Removed
+
+What nothing called, found by cargo 1.100's lints, by deleting every unconditional `#[allow(dead_code)]` and
+asking the compiler, and by reading the list of public items the workspace never names.
+
+- **`gpu_fluid::fluid_tests`: a CPU SPH solver that only its own tests used,** and 38 tests of it. It was a
+  port of a C++ reference (`fluid_system.h`, `test_fluid_physics.cpp`) that the GPU solver never was compared
+  with, so its tests checked the port against itself. One of them, `test_performance_10k_particles`, ran the
+  O(n²) solver on 10,000 particles: 6 s alone and 30–54 s on a loaded machine, against a 30 s ceiling. It was
+  why `scripts/test-parallel.py` had a list of tests to run alone, which goes with it. The four tests that
+  checked the GPU structs' sizes are compile-time assertions now (see Changed).
+- **Unused dependencies:** `getrandom` 0.2 from `gizmo-math` (nothing else in the graph uses 0.2), `wide`
+  (and with it `safe_arch`) and `crossbeam-queue` from `gizmo-physics-rigid`, `pollster` from `gizmo-physics-soft` (the
+  `gpu_physics` feature enabled it and nothing called it; the implicit `pollster` feature goes too),
+  `gizmo-scene` from `gizmo-editor`, `pollster` from `gizmo-renderer`'s normal dependencies (only its tests
+  call it, and it was a dev-dependency as well), and `uuid` from `gizmo-core`, which never named it (on wasm it also
+  turned on `uuid`'s `js` feature, which `gizmo-renderer`, the one crate that makes v4 ids, asks for itself).
+  Also `rand` from `gizmo-studio`; `icu_provider` from `gizmo-app` (it turned on `sync`, which nothing needs:
+  `plural_form` builds its `PluralRules` per call and keeps none), and on wasm its `js-sys`; `web-time` from
+  `gizmo-renderer`'s wasm table; and from the hosts, `pollster` from `demo`, the three physics/math crates
+  from `server`, and `gizmo-core`, `gizmo-math`, `pollster` and `winit` from `cradle`, none of them named in
+  the package's sources.
+- **Finding them.** Cargo's lint does not report a dependency that is also in the graph through another
+  one (it can be there to pin a version or turn on a feature), and it only speaks when rustc actually runs:
+  an unused dependency added to a crate cargo has already built leaves the crate fresh and says nothing.
+  So the list above also came from reading each member's normal dependencies against its sources, and
+  every removal was checked by building native, the wasm builds CI makes, and the Android target's
+  manifests by hand. What stays without a source reference is there for a feature, and says so:
+  `getrandom`'s `wasm_js` lines and the Android hosts' `tracing` with `log`.
+- **`ChunkEntity`,** a component nothing attached or read. Its doc said unloading the chunk despawns the
+  entity, but the streamer only ever knew a chunk's entities from `ChunkManager::register_entity`.
+- **`AssetManager::create_gizmo_arrow`,** a translate-gizmo arrow mesh nothing drew: the editor's gizmos come
+  from `transform-gizmo-egui`.
+- **`gizmo_editor::theme::UNIMPLEMENTED_SYSTEM_RULES: () = ()`,** a public constant with no value that existed
+  to carry a doc comment. The four egui limits it listed are in the `theme` module docs.
+- Private and crate-private: `ArchetypeIndex::{get_or_create_archetype, on_despawn, entity_archetype_id}`
+  (despawn and the add/remove transitions update the index themselves), the vehicle's `apply_force_central`,
+  and `AsyncAssetLoader`'s result sender on native, where the worker owns it.
 
 ### Fixed
 

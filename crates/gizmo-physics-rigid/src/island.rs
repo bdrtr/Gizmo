@@ -268,9 +268,10 @@ pub struct PhysicsMetrics {
 impl PhysicsMetrics {
     /// Emit the whole set as a single `tracing` event at debug level.
     ///
-    /// Despite the name nothing is drawn and nothing is printed to stdout — the line only
-    /// materialises if a subscriber is installed and enables debug for this crate.
-    pub fn print_hud(&self) {
+    /// Nothing is drawn or printed to stdout: the line only appears if a subscriber is installed
+    /// and enables debug for this crate. (It was `print_hud` until 2026-11-21, a name that
+    /// promised both.)
+    pub fn log_debug(&self) {
         tracing::debug!(
             island_count = self.island_count,
             sleeping_count = self.sleeping_count,

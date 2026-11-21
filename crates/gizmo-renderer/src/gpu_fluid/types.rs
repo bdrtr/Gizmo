@@ -247,3 +247,13 @@ impl FluidSettings {
 /// The collider buffer's fixed capacity. [`FluidParams::num_colliders`] says how much of it is
 /// live.
 pub const MAX_FLUID_COLLIDERS: usize = 256;
+
+// The sizes the fluid shaders' structs have, checked where the build sees them: a Rust struct that
+// drifts from its WGSL twin is read as garbage on the GPU, and a test would only say so on the
+// targets that run tests.
+const _: () = {
+    assert!(std::mem::size_of::<FluidParticle>() == 64, "FluidParticle is 64 bytes in the shaders");
+    assert!(std::mem::size_of::<FluidParams>().is_multiple_of(16), "FluidParams is a uniform: 16-byte rows");
+    assert!(std::mem::size_of::<FluidCollider>() == 48, "FluidCollider is 48 bytes in the shaders");
+    assert!(std::mem::size_of::<ParticleHash>() == 8, "ParticleHash is 8 bytes in the shaders");
+};

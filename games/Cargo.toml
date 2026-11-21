@@ -3,6 +3,7 @@ name = "games"
 description = "Games shared by the desktop demos (demo/) and the browser build (demo-web/): one game, two hosts."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
