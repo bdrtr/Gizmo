@@ -59,6 +59,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     filtered down a chain of its own to a sixteenth (`fs_flare_extract`, then the bloom's down pass).
   - Eight ghosts with Unreal's `LensFlareTints` defaults, and a halo whose red and blue spread apart along its
     radius, are copies of that chain's last level (`fs_lens_flare`). The composite adds them with the bloom.
+  - That level is read through a cubic B-spline: four bilinear taps weighted as its sixteen texels are. The
+    flare is drawn at four times its size, and a bilinear tap magnified that much left the texels' squares and
+    diamonds in every ghost; the spline leaves round ones.
   - `intensity`, `threshold`, `halo` and `chromatic`. None by default (intensity 0); the forward-only path has
     none.
   - `the_lens_flare_ghosts_a_light_through_the_middle_and_is_black_while_off` (in `gizmo-renderer`): a square's

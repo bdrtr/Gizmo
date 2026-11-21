@@ -295,9 +295,31 @@ fn fs_flare_extract(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(sum * 0.25, 1.0);
 }
 
-// The flare's soft source (`t_source`, the last level of its chain) at `uv`.
+// The flare's soft source (`t_source`, the last level of its chain, a sixteenth of the frame) at `uv`,
+// through a cubic B-spline: four bilinear taps weighted as the spline's sixteen texels are (Sigg and
+// Hadwiger, GPU Gems 2, ch. 20). The flare is drawn at four times the source's size, and a bilinear tap
+// magnified that much leaves its texels' squares and diamonds in every ghost; the spline leaves a round one.
 fn flare_bright(uv: vec2<f32>) -> vec3<f32> {
-    return textureSampleLevel(t_source, s_source, uv, 0.0).rgb;
+    let size = vec2<f32>(textureDimensions(t_source));
+    let p = uv * size - 0.5;
+    let i = floor(p);
+    let f = p - i;
+    let w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+    let w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
+    let w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
+    let w3 = f * f * f / 6.0;
+    let g0 = w0 + w1;
+    let g1 = w2 + w3;
+    // Where each pair of texels' bilinear tap falls, in texels, and then in UV.
+    let x0 = (i - 1.0 + w1 / g0 + 0.5) / size;
+    let x1 = (i + 1.0 + w3 / g1 + 0.5) / size;
+    return g0.y * (g0.x * flare_tap(vec2<f32>(x0.x, x0.y)) + g1.x * flare_tap(vec2<f32>(x1.x, x0.y)))
+        + g1.y * (g0.x * flare_tap(vec2<f32>(x0.x, x1.y)) + g1.x * flare_tap(vec2<f32>(x1.x, x1.y)));
+}
+
+// One bilinear tap of the flare's source.
+fn flare_tap(at: vec2<f32>) -> vec3<f32> {
+    return textureSampleLevel(t_source, s_source, at, 0.0).rgb;
 }
 
 // How much a ghost sampled at `p` counts: all of it in the middle of the frame, nothing at its edges — no
