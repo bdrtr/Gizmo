@@ -690,6 +690,18 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A headless app rolls back.** A `RollbackManager` was serviced by the windowed loop alone: it
+  rewound and re-simulated a mispredicted tick there (`service_rollback`), and recorded every fixed
+  step through a hook it handed `frame::run_fixed_and_update`. The headless runtime and
+  `gizmo::simple::HeadlessFrames` (what every game's `--test` plays on) passed `|_| {}`, so a
+  headless app with a `RollbackManager` (a dedicated host, a bot, a test harness) never rolled back
+  and never recorded a tick, and `gizmo-app`'s `network` feature linked `gizmo-net` there for
+  nothing, which the feature-powerset gate showed. Both are done by `run_fixed_and_update` now,
+  which every runtime's frame goes through. **Breaking:** its `after_each_fixed_step` parameter is
+  gone; nothing else used it. Covered by `a_misprediction_is_rolled_back_and_resimulated_by_the_frame`
+  (removing the call leaves 0 ticks re-simulated where 5 are due) and
+  `every_fixed_step_is_recorded_for_rollback_and_only_those`.
+
 - **Particles far from the world's origin reach the frame.** The GPU simulations' level of detail measured a
   camera's distance from fixed points near the world's origin: the particles' from (0, 0, 0), the fluid's from
   (0, 5, 0). A camera 200 m from the origin drew no particle at all, wherever the particles were, so a city a few

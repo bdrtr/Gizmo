@@ -106,23 +106,29 @@ pub fn advance_time(world: &mut World, raw_dt: f32) -> f32 {
 /// `frame_dt` is the raw wall-clock frame delta handed to the update schedule, so cameras
 /// and UI keep moving smoothly even while the simulation is paused.
 ///
-/// `after_each_fixed_step` runs inside the loop after every fixed step, before the
-/// accumulator is consumed. The windowed runtime uses it to snapshot rollback state; tests
-/// and headless callers can pass `|_| {}`.
+/// With the `network` feature, a world holding a `RollbackManager` (`gizmo_net::rollback`) is
+/// rolled back here first when a remote input says it mispredicted, and every fixed step is
+/// recorded for the next rollback. Every runtime's frame comes through this function, which is why
+/// it is done here: until 2026-11-22 only the windowed loop did either, so a headless app with a
+/// `RollbackManager` never rolled back and never recorded a tick.
 ///
 /// Inserts a default [`PhysicsTime`] if the world has none, so a caller that never
 /// configured one still gets a working fixed step.
-pub fn run_fixed_and_update<F>(
+pub fn run_fixed_and_update(
     world: &mut World,
     fixed_schedule: &mut Schedule,
     update_schedule: &mut Schedule,
     sim_dt: f32,
     frame_dt: f32,
-    mut after_each_fixed_step: F,
-) -> FrameSteps
-where
-    F: FnMut(&mut World),
-{
+) -> FrameSteps {
+    if world.get_resource::<PhysicsTime>().is_none() {
+        world.insert_resource(PhysicsTime::default());
+    }
+    // A mispredicted tick is rewound and re-simulated up to the present before anything of this
+    // frame runs, where the windowed loop did it before this function took it over.
+    #[cfg(feature = "network")]
+    service_rollback(world, fixed_schedule);
+
     // The event queues first: what last frame sent becomes readable, for this whole frame — every
     // registered queue, once (`World::update_events`). Here, because every runtime's frame comes
     // through this function and nothing else rotates them.
@@ -132,10 +138,6 @@ where
     // steps and update alike — sees the one state. Nothing happens in a world without one.
     gizmo_core::state::run_state_drivers(world);
     gizmo_core::system::run_startup_systems(world);
-
-    if world.get_resource::<PhysicsTime>().is_none() {
-        world.insert_resource(PhysicsTime::default());
-    }
 
     let fixed_dt = {
         let mut pt = world
@@ -162,7 +164,11 @@ where
         if let Some(mut gizmos) = world.get_resource_mut::<gizmo_renderer::Gizmos>() {
             gizmos.end_fixed_step();
         }
-        after_each_fixed_step(world);
+        // The step, as the next rollback will rewind to it.
+        #[cfg(feature = "network")]
+        if let Some(mut rollback) = world.get_resource_mut::<gizmo_net::rollback::RollbackManager>() {
+            rollback.end_frame(world);
+        }
 
         world
             .get_resource_mut::<PhysicsTime>()
@@ -206,6 +212,73 @@ where
         fixed_steps,
         fixed_dt,
         alpha,
+    }
+}
+
+/// Rewind to a mispredicted tick and silently re-simulate up to the present.
+///
+/// `begin_frame` restores both halves of the snapshot (the ECS components and the physics
+/// world — see `gizmo_net`), then this catches up tick by tick on the fixed schedule, recording
+/// each re-simulated frame so a second rollback into the same window still has something to
+/// rewind to. The windowed loop's own method until 2026-11-22.
+#[cfg(feature = "network")]
+fn service_rollback(world: &mut World, fixed_schedule: &mut Schedule) {
+    let mut rollback_needed = false;
+    let mut rm = world.remove_resource::<gizmo_net::rollback::RollbackManager>();
+
+    if let Some(ref mut manager) = rm {
+        rollback_needed = manager.begin_frame(world);
+    }
+
+    if rollback_needed {
+        let target_tick = rm.as_ref().unwrap().latest_tick;
+
+        // The `clear_bodies()` that used to be here is gone. It threw
+        // the physics world away so `sync_bodies` would rebuild it
+        // from the ECS — a resync that made sense while the ECS was
+        // the only thing being restored. `begin_frame` now restores
+        // the physics world itself (joints, accumulator, contact
+        // cache), and clearing it afterwards would discard exactly
+        // that.
+
+        let fixed_dt = world
+            .get_resource::<gizmo_core::time::PhysicsTime>()
+            .map(|pt| pt.fixed_dt())
+            .unwrap_or(1.0 / 60.0);
+
+        let mut catchup_steps = 0u32;
+        loop {
+            let curr = rm.as_ref().unwrap().current_tick;
+            if curr >= target_tick {
+                break;
+            }
+
+            // Simüle et (Geçmişten Günümüze Fast-Forward)
+            // Dikkat: rm World'de olmadığı için içeride rollback.rs çalışmayabilir.
+            // Ama physics_step_system RollbackManager'i kullanmıyor!
+            fixed_schedule.run(world, fixed_dt);
+
+            // Yeni geçmiş karesini hafızaya al. `record_resimulated_tick`
+            // captures BOTH halves — this loop used to inline the wire
+            // half only, which is how the physics snapshot came to be
+            // missing from the catch-up path as well as the rewind.
+            if let Some(ref mut manager) = rm {
+                manager.record_resimulated_tick(world);
+            }
+            catchup_steps += 1;
+        }
+        if catchup_steps > 0 {
+            tracing::debug!(
+                catchup_steps,
+                target_tick,
+                "[frame] rollback fast-forward re-simulated ticks"
+            );
+        }
+    }
+
+    // Tekrar yerine koy
+    if let Some(manager) = rm {
+        world.insert_resource(manager);
     }
 }
 
@@ -253,8 +326,8 @@ mod tests {
         gizmo_core::system::add_startup_system(&mut world, grow);
         let (mut fixed, mut updates) = (Schedule::new(), Schedule::new());
         updates.add_di_system(update);
-        run_fixed_and_update(&mut world, &mut fixed, &mut updates, 0.0, 0.016, |_| {});
-        run_fixed_and_update(&mut world, &mut fixed, &mut updates, 0.0, 0.016, |_| {});
+        run_fixed_and_update(&mut world, &mut fixed, &mut updates, 0.0, 0.016);
+        run_fixed_and_update(&mut world, &mut fixed, &mut updates, 0.0, 0.016);
         assert_eq!(world.get_resource::<Log>().unwrap().0, ["enter", "startup", "update", "update"]);
     }
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -314,7 +387,6 @@ mod tests {
                 &mut self.update,
                 dt,
                 dt,
-                |_| {},
             )
         }
     }
@@ -413,7 +485,6 @@ mod tests {
             &mut h.update,
             0.0,        // sim_dt — paused
             1.0 / 60.0, // frame_dt — wall clock keeps going
-            |_| {},
         );
         assert_eq!(steps.fixed_steps, 0);
         assert_eq!(h.fixed_runs.load(Ordering::Relaxed), 0);
@@ -424,67 +495,68 @@ mod tests {
         );
     }
 
-    /// The per-step hook is what carries rollback snapshotting, so it must fire once per
-    /// fixed step — not once per frame, and not at all when no step ran.
+    /// Every fixed step is recorded for the next rollback: once per step, not once per frame, and
+    /// not at all on a frame in which the simulation did not advance. This was a test of the
+    /// per-step hook the windowed loop recorded through, until the frame did it itself.
     ///
     /// Asserted against the reported step count rather than a literal, deliberately: at
     /// 60 Hz the fixed step is not representable in binary, so a `sim_dt` of exactly
     /// `3.0 / 60.0` yields 2.9999994 steps' worth and the loop runs twice. Hard-coding
     /// "3" here would be testing f32 rounding, not the contract.
+    #[cfg(feature = "network")]
     #[test]
-    fn the_per_step_hook_fires_once_per_fixed_step() {
+    fn every_fixed_step_is_recorded_for_rollback_and_only_those() {
+        use gizmo_net::rollback::RollbackManager;
         let mut h = Harness::new(60);
-        let hook_calls = Arc::new(AtomicU32::new(0));
-        let hc = hook_calls.clone();
+        h.world.insert_resource(RollbackManager::new(60));
 
-        let steps = run_fixed_and_update(
-            &mut h.world,
-            &mut h.fixed,
-            &mut h.update,
-            3.5 / 60.0,
-            3.5 / 60.0,
-            move |_| {
-                hc.fetch_add(1, Ordering::Relaxed);
-            },
-        );
+        let steps = h.frame(3.5 / 60.0);
         assert!(steps.fixed_steps >= 3, "expected several steps, got {}", steps.fixed_steps);
+        let recorded = h.world.get_resource::<RollbackManager>().unwrap().current_tick;
+        assert_eq!(recorded, u64::from(steps.fixed_steps), "one record per fixed step");
+        assert_eq!(h.fixed_runs.load(Ordering::Relaxed), steps.fixed_steps, "and the fixed schedule agrees");
+
+        let steps = h.frame(1.0 / 600.0);
+        assert_eq!(steps.fixed_steps, 0);
         assert_eq!(
-            hook_calls.load(Ordering::Relaxed),
-            steps.fixed_steps,
-            "the hook must fire exactly as many times as the fixed schedule ran"
+            h.world.get_resource::<RollbackManager>().unwrap().current_tick,
+            recorded,
+            "a frame that did not step records nothing"
         );
-        assert_eq!(
-            h.fixed_runs.load(Ordering::Relaxed),
-            steps.fixed_steps,
-            "and the fixed schedule's own run count must agree"
-        );
+        assert_eq!(h.update_runs.load(Ordering::Relaxed), 2, "but update still ran");
     }
 
-    /// No fixed step means no hook call — rollback must not snapshot a frame in which the
-    /// simulation did not advance.
+    /// A misprediction is rolled back by the shared frame, so by every runtime: the world goes
+    /// back to the tick after the mispredicted one and the fixed schedule re-simulates up to the
+    /// present before the frame's own steps. Until 2026-11-22 only the windowed loop did this, and
+    /// a headless app with a `RollbackManager` (a dedicated host, a bot, a test) kept its
+    /// mispredicted past.
+    #[cfg(feature = "network")]
     #[test]
-    fn the_per_step_hook_does_not_fire_on_a_frame_with_no_step() {
+    fn a_misprediction_is_rolled_back_and_resimulated_by_the_frame() {
+        use gizmo_net::rollback::RollbackManager;
         let mut h = Harness::new(60);
-        let hook_calls = Arc::new(AtomicU32::new(0));
-        let hc = hook_calls.clone();
+        h.world.insert_resource(RollbackManager::new(60));
+        while h.world.get_resource::<RollbackManager>().unwrap().latest_tick < 10 {
+            h.frame(1.0 / 60.0);
+        }
+        let latest = h.world.get_resource::<RollbackManager>().unwrap().latest_tick;
+        let runs_before = h.fixed_runs.load(Ordering::Relaxed);
 
-        let steps = run_fixed_and_update(
-            &mut h.world,
-            &mut h.fixed,
-            &mut h.update,
-            1.0 / 600.0,
-            1.0 / 600.0,
-            move |_| {
-                hc.fetch_add(1, Ordering::Relaxed);
-            },
-        );
-        assert_eq!(steps.fixed_steps, 0);
-        assert_eq!(hook_calls.load(Ordering::Relaxed), 0);
+        const MISPREDICTED: u64 = 4;
+        h.world.get_resource_mut::<RollbackManager>().unwrap().rollback_target_tick = Some(MISPREDICTED);
+        let steps = h.frame(0.0);
+
+        assert_eq!(steps.fixed_steps, 0, "the frame itself had no time to step");
+        let resimulated = h.fixed_runs.load(Ordering::Relaxed) - runs_before;
         assert_eq!(
-            h.update_runs.load(Ordering::Relaxed),
-            1,
-            "but update still ran"
+            u64::from(resimulated),
+            latest - (MISPREDICTED + 1),
+            "re-simulated from the tick after the mispredicted one up to the present"
         );
+        let rollback = h.world.get_resource::<RollbackManager>().unwrap();
+        assert_eq!(rollback.current_tick, latest, "back at the present");
+        assert_eq!(rollback.rollback_target_tick, None, "and the rollback is done");
     }
 
     /// A world that never configured `PhysicsTime` still gets a working fixed step rather
@@ -496,7 +568,7 @@ mod tests {
 
         let mut fixed = Schedule::new();
         let mut update = Schedule::new();
-        let steps = run_fixed_and_update(&mut world, &mut fixed, &mut update, 1.0, 1.0, |_| {});
+        let steps = run_fixed_and_update(&mut world, &mut fixed, &mut update, 1.0, 1.0);
 
         assert!(world.get_resource::<PhysicsTime>().is_some());
         assert!(
@@ -653,9 +725,9 @@ mod tests {
         });
         let mut fixed = Schedule::new();
 
-        run_fixed_and_update(&mut world, &mut fixed, &mut update, 0.001, 0.001, |_| {});
+        run_fixed_and_update(&mut world, &mut fixed, &mut update, 0.001, 0.001);
         world.get_resource_mut::<gizmo_core::state::State<Mode>>().unwrap().set(Mode::Play);
-        run_fixed_and_update(&mut world, &mut fixed, &mut update, 0.001, 0.001, |_| {});
+        run_fixed_and_update(&mut world, &mut fixed, &mut update, 0.001, 0.001);
 
         assert_eq!(*seen.lock().unwrap(), [(Mode::Menu, 0), (Mode::Play, 1)]);
     }
@@ -678,14 +750,14 @@ mod tests {
         world.insert_resource(audio);
         let (mut fixed, mut update) = (Schedule::new(), Schedule::new());
         for _ in 0..12 {
-            run_fixed_and_update(&mut world, &mut fixed, &mut update, 1.0 / 60.0, 1.0 / 60.0, |_| {});
+            run_fixed_and_update(&mut world, &mut fixed, &mut update, 1.0 / 60.0, 1.0 / 60.0);
         }
         assert_eq!(world.get_resource::<AudioManager>().unwrap().mixer().fade_of(id), 0.0, "the fade ran");
         // `stop` is a request to rodio's thread; poll for it with a ceiling, as the audio
         // crate's own stop test does.
         let mut stopped = false;
         for _ in 0..100 {
-            run_fixed_and_update(&mut world, &mut fixed, &mut update, 0.0, 0.0, |_| {});
+            run_fixed_and_update(&mut world, &mut fixed, &mut update, 0.0, 0.0);
             if !world.get_resource::<AudioManager>().unwrap().is_playing(id) {
                 stopped = true;
                 break;
@@ -717,7 +789,7 @@ mod tests {
         let step = 1.0 / 60.0;
         // One step, then none, then two.
         for (dt, steps) in [(step * 1.01, 1), (step * 0.3, 0), (step * 1.9, 2)] {
-            let ran = run_fixed_and_update(&mut world, &mut fixed, &mut update, dt, dt, |_| {});
+            let ran = run_fixed_and_update(&mut world, &mut fixed, &mut update, dt, dt);
             assert_eq!(ran.fixed_steps, steps);
             let mut g = world.get_resource_mut::<Gizmos>().unwrap();
             // What the frame's preparation does before the draw: the draw gets this frame's lines

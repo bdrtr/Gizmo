@@ -322,7 +322,7 @@ mod tests {
 
     /// **The catch-up after a rollback must not out-step the straight run.**
     ///
-    /// The host loop (`gizmo_app`'s `service_rollback`) takes `latest_tick - current_tick` steps,
+    /// The host loop (`gizmo_app::frame`'s `service_rollback`) takes `latest_tick - current_tick` steps,
     /// and whether that count is right depends entirely on where `begin_frame` leaves the counter.
     /// It used to leave it one behind the state it had restored, so rewinding a 30-tick world to
     /// tick 24 produced a 31-step world — a divergence that never comes back, and that compounds

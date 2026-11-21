@@ -276,7 +276,6 @@ impl<State: 'static> App<State> {
                 &mut self.update_schedule,
                 sim_dt,
                 dt,
-                |_| {},
             );
 
             // One frame ended, once — the boundary belongs to the loop that owns the frame, not

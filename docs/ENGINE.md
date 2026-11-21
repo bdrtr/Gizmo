@@ -2604,7 +2604,8 @@ after an add, where a queue of edits is true for none of them.
   the other side: a claim is not a measurement, including a claim made by whoever is doing the
   measuring.)*
 - **Rollback re-simulation still applies LIVE input** — re-measured this session and confirmed.
-  `gizmo_app::windowed::event::service_rollback` calls `self.schedule.run(...)` once per tick in
+  `gizmo_app::frame::service_rollback` (the windowed loop's own method until 2026-11-22, when
+  `run_fixed_and_update` took it over for every runtime) runs the fixed schedule once per tick in
   its catch-up loop and never applies the `PlayerInput` stored for that tick in
   `RollbackManager::input_buffers`; the only place that reads those buffers is the prediction
   comparison. So the re-simulation sees the input of the frame it is *in*, not the input of the

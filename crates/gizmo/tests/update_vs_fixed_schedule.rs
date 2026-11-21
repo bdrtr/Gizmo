@@ -212,7 +212,7 @@ fn update_systems_observe_the_world_after_the_frame_s_fixed_steps() {
     });
 
     // A frame long enough for several fixed steps.
-    run_fixed_and_update(&mut world, &mut fixed, &mut update, 3.5 / 60.0, 3.5 / 60.0, |_| {});
+    run_fixed_and_update(&mut world, &mut fixed, &mut update, 3.5 / 60.0, 3.5 / 60.0);
 
     let seq = order.lock().unwrap().clone();
     let steps = fixed_count.load(Ordering::Relaxed) as usize;

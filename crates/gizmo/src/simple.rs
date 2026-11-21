@@ -955,7 +955,7 @@ impl HeadlessFrames {
         // that read it (`UiPlugin`'s do, and stop the frame without it), and the clock.
         self.world.insert_resource(self.input.clone());
         let sim_dt = crate::app::frame::advance_time(&mut self.world, dt);
-        crate::app::frame::run_fixed_and_update(&mut self.world, &mut self.schedule, &mut self.update_schedule, sim_dt, dt, |_| {});
+        crate::app::frame::run_fixed_and_update(&mut self.world, &mut self.schedule, &mut self.update_schedule, sim_dt, dt);
         update(&mut self.world, &mut self.state, dt, &self.input);
         self.world.apply_commands();
         // What the draw path advances once a frame and game logic waits on: tweens, typewriters,

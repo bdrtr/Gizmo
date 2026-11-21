@@ -8,75 +8,6 @@ use super::pipeline::DrawReport;
 static SURFACE_FAIL_STREAK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 impl<State: 'static> App<State> {
-    /// Rewind to a mispredicted tick and silently re-simulate up to the present.
-    ///
-    /// Sixty lines at depth nine in the middle of the frame, and the only part of the loop that
-    /// runs the schedule more than once. `begin_frame` restores both halves of the snapshot (the
-    /// ECS components and the physics world — see `gizmo_net`), then this catches up tick by tick,
-    /// recording each re-simulated frame so a second rollback into the same window still has
-    /// something to rewind to.
-    #[cfg(feature = "network")]
-    fn service_rollback(&mut self) {
-        let mut rollback_needed = false;
-        let mut rm = self.world.remove_resource::<gizmo_net::rollback::RollbackManager>();
-        
-        if let Some(ref mut manager) = rm {
-            rollback_needed = manager.begin_frame(&mut self.world);
-        }
-        
-        if rollback_needed {
-            let target_tick = rm.as_ref().unwrap().latest_tick;
-
-            // The `clear_bodies()` that used to be here is gone. It threw
-            // the physics world away so `sync_bodies` would rebuild it
-            // from the ECS — a resync that made sense while the ECS was
-            // the only thing being restored. `begin_frame` now restores
-            // the physics world itself (joints, accumulator, contact
-            // cache), and clearing it afterwards would discard exactly
-            // that.
-            
-            let fixed_dt = self
-                .world
-                .get_resource::<gizmo_core::time::PhysicsTime>()
-                .map(|pt| pt.fixed_dt())
-                .unwrap_or(1.0 / 60.0);
-
-            let mut catchup_steps = 0u32;
-            loop {
-                let curr = rm.as_ref().unwrap().current_tick;
-                if curr >= target_tick {
-                    break;
-                }
-
-                // Simüle et (Geçmişten Günümüze Fast-Forward)
-                // Dikkat: rm World'de olmadığı için içeride rollback.rs çalışmayabilir.
-                // Ama physics_step_system RollbackManager'i kullanmıyor!
-                self.schedule.run(&mut self.world, fixed_dt);
-
-                // Yeni geçmiş karesini hafızaya al. `record_resimulated_tick`
-                // captures BOTH halves — this loop used to inline the wire
-                // half only, which is how the physics snapshot came to be
-                // missing from the catch-up path as well as the rewind.
-                if let Some(ref mut manager) = rm {
-                    manager.record_resimulated_tick(&self.world);
-                }
-                catchup_steps += 1;
-            }
-            if catchup_steps > 0 {
-                tracing::debug!(
-                    catchup_steps,
-                    target_tick,
-                    "[frame] rollback fast-forward re-simulated ticks"
-                );
-            }
-        }
-
-        // Tekrar yerine koy
-        if let Some(manager) = rm {
-            self.world.insert_resource(manager);
-        }
-    }
-
     /// Which engine key codes one winit key event stands for.
     ///
     /// The physical key is the answer whenever winit has one — `PhysicalKey::Code(k) => k as u32`
@@ -540,21 +471,6 @@ impl<State: 'static> App<State> {
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                 profiler.begin_scope("physics");
                             }
-                            // `PhysicsTime` is ensured and fed by `frame::run_fixed_and_update`
-                            // below; it is created here only so the rollback block that follows
-                            // can read `fixed_dt` before the first frame has stepped.
-                            if self
-                                .world
-                                .get_resource::<gizmo_core::time::PhysicsTime>()
-                                .is_none()
-                            {
-                                self.world
-                                    .insert_resource(gizmo_core::time::PhysicsTime::default());
-                            }
-
-                            #[cfg(feature = "network")]
-                            self.service_rollback();
-
                             // Fixed-timestep simulation, then the once-per-frame update.
                             //
                             // The accumulator drains into `self.schedule` at a constant dt
@@ -574,14 +490,6 @@ impl<State: 'static> App<State> {
                                 &mut self.update_schedule,
                                 sim_dt,
                                 dt,
-                                |_world| {
-                                    #[cfg(feature = "network")]
-                                    if let Some(mut rm) = _world
-                                        .get_resource_mut::<gizmo_net::rollback::RollbackManager>()
-                                    {
-                                        rm.end_frame(_world);
-                                    }
-                                },
                             );
                             let _ = steps;
 
