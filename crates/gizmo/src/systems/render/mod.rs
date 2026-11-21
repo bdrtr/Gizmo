@@ -5232,7 +5232,7 @@ mod golden_render_tests {
     }
 
     /// **A solid baked-lit wall keeps the G-buffer from what stands behind it; a cut-out does not.** The
-    /// z-prepass lays a solid baked-lit surface's depth (`SceneState::baked_lit_depth_pipelines`), so the
+    /// z-prepass lays a solid baked-lit surface's depth (`CorePipelines::baked_lit_depth`), so the
     /// forward pass shades only what is in front of it, and the G-buffer pass, which follows the prepass,
     /// writes nothing such a wall hides. A lit box stands behind two baked walls side by side in depth: a
     /// solid one over its upper half and, over its lower half, one its vertex alpha cuts away whole. The

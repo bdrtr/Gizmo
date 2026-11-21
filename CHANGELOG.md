@@ -439,6 +439,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`SceneState` holds the forward pipelines as one `CorePipelines` (`SceneState::core`), and the renderer is
+  put together from its parts without copying them field by field.**
+  - The 23 forward pipelines `build_core_pipelines` makes were copied into as many `SceneState` fields twice:
+    once building the state, once on every rebuild (a shader reload, a change in the forward path's lights).
+  - `renderer/construction.rs` then copied the whole `SceneState`, and the whole `PostProcessState`, into new
+    ones field by field. That was over a hundred lines that were the values themselves, and a new field had
+    to be added in three places.
+  - Now the state holds `CorePipelines` whole, a rebuild assigns it, and construction moves the two states.
+  - **Breaking:** `scene.render_pipeline` is `scene.core.render`, `scene.sky_pipeline` is `scene.core.sky`, and
+    so for all 23 (the `_pipeline`/`_pipelines` suffix dropped, `lit_lobes` → `core.lobes`). `CorePipelines`
+    is public, `crate::pipeline::CorePipelines`, its fields documented as the state's were.
+
 - **The sun's shadow array is cleared in one pass, where the device can.** Each cascade's pass cleared its
   own layer, which is a clear of part of the texture. A driver need not fast-clear that: Mesa's RADV does not,
   and wrote every texel of the four layers instead.

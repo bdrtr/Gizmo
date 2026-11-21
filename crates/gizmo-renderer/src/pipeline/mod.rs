@@ -17,6 +17,7 @@ pub use shaders::{load_shader_composed_web, load_shader_composed_web_with};
 
 use layouts::{build_layouts, LayoutRefs};
 use pipelines::{build_core_pipelines, build_shadow_pipelines};
+pub use pipelines::CorePipelines;
 pub(crate) use pipelines::{forward_pipeline, lit_set, shadow_pipeline};
 use uniforms::{build_global_uniforms, build_shadow_resources};
 
@@ -26,67 +27,26 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 /// Every lit pipeline a draw on one tier can need, from one shader: what
-/// [`SceneState::lit_lobes`] holds on the forward-only path (the top tier of
+/// [`CorePipelines::lobes`] holds on the forward-only path (the top tier of
 /// [`SceneState::lit_pipeline`]), and what a game's surface is drawn forward with
 /// ([`SurfaceMaterial`](crate::custom_material::SurfaceMaterial)).
 pub struct LitSet {
-    /// As [`SceneState::render_pipeline`].
+    /// As [`CorePipelines::render`].
     pub render: wgpu::RenderPipeline,
-    /// As [`SceneState::render_double_sided_pipeline`].
+    /// As [`CorePipelines::render_double_sided`].
     pub render_double_sided: wgpu::RenderPipeline,
-    /// As [`SceneState::transparent_pipeline`].
+    /// As [`CorePipelines::transparent`].
     pub transparent: wgpu::RenderPipeline,
-    /// As [`SceneState::blend_lit_pipelines`].
+    /// As [`CorePipelines::blend_lit`].
     pub blend: [wgpu::RenderPipeline; 3],
 }
 
 /// Sahne render durumu — pipeline'lar, shadow, skeleton ve global bind group'lar
 pub struct SceneState {
-    /// The main opaque PBR pipeline, back faces culled.
-    pub render_pipeline: wgpu::RenderPipeline,
-    /// The same, with culling off, for materials marked double-sided.
-    pub render_double_sided_pipeline: wgpu::RenderPipeline,
-    /// Albedo straight through, no lighting — see [`MaterialType::Unlit`](crate::components::MaterialType::Unlit).
-    /// Opaque: it does not blend (`pipelines::OPAQUE`).
-    pub unlit_pipeline: wgpu::RenderPipeline,
-    /// The same for a transparent unlit draw blending by alpha; the other blend modes have
-    /// [`blend_unlit_pipelines`](Self::blend_unlit_pipelines).
-    pub unlit_blended_pipeline: wgpu::RenderPipeline,
-    /// Baked lighting × texture, with the sun's cascade term. See `shaders/baked_lit.wgsl`.
-    pub baked_lit_pipeline: wgpu::RenderPipeline,
-    /// The same, culling nothing, for a double-sided baked-lit material (`Material::double_sided`). The
-    /// forward path drew every opaque baked-lit surface with the culling pipeline until 2026-11-19, so a
-    /// double-sided one lost its back faces there — and kept them through the G-buffer
-    /// (`DeferredState::gbuffer_baked_pipelines`), which had both.
-    pub baked_lit_double_sided_pipeline: wgpu::RenderPipeline,
-    /// A solid baked-lit surface's share of the z-prepass, culling back faces and nothing: its depth alone,
-    /// from the same vertex stage as its forward draw (`baked_lit.wgsl`'s position is `@invariant`), so
-    /// that the forward pass shades only what is in front of it.
-    pub baked_lit_depth_pipelines: [wgpu::RenderPipeline; 2],
-    /// The same shader with alpha blending and no depth write, for a `BakedLit` material
-    /// marked transparent — a decal or skid-mark layer, which the opaque variant would paint
-    /// over the road as solid geometry no matter what alpha the shader produced.
-    pub baked_lit_transparent_pipeline: wgpu::RenderPipeline,
-    /// The generated atmospheric sky — a gradient from the sun's direction and colour, ignoring
-    /// the mesh. Contrast [`backdrop_pipeline`](Self::backdrop_pipeline).
-    pub sky_pipeline: wgpu::RenderPipeline,
-    /// The scene's OWN painted sky/panorama geometry: `shaders/backdrop.wgsl`, no depth write,
-    /// camera-locked. Unlike `sky_pipeline` it draws the mesh's texture and vertex colour
-    /// instead of an invented gradient. See [`crate::backdrop`].
-    pub backdrop_pipeline: wgpu::RenderPipeline,
-    /// The animated water surface: `shaders/water.wgsl`, Gerstner displacement in the vertex
-    /// stage and a Fresnel sky term in the fragment stage. Forward-only — the G-buffer is filled
-    /// by a shader that does not displace, so a water surface routed through it would be shaded at
-    /// the flat plane's depth. Selected by [`Routing::is_water`](crate::routing::Routing::is_water).
-    pub water_pipeline: wgpu::RenderPipeline,
-    /// The same with culling off, for a water surface marked
-    /// [`double_sided`](crate::components::Material::with_double_sided) — looking up at the
-    /// underside of the ocean is the ordinary case, not the exotic one.
-    pub water_double_sided_pipeline: wgpu::RenderPipeline,
-    /// What a [`PlanarReflection`](crate::components::PlanarReflection) draws with once captured.
-    pub mirror_pipeline: wgpu::RenderPipeline,
-    /// Water with a [`PlanarReflection`](crate::components::PlanarReflection), once captured.
-    pub water_mirror_pipeline: wgpu::RenderPipeline,
+    /// The forward pipelines every surface kind is drawn with — lit, unlit, baked-lit, the sky, water,
+    /// mirrors, glass, the grid ([`CorePipelines`]). Rebuilt whole when a shader changes or the forward
+    /// path's lights change (`rebuild_scene_pipelines`).
+    pub core: CorePipelines,
     /// Depth-only, for rendering into the shadow cascades: a mesh that closes, by its front faces —
     /// what the light meets first (see `pipelines::build_shadow_pipelines`).
     pub shadow_pipeline: wgpu::RenderPipeline,
@@ -98,24 +58,10 @@ pub struct SceneState {
     /// crossfade — closed then open. Every shadow pipeline binds the same groups: the pass's light, the
     /// material, the skeleton and the instances.
     pub shadow_cut_out_pipelines: [wgpu::RenderPipeline; 2],
-    /// Line-topology, for wireframe views.
-    pub wireframe_pipeline: wgpu::RenderPipeline,
-    /// Alpha-blended, no depth write, for the transparent bucket.
-    pub transparent_pipeline: wgpu::RenderPipeline,
-    /// The editor's ground grid.
-    pub grid_pipeline: wgpu::RenderPipeline,
-    /// The lit transparent pipeline under each of `BlendMode::VARIANTS` — see
-    /// [`blend_variant`](Self::blend_variant).
-    pub blend_lit_pipelines: [wgpu::RenderPipeline; 3],
-    /// The unlit pipeline under each of them, not writing depth.
-    pub blend_unlit_pipelines: [wgpu::RenderPipeline; 3],
     /// The wireframe pipeline's group 5, one bind group per line colour asked for.
     pub wire_color_layout: wgpu::BindGroupLayout,
     /// Those bind groups, by colour. `None` is the one that says "no colour of its own".
     pub wire_colors: std::collections::HashMap<Option<[u8; 3]>, std::sync::Arc<wgpu::BindGroup>>,
-    /// The lit pipeline that also reads the frame behind it — see
-    /// [`transmissive_pipeline`](Self::transmissive_pipeline).
-    pub transmissive: [wgpu::RenderPipeline; 2],
     /// What group 0 offers as the frame behind glass until something draws glass: one black texel.
     pub behind_fallback: wgpu::TextureView,
     /// What group 0 offers now: that, or [`Renderer::behind`](crate::Renderer::behind)'s view.
@@ -142,21 +88,6 @@ pub struct SceneState {
     /// The kinds of local light the forward-only path's lit pipelines are built for
     /// ([`set_forward_lights`](Self::set_forward_lights)).
     pub(crate) forward_lights: LightShape,
-    /// [`unlit_pipeline`](Self::unlit_pipeline) with `KEEPS`, on the forward-only path, whose plain one
-    /// cannot discard: a cut-out, a LOD crossfade. `None` on the desktop path, whose unlit pipeline can.
-    pub unlit_keeps_pipeline: Option<wgpu::RenderPipeline>,
-    /// [`render_pipeline`](Self::render_pipeline) with `DETAILS`, on the forward-only path, whose
-    /// plain one leaves them out: a single-sided opaque draw that needs a cut-out, a LOD crossfade or
-    /// its own reflectance. `None` on the desktop path, whose lit pipelines always have them.
-    pub render_details_pipeline: Option<wgpu::RenderPipeline>,
-    /// The lit pipelines with anisotropy, clear coat and subsurface, where the ones above leave them
-    /// out. `None` on the desktop path, whose lit pipelines always have them.
-    ///
-    /// An Adreno 618 pays for those branches whether they are taken or not: 43 fps without them and 20
-    /// with them, drawing a cube and a floor. So materials that use none of them get pipelines without
-    /// the code, and batching sends the ones that do here. What uses them still costs that much: a clear
-    /// coat on a floor filling the screen reads 20 fps.
-    pub lit_lobes: Option<LitSet>,
     /// The [`SceneUniforms`](crate::gpu_types::SceneUniforms) buffer — group 0, rewritten each
     /// frame.
     pub global_uniform_buffer: wgpu::Buffer,
@@ -424,7 +355,7 @@ impl SceneState {
     /// `transparent` / `unlit` pipeline itself.
     pub fn blend_variant(&self, unlit: bool, mode: crate::components::BlendMode) -> Option<&wgpu::RenderPipeline> {
         let i = crate::components::BlendMode::VARIANTS.iter().position(|m| *m == mode)?;
-        Some(if unlit { &self.blend_unlit_pipelines[i] } else { &self.blend_lit_pipelines[i] })
+        Some(if unlit { &self.core.blend_unlit[i] } else { &self.core.blend_lit[i] })
     }
 
     /// The wireframe pipeline's group 5 for this colour (`None`: the frame's, or the lit colour).
@@ -467,7 +398,7 @@ impl SceneState {
     /// [is glass](crate::components::Material::is_transmissive). Opaque as far as the blend goes,
     /// and it writes depth: what it shows of the world, it read.
     pub fn transmissive_pipeline(&self, double_sided: bool) -> &wgpu::RenderPipeline {
-        &self.transmissive[usize::from(double_sided)]
+        &self.core.transmissive[usize::from(double_sided)]
     }
 
     /// Points every view's group 0 at this frame behind glass, or back at the black texel. Group 0
@@ -594,9 +525,9 @@ impl SceneState {
     /// `discards` says an opaque one may discard; a blended one always may.
     pub fn unlit_for(&self, discards: bool, transparent: bool) -> &wgpu::RenderPipeline {
         if transparent {
-            return &self.unlit_blended_pipeline;
+            return &self.core.unlit_blended;
         }
-        self.unlit_keeps_pipeline.as_ref().filter(|_| discards).unwrap_or(&self.unlit_pipeline)
+        self.core.unlit_keeps.as_ref().filter(|_| discards).unwrap_or(&self.core.unlit)
     }
 
     /// The pipeline for a lit, non-custom draw, on the tier it needs.
@@ -616,7 +547,7 @@ impl SceneState {
         mode: crate::components::BlendMode,
     ) -> &wgpu::RenderPipeline {
         let index = crate::components::BlendMode::VARIANTS.iter().position(|m| *m == mode);
-        match self.lit_lobes.as_ref().filter(|_| lobes) {
+        match self.core.lobes.as_ref().filter(|_| lobes) {
             Some(set) => match (transparent, index) {
                 (true, Some(i)) => &set.blend[i],
                 (true, None) => &set.transparent,
@@ -624,14 +555,14 @@ impl SceneState {
                 (false, _) => &set.render,
             },
             None => match (transparent, index) {
-                (true, Some(i)) => &self.blend_lit_pipelines[i],
-                (true, None) => &self.transparent_pipeline,
-                (false, _) if double_sided => &self.render_double_sided_pipeline,
+                (true, Some(i)) => &self.core.blend_lit[i],
+                (true, None) => &self.core.transparent,
+                (false, _) if double_sided => &self.core.render_double_sided,
                 (false, _) => self
-                    .render_details_pipeline
+                    .core.render_details
                     .as_ref()
                     .filter(|_| details)
-                    .unwrap_or(&self.render_pipeline),
+                    .unwrap_or(&self.core.render),
             },
         }
     }
@@ -1314,31 +1245,9 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     );
 
     SceneState {
-        render_pipeline: core_pipelines.render,
-        render_double_sided_pipeline: core_pipelines.render_double_sided,
-        wireframe_pipeline: core_pipelines.wireframe,
-        unlit_pipeline: core_pipelines.unlit,
-        unlit_blended_pipeline: core_pipelines.unlit_blended,
-        baked_lit_pipeline: core_pipelines.baked_lit,
-        baked_lit_double_sided_pipeline: core_pipelines.baked_lit_double_sided,
-        baked_lit_depth_pipelines: core_pipelines.baked_lit_depth,
-        baked_lit_transparent_pipeline: core_pipelines.baked_lit_transparent,
-        sky_pipeline: core_pipelines.sky,
-        backdrop_pipeline: core_pipelines.backdrop,
-        water_pipeline: core_pipelines.water,
-        water_double_sided_pipeline: core_pipelines.water_double_sided,
-        mirror_pipeline: core_pipelines.mirror,
-        water_mirror_pipeline: core_pipelines.water_mirror,
-        transparent_pipeline: core_pipelines.transparent,
-        grid_pipeline: core_pipelines.grid,
-        blend_lit_pipelines: core_pipelines.blend_lit,
-        blend_unlit_pipelines: core_pipelines.blend_unlit,
-        lit_lobes: core_pipelines.lobes,
-        render_details_pipeline: core_pipelines.render_details,
-        unlit_keeps_pipeline: core_pipelines.unlit_keeps,
+        core: core_pipelines,
         wire_color_layout,
         wire_colors: std::collections::HashMap::new(),
-        transmissive: core_pipelines.transmissive,
         behind_view: behind_fallback.clone(),
         behind_depth_view: behind_depth_fallback.clone(),
         behind_depth_fallback,
@@ -1454,30 +1363,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
         plain: [shadow_pipeline, shadow_open_pipeline],
         cut_out: shadow_cut_out_pipelines,
     } = build_shadow_pipelines(device, &layouts);
-
-    renderer.scene.lit_lobes = core_pipelines.lobes;
-    renderer.scene.render_details_pipeline = core_pipelines.render_details;
-    renderer.scene.unlit_keeps_pipeline = core_pipelines.unlit_keeps;
-    renderer.scene.transmissive = core_pipelines.transmissive;
-    renderer.scene.render_pipeline = core_pipelines.render;
-    renderer.scene.render_double_sided_pipeline = core_pipelines.render_double_sided;
-    renderer.scene.wireframe_pipeline = core_pipelines.wireframe;
-    renderer.scene.unlit_pipeline = core_pipelines.unlit;
-    renderer.scene.unlit_blended_pipeline = core_pipelines.unlit_blended;
-    renderer.scene.baked_lit_pipeline = core_pipelines.baked_lit;
-    renderer.scene.baked_lit_double_sided_pipeline = core_pipelines.baked_lit_double_sided;
-    renderer.scene.baked_lit_depth_pipelines = core_pipelines.baked_lit_depth;
-    renderer.scene.baked_lit_transparent_pipeline = core_pipelines.baked_lit_transparent;
-    renderer.scene.sky_pipeline = core_pipelines.sky;
-    renderer.scene.backdrop_pipeline = core_pipelines.backdrop;
-    renderer.scene.water_pipeline = core_pipelines.water;
-    renderer.scene.water_double_sided_pipeline = core_pipelines.water_double_sided;
-    renderer.scene.mirror_pipeline = core_pipelines.mirror;
-    renderer.scene.water_mirror_pipeline = core_pipelines.water_mirror;
-    renderer.scene.transparent_pipeline = core_pipelines.transparent;
-    renderer.scene.grid_pipeline = core_pipelines.grid;
-    renderer.scene.blend_lit_pipelines = core_pipelines.blend_lit;
-    renderer.scene.blend_unlit_pipelines = core_pipelines.blend_unlit;
+    renderer.scene.core = core_pipelines;
     renderer.scene.shadow_pipeline = shadow_pipeline;
     renderer.scene.shadow_open_pipeline = shadow_open_pipeline;
     renderer.scene.shadow_cut_out_pipelines = shadow_cut_out_pipelines;

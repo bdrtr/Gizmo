@@ -1405,7 +1405,7 @@ fn mean_rgb(px: &[u8], x0: usize, y0: usize, size: usize) -> (f32, f32, f32) {
 ///
 /// "Wire" was doubly broken: `deferred_lighting.wgsl` reads mode 3 as Roughness/Metallic, so even
 /// on the path where the uniform mattered, the chip labelled Wire meant something else. It is a
-/// pipeline, not a shading term — and `renderer.scene.wireframe_pipeline`, built from the same
+/// pipeline, not a shading term — and `renderer.scene.core.wireframe`, built from the same
 /// shader with `PolygonMode::Line`, had existed unselected by anything in the workspace.
 ///
 /// All six pairs are compared, not just each against Lit: two chips that both "work" by producing

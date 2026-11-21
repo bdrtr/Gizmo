@@ -48,7 +48,7 @@ pub fn record_deferred_geometry(
                 continue;
             }
             // A solid baked-lit surface the forward pass draws (`BakedRoute::Forward`, `Reflective`) lays its
-            // depth here too, through its own vertex stage (`SceneState::baked_lit_depth_pipelines`), so
+            // depth here too, through its own vertex stage (`CorePipelines::baked_lit_depth`), so
             // that the forward pass shades only what is in front of it. It used not to, on the reasoning
             // that shading an overlap again costs less than drawing everything twice; but a city's streets
             // are layer on layer, and a wet one's shading is dear. `nfsu2-gizmo`'s city, 1080p, AMD 780M,
@@ -72,7 +72,7 @@ pub fn record_deferred_geometry(
             let key = (item.surface, item.is_double_sided, item.discards, baked_depth);
             if bound != Some(key) {
                 let pipeline = if baked_depth {
-                    &renderer.scene.baked_lit_depth_pipelines[usize::from(item.is_double_sided)]
+                    &renderer.scene.core.baked_lit_depth[usize::from(item.is_double_sided)]
                 } else {
                     match item.surface {
                         // A game's surface cuts where its own code says, so its prepass always has the

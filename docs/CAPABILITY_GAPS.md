@@ -945,7 +945,7 @@ cube cookies for point lights, and no cookies on web. Each item:
   5 476 pixels, and an unlit one on the desktop by 3 614. The G-buffer writes those texels solid, so
   the viewport and a phone showed edges the desktop game does not. Every pipeline an opaque draw takes
   is unblended now (`pipelines::OPAQUE`), and a transparent unlit draw blending by alpha has a pipeline
-  of its own (`SceneState::unlit_blended_pipeline`). The cube draws the same frame at 0.8 as at 1 on
+  of its own (`CorePipelines::unlit_blended`). The cube draws the same frame at 0.8 as at 1 on
   both paths and in the viewport, lit, two-sided, unlit and as a game's surface
   (`an_opaque_draw_is_not_blended_on_any_route`, `an_opaque_cut_out_is_drawn_solid_in_the_viewport`).
   **A look that changes:** a cut-out's soft edges in the editor and on a phone are as hard as the

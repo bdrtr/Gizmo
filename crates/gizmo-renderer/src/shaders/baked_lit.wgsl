@@ -161,7 +161,7 @@ struct Motion {
 
 struct VertexOutput {
     // Invariant: the z-prepass draws the same surfaces with this vertex stage alone
-    // (`SceneState::baked_lit_depth_pipelines`), and the forward draw must meet its depth exactly.
+    // (`CorePipelines::baked_lit_depth`), and the forward draw must meet its depth exactly.
     @invariant @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
     // xy: the material's UV; zw: the lightmap's (`Vertex::lightmap_uv`).

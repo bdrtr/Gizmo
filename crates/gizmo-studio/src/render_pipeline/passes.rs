@@ -399,7 +399,7 @@ pub(super) fn record_studio_main_pass(
             // depth and blends, so a backdrop drawn after it would paint over it. Drawing them
             // first puts them underneath by construction. (`gizmo_renderer::backdrop`; the game
             // path expresses the same rule as `DrawLayer::Backdrop` in its draw-order sort.)
-            render_pass.set_pipeline(&renderer.scene.backdrop_pipeline);
+            render_pass.set_pipeline(&renderer.scene.core.backdrop);
             for batch in flat_batches {
                 if !batch.is_backdrop || !batch.visible_in_camera {
                     continue;
@@ -431,9 +431,9 @@ pub(super) fn record_studio_main_pass(
             // pictures depending on which path runs.
             let wireframe_view = ed_shading_mode == SHADING_WIREFRAME;
             let engine_opaque = if wireframe_view {
-                &renderer.scene.wireframe_pipeline
+                &renderer.scene.core.wireframe
             } else {
-                &renderer.scene.render_pipeline
+                &renderer.scene.core.render
             };
             render_pass.set_pipeline(engine_opaque);
             let mut bound: *const wgpu::RenderPipeline = engine_opaque;
@@ -479,7 +479,7 @@ pub(super) fn record_studio_main_pass(
             }
 
             // 2. ÇİFT YÖNLÜ OPAQUE OBJELER (Kumaşlar, cull_mode = None)
-            let engine_two_sided = &renderer.scene.render_double_sided_pipeline;
+            let engine_two_sided = &renderer.scene.core.render_double_sided;
             render_pass.set_pipeline(engine_two_sided);
             let mut bound: *const wgpu::RenderPipeline = engine_two_sided;
             for batch in flat_batches {
@@ -538,9 +538,9 @@ pub(super) fn record_studio_main_pass(
             // iş yapıyor, çünkü su boru hattı saydam boru hattının aksine arka yüzleri eliyor.
             for two_sided in [false, true] {
                 render_pass.set_pipeline(if two_sided {
-                    &renderer.scene.water_double_sided_pipeline
+                    &renderer.scene.core.water_double_sided
                 } else {
-                    &renderer.scene.water_pipeline
+                    &renderer.scene.core.water
                 });
                 for batch in flat_batches {
                     if !batch.is_water || batch.is_double_sided != two_sided {
@@ -568,7 +568,7 @@ pub(super) fn record_studio_main_pass(
             }
 
             // 3. SKYBOX YAKALAMA VE ÖZEL PIPELINE İLE ÇİZİM
-            render_pass.set_pipeline(&renderer.scene.sky_pipeline);
+            render_pass.set_pipeline(&renderer.scene.core.sky);
             for batch in flat_batches {
                 if !batch.is_skybox || !batch.visible_in_camera {
                     continue;
@@ -606,7 +606,7 @@ pub(super) fn record_studio_main_pass(
                 }) else {
                     continue;
                 };
-                render_pass.set_pipeline(&renderer.scene.wireframe_pipeline);
+                render_pass.set_pipeline(&renderer.scene.core.wireframe);
                 render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
                 render_pass.set_bind_group(1, &*batch.bind_group, &[]);
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
@@ -672,8 +672,8 @@ pub(super) fn record_studio_main_pass(
                 // transparent batch with the lit shader, unlit ones included.
                 let engine = match renderer.scene.blend_variant(batch.is_unlit, batch.blend_mode) {
                     Some(p) => p,
-                    None if batch.is_unlit => &renderer.scene.unlit_blended_pipeline,
-                    None => &renderer.scene.transparent_pipeline,
+                    None if batch.is_unlit => &renderer.scene.core.unlit_blended,
+                    None => &renderer.scene.core.transparent,
                 };
                 let Some(pipeline) = batch_pipeline(renderer, batch, true, engine) else { continue };
                 render_pass.set_pipeline(pipeline);
@@ -710,7 +710,7 @@ pub(super) fn record_studio_main_pass(
                 .map(|ed| ed.prefs.show_grid)
                 .unwrap_or(true);
             if !is_playing_mode && show_grid {
-                render_pass.set_pipeline(&renderer.scene.grid_pipeline);
+                render_pass.set_pipeline(&renderer.scene.core.grid);
                 for batch in flat_batches {
                     if !batch.is_grid || !batch.visible_in_camera {
                         continue;

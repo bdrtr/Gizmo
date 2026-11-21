@@ -44,42 +44,73 @@ pub(super) fn baked_lit_state(is_transparent: bool) -> BakedLitState {
     }
 }
 
-pub(super) struct CorePipelines {
-    pub(super) render: wgpu::RenderPipeline,
-    pub(super) render_double_sided: wgpu::RenderPipeline,
-    pub(super) wireframe: wgpu::RenderPipeline,
-    pub(super) unlit: wgpu::RenderPipeline,
-    /// See [`SceneState::unlit_blended_pipeline`](super::SceneState::unlit_blended_pipeline).
-    pub(super) unlit_blended: wgpu::RenderPipeline,
-    pub(super) baked_lit: wgpu::RenderPipeline,
-    pub(super) baked_lit_double_sided: wgpu::RenderPipeline,
-    pub(super) baked_lit_transparent: wgpu::RenderPipeline,
-    /// See [`SceneState::baked_lit_depth_pipelines`](super::SceneState::baked_lit_depth_pipelines).
-    pub(super) baked_lit_depth: [wgpu::RenderPipeline; 2],
-    pub(super) sky: wgpu::RenderPipeline,
+/// The forward pipelines [`SceneState::core`](super::SceneState::core) holds: every one
+/// `build_core_pipelines` makes.
+pub struct CorePipelines {
+    /// The main opaque PBR pipeline, back faces culled.
+    pub render: wgpu::RenderPipeline,
+    /// The same, with culling off, for materials marked double-sided.
+    pub render_double_sided: wgpu::RenderPipeline,
+    /// Line-topology, for wireframe views.
+    pub wireframe: wgpu::RenderPipeline,
+    /// Albedo straight through, no lighting — see [`MaterialType::Unlit`](crate::components::MaterialType::Unlit).
+    /// Opaque: it does not blend (`pipelines::OPAQUE`).
+    pub unlit: wgpu::RenderPipeline,
+    /// The same for a transparent unlit draw blending by alpha; the other blend modes have
+    /// [`blend_unlit`](Self::blend_unlit).
+    pub unlit_blended: wgpu::RenderPipeline,
+    /// Baked lighting × texture, with the sun's cascade term. See `shaders/baked_lit.wgsl`.
+    pub baked_lit: wgpu::RenderPipeline,
+    /// The same, culling nothing, for a double-sided baked-lit material (`Material::double_sided`). The
+    /// forward path drew every opaque baked-lit surface with the culling pipeline until 2026-11-19, so a
+    /// double-sided one lost its back faces there — and kept them through the G-buffer
+    /// (`DeferredState::gbuffer_baked_pipelines`), which had both.
+    pub baked_lit_double_sided: wgpu::RenderPipeline,
+    /// The same shader with alpha blending and no depth write, for a `BakedLit` material
+    /// marked transparent — a decal or skid-mark layer, which the opaque variant would paint
+    /// over the road as solid geometry no matter what alpha the shader produced.
+    pub baked_lit_transparent: wgpu::RenderPipeline,
+    /// A solid baked-lit surface's share of the z-prepass, culling back faces and nothing: its depth alone,
+    /// from the same vertex stage as its forward draw (`baked_lit.wgsl`'s position is `@invariant`), so
+    /// that the forward pass shades only what is in front of it.
+    pub baked_lit_depth: [wgpu::RenderPipeline; 2],
+    /// The generated atmospheric sky — a gradient from the sun's direction and colour, ignoring
+    /// the mesh. Contrast [`backdrop`](Self::backdrop).
+    pub sky: wgpu::RenderPipeline,
     /// The mesh's own painted sky/panorama — see `crate::backdrop`.
-    pub(super) backdrop: wgpu::RenderPipeline,
-    pub(super) water: wgpu::RenderPipeline,
+    pub backdrop: wgpu::RenderPipeline,
+    /// The animated water surface: `shaders/water.wgsl`, Gerstner displacement in the vertex
+    /// stage and a Fresnel sky term in the fragment stage. Forward-only — the G-buffer is filled
+    /// by a shader that does not displace, so a water surface routed through it would be shaded at
+    /// the flat plane's depth. Selected by [`Routing::is_water`](crate::routing::Routing::is_water).
+    pub water: wgpu::RenderPipeline,
     /// The same, culling off — an ocean surface is looked at from underneath.
-    pub(super) water_double_sided: wgpu::RenderPipeline,
-    pub(super) mirror: wgpu::RenderPipeline,
-    pub(super) water_mirror: wgpu::RenderPipeline,
-    pub(super) transparent: wgpu::RenderPipeline,
-    pub(super) grid: wgpu::RenderPipeline,
+    pub water_double_sided: wgpu::RenderPipeline,
+    /// What a [`PlanarReflection`](crate::components::PlanarReflection) draws with once captured.
+    pub mirror: wgpu::RenderPipeline,
+    /// Water with a [`PlanarReflection`](crate::components::PlanarReflection), once captured.
+    pub water_mirror: wgpu::RenderPipeline,
+    /// Alpha-blended, no depth write, for the transparent bucket.
+    pub transparent: wgpu::RenderPipeline,
+    /// The editor's ground grid.
+    pub grid: wgpu::RenderPipeline,
     /// The lit transparent pipeline under each of `BlendMode::VARIANTS`.
-    pub(super) blend_lit: [wgpu::RenderPipeline; 3],
+    pub blend_lit: [wgpu::RenderPipeline; 3],
     /// The lit pipelines with anisotropy, clear coat and subsurface, on the path where the ones above
     /// leave them out. See [`LitSet`](super::LitSet).
-    pub(super) lobes: Option<super::LitSet>,
-    /// See [`SceneState::render_details_pipeline`](super::SceneState::render_details_pipeline).
-    pub(super) render_details: Option<wgpu::RenderPipeline>,
-    /// See [`SceneState::unlit_keeps_pipeline`](super::SceneState::unlit_keeps_pipeline).
-    pub(super) unlit_keeps: Option<wgpu::RenderPipeline>,
+    pub lobes: Option<super::LitSet>,
+    /// [`render`](Self::render) with `DETAILS`, on the forward-only path, whose
+    /// plain one leaves them out: a single-sided opaque draw that needs a cut-out, a LOD crossfade or
+    /// its own reflectance. `None` on the desktop path, whose lit pipelines always have them.
+    pub render_details: Option<wgpu::RenderPipeline>,
+    /// [`unlit`](Self::unlit) with `KEEPS`, on the forward-only path, whose plain one
+    /// cannot discard: a cut-out, a LOD crossfade. `None` on the desktop path, whose unlit pipeline can.
+    pub unlit_keeps: Option<wgpu::RenderPipeline>,
     /// The lit shader with `TRANSMISSION` on: single-sided, then double-sided.
-    pub(super) transmissive: [wgpu::RenderPipeline; 2],
+    pub transmissive: [wgpu::RenderPipeline; 2],
     /// The unlit pipeline under each of them — and, unlike `unlit`, not writing depth: a blended
     /// draw is sorted, and a glow writing depth would hide the glow behind it.
-    pub(super) blend_unlit: [wgpu::RenderPipeline; 3],
+    pub blend_unlit: [wgpu::RenderPipeline; 3],
 }
 
 /// One forward pipeline over the engine's vertex layout, drawing into the HDR target against the shared

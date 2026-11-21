@@ -402,9 +402,9 @@ fn draw_forward_items(
 
             let engine_pipeline = if mirror.is_some() {
                 if item.is_water {
-                    &renderer.scene.water_mirror_pipeline
+                    &renderer.scene.core.water_mirror
                 } else {
-                    &renderer.scene.mirror_pipeline
+                    &renderer.scene.core.mirror
                 }
             } else if item.is_backdrop {
                 // FIRST, ahead of the `unlit` and `is_transparent` branches below: a
@@ -413,9 +413,9 @@ fn draw_forward_items(
                 // pipelines would draw it as ordinary world geometry — writing depth, not
                 // camera-locked, in front of the world. The draw items reach this loop
                 // already sorted with `DrawLayer::Backdrop` first.
-                &renderer.scene.backdrop_pipeline
+                &renderer.scene.core.backdrop
             } else if item.is_skybox {
-                &renderer.scene.sky_pipeline
+                &renderer.scene.core.sky
             } else if item.is_water {
                 // Ahead of the `unlit` and `is_transparent` branches below, for the same
                 // reason the backdrop branch is first: water sets `unlit` — that is what keeps
@@ -429,14 +429,14 @@ fn draw_forward_items(
                 // double-sided flag is load-bearing here rather than redundant: a swimmer
                 // looking up at the surface is the ordinary case.
                 if item.is_double_sided {
-                    &renderer.scene.water_double_sided_pipeline
+                    &renderer.scene.core.water_double_sided
                 } else {
-                    &renderer.scene.water_pipeline
+                    &renderer.scene.core.water
                 }
             } else if item.is_grid {
                 // Ahead of `unlit`, which a grid also sets (`skips_deferred`): the grid
                 // has its own shader, as in the editor.
-                &renderer.scene.grid_pipeline
+                &renderer.scene.core.grid
             } else if item.baked_lit {
                 // A baked-lit material that declared itself transparent gets the blended
                 // variant. Every other stage already routes it as transparent (sorted
@@ -444,11 +444,11 @@ fn draw_forward_items(
                 // opaque pipeline was the one place that ignored the declaration, and it
                 // discarded the fragment alpha with it.
                 if item.is_transparent {
-                    &renderer.scene.baked_lit_transparent_pipeline
+                    &renderer.scene.core.baked_lit_transparent
                 } else if item.is_double_sided {
-                    &renderer.scene.baked_lit_double_sided_pipeline
+                    &renderer.scene.core.baked_lit_double_sided
                 } else {
-                    &renderer.scene.baked_lit_pipeline
+                    &renderer.scene.core.baked_lit
                 }
             } else if item.unlit {
                 // A transparent unlit draw blending other than by alpha — a glow, a spark —
@@ -506,7 +506,7 @@ fn draw_forward_items(
         }
 
         if let Some(wire) = wire {
-            plan.set_pipeline(&renderer.scene.wireframe_pipeline);
+            plan.set_pipeline(&renderer.scene.core.wireframe);
             plan.set_bind_group(1, &item.bind_group);
             plan.set_bind_group(BG_SKELETON, skel_bg.as_ref());
             // Group 5 is this colour for the lines, and the probes again for whatever comes next.
