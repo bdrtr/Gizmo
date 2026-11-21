@@ -16373,6 +16373,70 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no bloom, and no flare.
+    /// **The lens flare reaches the frame, across its middle from the light.** A small, very bright cube in
+    /// the upper left of a dark frame; with `Renderer::lens_flare` on, the frame round the cube's mirror
+    /// through the middle, lower right, brightens — the flare's first ghost, added by the composite
+    /// (`post_process.wgsl`'s `t_flare`) — and off, it is as dark as the frame without the cube. The bloom is
+    /// off, so what brightens there is the flare alone.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn the_lens_flare_reaches_the_frame_across_its_middle_from_the_light() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // The mean luma round (91, 82), where the cube's first ghost lands; `cube`: whether there is one.
+        async fn mirrored(flare: f32, cube: bool) -> f32 {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            renderer.bloom_intensity = 0.0;
+            renderer.lens_flare = crate::renderer::post_process::LensFlare::default().with_intensity(flare);
+            let mut world = World::new();
+            if cube {
+                let mut assets = AssetManager::new();
+                let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+                let glow = world.spawn();
+                world.add_component(glow, Transform::new(Vec3::new(-1.2, 0.8, -5.0)).with_scale(Vec3::splat(0.25)));
+                world.add_component(glow, GlobalTransform::default());
+                world.add_component(glow, AssetManager::create_cube(&renderer.device));
+                world.add_component(glow, Material::new(tex).with_unlit(Vec4::new(30.0, 30.0, 30.0, 1.0)));
+                world.add_component(glow, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let (mut sum, mut n) = (0.0f32, 0.0f32);
+            for y in 72..92 {
+                for x in 81..101 {
+                    let p = &frame[(y * 128 + x) * 4..];
+                    sum += (f32::from(p[0]) + f32::from(p[1]) + f32::from(p[2])) / 3.0;
+                    n += 1.0;
+                }
+            }
+            sum / n
+        }
+        pollster::block_on(async {
+            let dark = mirrored(1.0, false).await;
+            let off = mirrored(0.0, true).await;
+            let on = mirrored(1.0, true).await;
+            eprintln!("FLARE mirrored: no cube {dark:.2}, flare off {off:.2}, on {on:.2}");
+            assert!((off - dark).abs() < 0.5, "off, the flare adds nothing there: {off:.2} against {dark:.2}");
+            assert!(on > off + 3.0, "on, the cube's ghost brightens the frame across its middle: {off:.2} -> {on:.2}");
+        });
+    }
+
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no bloom.
     /// **The bloom reaches across the frame, as far as `bloom_scatter` sends it.** A small, very bright
     /// cube (about 12 px across) in a dark scene; the halo is the mean brightness of a ring 8–24 px from

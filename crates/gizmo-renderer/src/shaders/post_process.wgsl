@@ -244,10 +244,99 @@ fn fs_bloom_up(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 }
 
 // ============================
+// Lens flare: ghosts and a halo of what is brightest in the frame (`post_process::LensFlare`)
+// ============================
+// Unreal's image-based lens flare, after John Chapman's ("Pseudo Lens Flare", 2013): a lens's elements
+// reflect a bright light between them, and those reflections land on the image as copies of it about its
+// middle — the ghosts — and as a ring, the halo, each blurred by the aperture. What flares is taken from
+// the bloom's first level, half the frame's size, texel by texel (`fs_flare_extract`) — a lamp a few
+// pixels across keeps its brightness there, where a quarter-size level spread it as thin as a lit window
+// — and only then filtered down a chain of its own to a sixteenth (`post_process::BloomChain`), whose last
+// level the ghosts and the halo are copies of: soft, as a lens's are.
+struct FlareParams {
+    intensity: f32,
+    threshold: f32,
+    halo: f32,
+    chromatic: f32,
+};
+@group(1) @binding(0) var<uniform> flare: FlareParams;
+
+// The eight ghosts: each the bright part scaled about the frame's middle by `w` — a negative scale mirrors
+// it through the middle, where a lens's ghosts lie, on the line from the light through the centre — and
+// tinted by `rgb`: Unreal's `LensFlareTints` defaults, their alpha folded in.
+const GHOSTS = array<vec4<f32>, 8>(
+    vec4<f32>(0.60, 0.48, 0.24, -1.00),
+    vec4<f32>(0.53, 0.53, 0.32, -0.62),
+    vec4<f32>(0.37, 0.37, 0.46, -0.38),
+    vec4<f32>(0.20, 0.39, 0.16, -0.22),
+    vec4<f32>(0.16, 0.25, 0.31, 0.30),
+    vec4<f32>(0.24, 0.27, 0.22, 0.55),
+    vec4<f32>(0.22, 0.18, 0.09, 0.85),
+    vec4<f32>(0.14, 0.11, 0.11, 1.30),
+);
+
+// What of `c` flares: its luminance past `flare.threshold`, its hue kept.
+fn flare_part(c: vec3<f32>) -> vec3<f32> {
+    let l = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return c * (max(l - flare.threshold, 0.0) / max(l, 1e-4));
+}
+
+// The flare's source, a quarter of the frame's size, from the bloom's first level (`t_source`, half of it):
+// each texel the mean of what of the four under it flares, each thresholded before they are averaged.
+@fragment
+fn fs_flare_extract(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    let size = vec2<i32>(textureDimensions(t_source));
+    let base = vec2<i32>(in.position.xy) * 2;
+    var sum = vec3<f32>(0.0);
+    for (var k = 0; k < 4; k++) {
+        let texel = min(base + vec2<i32>(k & 1, k >> 1), size - 1);
+        sum += flare_part(textureLoad(t_source, texel, 0).rgb);
+    }
+    return vec4<f32>(sum * 0.25, 1.0);
+}
+
+// The flare's soft source (`t_source`, the last level of its chain) at `uv`.
+fn flare_bright(uv: vec2<f32>) -> vec3<f32> {
+    return textureSampleLevel(t_source, s_source, uv, 0.0).rgb;
+}
+
+// How much a ghost sampled at `p` counts: all of it in the middle of the frame, nothing at its edges — no
+// ghost of a light outside the frame, and none cut off where the frame ends.
+fn flare_window(p: vec2<f32>) -> f32 {
+    let d = max(abs(p.x - 0.5), abs(p.y - 0.5)) * 2.0;
+    return 1.0 - smoothstep(0.6, 1.0, d);
+}
+
+@fragment
+fn fs_lens_flare(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    var sum = vec3<f32>(0.0);
+    for (var i = 0; i < 8; i++) {
+        let g = GHOSTS[i];
+        let p = (in.uv - 0.5) * g.w + 0.5;
+        sum += flare_bright(p) * g.xyz * flare_window(p);
+    }
+    // The halo: a ring `flare.halo` of the frame across, round the middle, on the side away from the light,
+    // its colours spread apart along the ring's radius (`flare.chromatic`).
+    let mirror = vec2<f32>(1.0) - in.uv;
+    let towards = vec2<f32>(0.5) - mirror;
+    let length_towards = length(towards);
+    if (length_towards > 1e-4) {
+        let direction = towards / length_towards;
+        let at = mirror + direction * flare.halo;
+        let w = pow(1.0 - min(length(vec2<f32>(0.5) - at) / 0.7071, 1.0), 5.0);
+        let spread = direction * flare.chromatic;
+        sum += vec3<f32>(flare_bright(at - spread).r, flare_bright(at).g, flare_bright(at + spread).b) * w;
+    }
+    return vec4<f32>(sum * flare.intensity, 1.0);
+}
+
+// ============================
 // Pass 3: Composite + Tone Mapping
 // ============================
 @group(1) @binding(0) var t_bloom: texture_2d<f32>;
 @group(1) @binding(2) var t_depth: texture_depth_2d;
+// The lens flare (`fs_lens_flare`), its strength already in it: black while there is none.
+@group(1) @binding(4) var t_flare: texture_2d<f32>;
 
 @fragment
 fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
@@ -354,6 +443,7 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     if (params.bloom_and_lut.x > 0.5) {
         with_bloom = dof_color + (bloom_color - bright_part(dof_color)) * min(params.bloom_intensity, 1.0);
     }
+    with_bloom += textureSample(t_flare, s_bloom, in.uv).rgb;
     // In the order it always was, so that a frame without local exposure is bit-identical.
     let combined = local_exposure(with_bloom, in.uv, params.exposure * auto_exposure[0]) * params.exposure * auto_exposure[0];
     

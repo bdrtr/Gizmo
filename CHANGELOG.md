@@ -50,6 +50,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A lens flare, as Unreal's image-based one (`Renderer::lens_flare`, `post_process::LensFlare`).** A lens's
+  elements reflect a bright light between them. The reflections land on the image as copies of it scaled and
+  mirrored about its middle (the ghosts) and as a ring round the middle (the halo), each blurred by the aperture
+  (after John Chapman's "Pseudo Lens Flare", 2013).
+  - What flares is thresholded texel by texel on the bloom's first level, half the frame's size, so a lamp a few
+    pixels across keeps its brightness: a quarter-size level spread it as thin as a lit window. It is then
+    filtered down a chain of its own to a sixteenth (`fs_flare_extract`, then the bloom's down pass).
+  - Eight ghosts with Unreal's `LensFlareTints` defaults, and a halo whose red and blue spread apart along its
+    radius, are copies of that chain's last level (`fs_lens_flare`). The composite adds them with the bloom.
+  - `intensity`, `threshold`, `halo` and `chromatic`. None by default (intensity 0); the forward-only path has
+    none.
+  - `the_lens_flare_ghosts_a_light_through_the_middle_and_is_black_while_off` (in `gizmo-renderer`): a square's
+    first ghost lands across the middle (39.4 there, 0.000 where none lands). Off, or under the threshold, the
+    flare is black.
+  - `the_lens_flare_reaches_the_frame_across_its_middle_from_the_light`: the composite adds it, 58.6 → 247.6
+    round a bright cube's mirror point, and nothing while it is off.
+
 - **The GPU timer marks the shadow maps and the screen-space reflections stage by stage.**
   - `gpu.shadow_maps` (the sun's cascades and the local lights' layers) now lies inside `gpu.shadows`, which
     keeps the rain map.

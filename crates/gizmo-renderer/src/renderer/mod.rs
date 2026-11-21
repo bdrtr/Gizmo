@@ -345,6 +345,9 @@ pub struct Renderer {
     /// the glow to the first level, a few pixels round a light; towards 1 it reaches across the frame. The
     /// light it spreads is the same at any scatter. Native only, as is bloom.
     pub bloom_scatter: f32,
+    /// The lens flare ([`LensFlare`](crate::post_process::LensFlare)): ghosts and a halo of the frame's
+    /// brightest lights. None by default. Native only, as is bloom.
+    pub lens_flare: crate::post_process::LensFlare,
     /// How far below `bloom_threshold` bloom starts, as a share of it: 0 is a hard edge, 1 starts from
     /// black. 0.3 is the curve this engine always had. Native only, as is bloom.
     pub bloom_softness: f32,
@@ -1190,7 +1193,7 @@ impl Renderer {
         self.post.composite_bloom_bind_group = crate::post_process::composite_bloom_group(
             &self.device,
             &self.post.composite_bloom_bind_group_layout,
-            &self.post.bloom.view,
+            &self.post.bloom,
             &sampler,
             &self.depth_texture_view,
             &self.post.lut_view,

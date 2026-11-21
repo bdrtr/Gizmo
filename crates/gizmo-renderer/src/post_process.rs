@@ -41,8 +41,14 @@ pub struct PostProcessState {
     /// The composite pass's group 5: local exposure's grid. `None` in the browser. See
     /// [`crate::local_exposure`].
     pub local: Option<crate::local_exposure::LocalExposureBinding>,
-    /// The bloom's levels, the first of which is the bloom the composite adds.
+    /// The bloom's levels, the first of which is the bloom the composite adds, and the lens flare.
     pub bloom: BloomChain,
+    /// The lens flare's parameters ([`LensFlare`]), as its pass reads them; rewritten every frame.
+    pub flare_params_buffer: wgpu::Buffer,
+    /// Their layout.
+    pub flare_params_bind_group_layout: wgpu::BindGroupLayout,
+    /// Their group.
+    pub flare_params_bind_group: wgpu::BindGroup,
     /// The bloom and the depth buffer, as the composite pass reads them.
     pub composite_bloom_bind_group: wgpu::BindGroup,
 }
@@ -57,6 +63,61 @@ pub struct BloomPipelines {
     pub down: wgpu::RenderPipeline,
     /// A level's share of the one below it, blended in by the constant ([`Renderer::bloom_scatter`](crate::Renderer::bloom_scatter)).
     pub up: wgpu::RenderPipeline,
+    /// The lens flare's source ([`LensFlare`]): what of the first level flares, thresholded texel by texel.
+    pub flare_extract: wgpu::RenderPipeline,
+    /// The lens flare, from the last level of its source's chain.
+    pub flare: wgpu::RenderPipeline,
+}
+
+/// The lens flare ([`Renderer::lens_flare`](crate::Renderer::lens_flare)): Unreal's image-based one —
+/// copies of what is brightest in the frame, scaled and mirrored about its middle (the ghosts), and a ring
+/// round the middle (the halo), as a lens's elements reflect a bright light between them
+/// (`post_process.wgsl`'s `fs_lens_flare`). Drawn from the bloom's second level, a quarter of the frame's
+/// size, and added with the bloom. None by default. What flares is thresholded on the bloom's first level,
+/// texel by texel, and then filtered down a chain of its own to a sixteenth of the frame, which the ghosts
+/// and the halo copy: soft, as a lens's are, and from the lights that are bright, not the surfaces that are
+/// large.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LensFlare {
+    /// How much of it is added over the frame. 0, the default, draws none.
+    pub intensity: f32,
+    /// The luminance a texel of the bloom's first level (half the frame's size, the bright part) must pass
+    /// to flare, its excess what flares: high, so that lamps, headlights and the sun's glints flare and a
+    /// lit window does not.
+    pub threshold: f32,
+    /// How far the halo stands from the middle of the frame, as a share of the frame (0.45 by default).
+    pub halo: f32,
+    /// How far apart the halo's red and blue are, as a share of the frame.
+    pub chromatic: f32,
+}
+
+impl Default for LensFlare {
+    fn default() -> Self {
+        Self { intensity: 0.0, threshold: 1.0, halo: 0.45, chromatic: 0.006 }
+    }
+}
+
+impl LensFlare {
+    /// This flare at `intensity` (0 for none).
+    #[must_use]
+    pub fn with_intensity(mut self, intensity: f32) -> Self {
+        self.intensity = intensity;
+        self
+    }
+
+    /// This flare starting at `threshold`.
+    #[must_use]
+    pub fn with_threshold(mut self, threshold: f32) -> Self {
+        self.threshold = threshold;
+        self
+    }
+
+    /// What its pass reads, every number made safe: `[intensity, threshold, halo, chromatic]`.
+    fn params(&self) -> [f32; 4] {
+        let safe = |v: f32, lo: f32, hi: f32, default: f32| if v.is_finite() { v.clamp(lo, hi) } else { default };
+        [safe(self.intensity, 0.0, 100.0, 0.0), safe(self.threshold, 0.0, 1e6, 1.0), safe(self.halo, 0.0, 1.0, 0.45), safe(self.chromatic, 0.0, 0.1, 0.006)]
+    }
 }
 
 /// The most levels the bloom's chain has.
@@ -89,14 +150,21 @@ pub fn bloom_levels(width: u32, height: u32) -> ((u32, u32), u32) {
 }
 
 /// The bloom's levels: one texture, its first mip half the frame's size and each after half the one
-/// before ([`bloom_levels`]). Each level is a render target and, in a group of its own, a source.
+/// before ([`bloom_levels`]). Each level is a render target and, in a group of its own, a source. Beside
+/// them, the lens flare's ([`LensFlare`]): its source's chain — a quarter of the frame, then an eighth and
+/// a sixteenth — and its target, a quarter of the frame.
 #[derive(Clone)]
 pub struct BloomChain {
     texture: wgpu::Texture,
     targets: Vec<wgpu::TextureView>,
     sources: Vec<wgpu::BindGroup>,
+    flare_targets: Vec<wgpu::TextureView>,
+    flare_sources: Vec<wgpu::BindGroup>,
+    flare_texture: wgpu::Texture,
     /// The first level: the finished bloom, as the composite reads it.
     pub view: wgpu::TextureView,
+    /// The lens flare, its strength in it, as the composite reads it.
+    pub flare: wgpu::TextureView,
 }
 
 impl BloomChain {
@@ -136,7 +204,60 @@ impl BloomChain {
                 })
             })
             .collect();
-        Self { view: level(0), texture, targets, sources }
+        // The flare's: its source's chain, from a quarter of the frame down to a sixteenth, and its target.
+        let (fw, fh) = ((w / 2).max(1), (h / 2).max(1));
+        let flare_levels = if cfg!(gizmo_forward_only) { 1 } else { 3u32.min(fw.min(fh).ilog2() + 1) };
+        let chain = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Lens Flare Source"),
+            size: wgpu::Extent3d { width: fw, height: fh, depth_or_array_layers: 1 },
+            mip_level_count: flare_levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let flare_targets: Vec<wgpu::TextureView> = (0..flare_levels)
+            .map(|mip| {
+                chain.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("Lens Flare Source Level"),
+                    base_mip_level: mip,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let flare_sources = flare_targets
+            .iter()
+            .map(|view| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("lens_flare_source_bind_group"),
+                    layout: post_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                    ],
+                })
+            })
+            .collect();
+        let flare_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Lens Flare"),
+            size: wgpu::Extent3d { width: fw, height: fh, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let flare = flare_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self { view: level(0), texture, targets, sources, flare_targets, flare_sources, flare_texture, flare }
+    }
+
+    /// The lens flare's texture: for reading the flare back.
+    #[must_use]
+    pub fn flare_texture(&self) -> &wgpu::Texture {
+        &self.flare_texture
     }
 
     /// How many levels the chain has.
@@ -156,17 +277,22 @@ impl PostProcessState {
     /// Records the bloom: the bright part of the HDR target filtered down the chain level by level and
     /// back up, each level on the way up taking `scatter` (0–1) of the one below it and keeping the rest
     /// of its own — weights that add to one, so the bloom holds the bright part's light at any scatter,
-    /// tight at 0 and wide towards 1. Into [`BloomChain::view`]. Nothing on the forward-only path.
-    pub fn record_bloom(&self, encoder: &mut wgpu::CommandEncoder, scatter: f32) {
+    /// tight at 0 and wide towards 1. Into [`BloomChain::view`]. Between the way down and the way up, the
+    /// lens flare `flare` from the second level, into [`BloomChain::flare`] — cleared to black while its
+    /// intensity is 0. Nothing on the forward-only path.
+    pub fn record_bloom(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, scatter: f32, flare: LensFlare) {
         let Some(pipelines) = self.bloom_pipelines.as_ref() else { return };
+        let flare = flare.params();
+        queue.write_buffer(&self.flare_params_buffer, 0, bytemuck::cast_slice(&flare));
         let scatter = f64::from(if scatter.is_finite() { scatter.clamp(0.0, 1.0) } else { DEFAULT_BLOOM_SCATTER });
         let chain = &self.bloom;
-        let mut draw = |label: &str,
-                        target: &wgpu::TextureView,
-                        pipeline: &wgpu::RenderPipeline,
-                        source: &wgpu::BindGroup,
-                        params: bool,
-                        blend: Option<f64>| {
+        let draw = |encoder: &mut wgpu::CommandEncoder,
+                    label: &str,
+                    target: &wgpu::TextureView,
+                    pipeline: &wgpu::RenderPipeline,
+                    source: &wgpu::BindGroup,
+                    params: bool,
+                    blend: Option<f64>| {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -193,12 +319,56 @@ impl PostProcessState {
             pass.draw(0..3, 0..1);
         };
         let levels = chain.targets.len();
-        draw("Bloom Prefilter", &chain.targets[0], &pipelines.prefilter, &self.hdr_bind_group, true, None);
+        draw(encoder, "Bloom Prefilter", &chain.targets[0], &pipelines.prefilter, &self.hdr_bind_group, true, None);
         for i in 1..levels {
-            draw("Bloom Down", &chain.targets[i], &pipelines.down, &chain.sources[i - 1], false, None);
+            draw(encoder, "Bloom Down", &chain.targets[i], &pipelines.down, &chain.sources[i - 1], false, None);
+        }
+        // The flare, while the first level still holds the bright part alone; the way up blends it. Its
+        // source thresholded on that level, filtered down its own chain, and copied from the last level.
+        if flare[0] > 0.0 {
+            let source = |encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, pipeline: &wgpu::RenderPipeline, from: &wgpu::BindGroup| {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Lens Flare Source"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None,
+                    ..Default::default()
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, from, &[]);
+                pass.set_bind_group(1, &self.flare_params_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            };
+            source(encoder, &chain.flare_targets[0], &pipelines.flare_extract, &chain.sources[0]);
+            for i in 1..chain.flare_targets.len() {
+                source(encoder, &chain.flare_targets[i], &pipelines.down, &chain.flare_sources[i - 1]);
+            }
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Lens Flare"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &chain.flare,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+            if flare[0] > 0.0 {
+                pass.set_pipeline(&pipelines.flare);
+                pass.set_bind_group(0, chain.flare_sources.last().expect("a level at least"), &[]);
+                pass.set_bind_group(1, &self.flare_params_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
         for i in (0..levels.saturating_sub(1)).rev() {
-            draw("Bloom Up", &chain.targets[i], &pipelines.up, &chain.sources[i + 1], false, Some(scatter));
+            draw(encoder, "Bloom Up", &chain.targets[i], &pipelines.up, &chain.sources[i + 1], false, Some(scatter));
         }
     }
 }
@@ -280,6 +450,17 @@ pub fn build_post_process_resources(
                     ty: wgpu::BindingType::Texture {
                         multisampled: false,
                         view_dimension: wgpu::TextureViewDimension::D3,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                // The lens flare (`BloomChain::flare`).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     },
                     count: None,
@@ -366,11 +547,32 @@ pub fn build_post_process_resources(
     #[cfg(gizmo_forward_only)]
     let local: Option<crate::local_exposure::LocalExposureBinding> = None;
 
+    let flare_params_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("flare_params_bind_group_layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        }],
+    });
+    let flare_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Lens Flare Params"),
+        contents: bytemuck::cast_slice(&LensFlare::default().params()),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+    let flare_params_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("flare_params_bind_group"),
+        layout: &flare_params_bind_group_layout,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: flare_params_buffer.as_entire_binding() }],
+    });
+
     let composite_variant = CompositeVariant::default();
     let (bloom_pipelines, composite_pipeline) = build_post_pipelines(
         device,
         &post_shader,
         &post_bind_group_layout,
+        &flare_params_bind_group_layout,
         &composite_bloom_bind_group_layout,
         &post_params_bind_group_layout,
         exposure.as_ref().map(|e| &e.layout),
@@ -408,6 +610,9 @@ pub fn build_post_process_resources(
         hdr_texture_view,
         hdr_bind_group,
         bloom,
+        flare_params_buffer,
+        flare_params_bind_group_layout,
+        flare_params_bind_group,
         composite_bloom_bind_group,
         exposure,
         velocity,
@@ -526,6 +731,7 @@ fn build_post_pipelines(
     device: &wgpu::Device,
     post_shader: &wgpu::ShaderModule,
     post_bgl: &wgpu::BindGroupLayout,
+    flare_bgl: &wgpu::BindGroupLayout,
     composite_bloom_bgl: &wgpu::BindGroupLayout,
     post_params_bgl: &wgpu::BindGroupLayout,
     exposure_bgl: Option<&wgpu::BindGroupLayout>,
@@ -581,7 +787,14 @@ fn build_post_pipelines(
             dst_factor: wgpu::BlendFactor::OneMinusConstant,
             operation: wgpu::BlendOperation::Add,
         };
+        let flare_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Lens Flare Pipeline Layout"),
+            bind_group_layouts: &[Some(post_bgl), Some(flare_bgl)],
+            immediate_size: 0,
+        });
         BloomPipelines {
+            flare_extract: pipeline("Lens Flare Source Pipeline", &flare_layout, "fs_flare_extract", wgpu::BlendState::REPLACE),
+            flare: pipeline("Lens Flare Pipeline", &flare_layout, "fs_lens_flare", wgpu::BlendState::REPLACE),
             prefilter: pipeline("Bloom Prefilter Pipeline", &prefilter_layout, "fs_bloom_prefilter", wgpu::BlendState::REPLACE),
             down: pipeline("Bloom Down Pipeline", &level_layout, "fs_bloom_down", wgpu::BlendState::REPLACE),
             up: pipeline("Bloom Up Pipeline", &level_layout, "fs_bloom_up", wgpu::BlendState { color: scatter, alpha: scatter }),
@@ -649,6 +862,7 @@ pub fn rebuild_post_pipelines(renderer: &mut crate::Renderer, post_shader: &wgpu
         &renderer.device,
         post_shader,
         &renderer.post.post_bind_group_layout,
+        &renderer.post.flare_params_bind_group_layout,
         &renderer.post.composite_bloom_bind_group_layout,
         &renderer.post.post_params_bind_group_layout,
         renderer.post.exposure.as_ref().map(|e| &e.layout),
@@ -789,28 +1003,34 @@ pub fn create_post_textures(
         label: Some("HDR Texture_bind_group"),
     });
     let bloom = BloomChain::new(device, post_bgl, sampler, width, height);
-    let cb_bg = composite_bloom_group(device, composite_bloom_bgl, &bloom.view, sampler, depth_view, lut_view);
+    let cb_bg = composite_bloom_group(device, composite_bloom_bgl, &bloom, sampler, depth_view, lut_view);
     (hdr, hdr_view, hdr_bg, bloom, cb_bg)
 }
 
-/// The composite's group 1: the bloom, its sampler, the depth (the desktop's, for depth of field) and the
-/// colour look-up table. Built on a resize and when a table is set.
+/// The composite's group 1: the bloom, its sampler, the depth (the desktop's, for depth of field), the
+/// colour look-up table and the lens flare (the desktop's). Built on a resize and when a table is set.
 pub(crate) fn composite_bloom_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    bloom: &wgpu::TextureView,
+    bloom: &BloomChain,
     sampler: &wgpu::Sampler,
     #[cfg_attr(gizmo_forward_only, allow(unused_variables))] depth: &wgpu::TextureView,
     lut: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     let shared = [
-        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(bloom) },
+        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&bloom.view) },
         wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
         wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(lut) },
     ];
     #[cfg(not(gizmo_forward_only))]
-    let entries =
-        [&shared[..], &[wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(depth) }]].concat();
+    let entries = [
+        &shared[..],
+        &[
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(depth) },
+            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&bloom.flare) },
+        ],
+    ]
+    .concat();
     #[cfg(gizmo_forward_only)]
     let entries = shared.to_vec();
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -836,7 +1056,7 @@ pub fn run_post_processing(
 /// The bloom ([`PostProcessState::record_bloom`]), spread as [`Renderer::bloom_scatter`](crate::Renderer::bloom_scatter)
 /// says. The forward-only path has none.
 pub fn run_bloom(renderer: &crate::Renderer, encoder: &mut wgpu::CommandEncoder) {
-    renderer.post.record_bloom(encoder, renderer.bloom_scatter);
+    renderer.post.record_bloom(&renderer.queue, encoder, renderer.bloom_scatter, renderer.lens_flare);
 }
 
 /// The composite: the frame with its bloom, exposed, tone-mapped and finished (motion blur, depth of
@@ -1341,6 +1561,20 @@ mod bloom_tests {
     /// The bloom's first level (the red channel of each texel, and the level's width) after the chain ran at
     /// `scatter` over a `side`² frame that is black but for a `patch`² square of 10 at its middle.
     fn bloom(side: u32, patch: u32, scatter: f32) -> Option<(Vec<f32>, u32)> {
+        chain(side, patch, (side / 2, side / 2), scatter, super::LensFlare::default()).map(|c| (c.bloom, c.first))
+    }
+
+    /// What [`chain`] read back: the red channel of the bloom's first level and of the lens flare, and their widths.
+    struct Read {
+        bloom: Vec<f32>,
+        first: u32,
+        flare: Vec<f32>,
+        flare_side: u32,
+    }
+
+    /// The chain run at `scatter` and with `flare` over a `side`² frame that is black but for a `patch`²
+    /// square of 10 centred on `at`.
+    fn chain(side: u32, patch: u32, at: (u32, u32), scatter: f32, flare: super::LensFlare) -> Option<Read> {
         let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
             let (device, queue) = crate::test_gpu::headless_native_device().await?;
@@ -1357,11 +1591,11 @@ mod bloom_tests {
             let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
             let mut post = super::build_post_process_resources(&device, wgpu::TextureFormat::Rgba8UnormSrgb, side, side, &depth_view);
             // The frame, as the HDR target would hold it, bound where the chain reads the HDR target.
-            let (lo, hi) = ((side - patch) / 2, (side + patch) / 2);
+            let (xs, ys) = (at.0 - patch / 2..at.0 + patch / 2, at.1 - patch / 2..at.1 + patch / 2);
             let bytes: Vec<u8> = (0..side * side)
                 .flat_map(|i| {
                     let (x, y) = (i % side, i / side);
-                    let v = if (lo..hi).contains(&x) && (lo..hi).contains(&y) { 10.0 } else { 0.0 };
+                    let v = if xs.contains(&x) && ys.contains(&y) { 10.0 } else { 0.0 };
                     [v, v, v, 1.0].map(f32_to_f16).into_iter().flat_map(u16::to_le_bytes)
                 })
                 .collect();
@@ -1393,31 +1627,71 @@ mod bloom_tests {
             });
             // The defaults' threshold (0.85) and softness: all of a 10 blooms, none of a 0.
             queue.write_buffer(&post.post_params_buffer, 0, bytemuck::cast_slice(&[PostProcessUniforms::default()]));
-            let first = side / 2;
-            let readback = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("bloom_test_readback"),
-                size: u64::from(first * first * 8),
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
+            let (first, flare_side) = (side / 2, side / 4);
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("bloom_test") });
-            post.record_bloom(&mut encoder, scatter);
-            encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo { texture: post.bloom.texture(), mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &readback,
-                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(first * 8), rows_per_image: Some(first) },
-                },
-                wgpu::Extent3d { width: first, height: first, depth_or_array_layers: 1 },
-            );
+            post.record_bloom(&queue, &mut encoder, scatter, flare);
+            // A buffer the first level of `texture`, `n` texels a side, is copied into.
+            let read = |encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, n: u32| {
+                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("bloom_test_readback"),
+                    size: u64::from(n * n * 8),
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 8), rows_per_image: Some(n) },
+                    },
+                    wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 1 },
+                );
+                buffer
+            };
+            let bloom_buffer = read(&mut encoder, post.bloom.texture(), first);
+            let flare_buffer = read(&mut encoder, post.bloom.flare_texture(), flare_side);
             queue.submit([encoder.finish()]);
-            let slice = readback.slice(..);
-            slice.map_async(wgpu::MapMode::Read, |_| {});
-            device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
-            let data = slice.get_mapped_range().ok()?;
-            let red = data.as_chunks::<8>().0.iter().map(|t| f16_to_f32(u16::from_le_bytes([t[0], t[1]]))).collect();
-            Some((red, first))
+            let mut reds = Vec::new();
+            for buffer in [&bloom_buffer, &flare_buffer] {
+                let slice = buffer.slice(..);
+                slice.map_async(wgpu::MapMode::Read, |_| {});
+                device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+                let data = slice.get_mapped_range().ok()?;
+                reds.push(data.as_chunks::<8>().0.iter().map(|t| f16_to_f32(u16::from_le_bytes([t[0], t[1]]))).collect::<Vec<f32>>());
+            }
+            let flare = reds.pop()?;
+            let bloom = reds.pop()?;
+            Some(Read { bloom, first, flare, flare_side })
         })
+    }
+
+    /// **The lens flare puts a light's ghost across the middle of the frame, and nothing while it is off or
+    /// the light is under its threshold.** A 16-pixel square of 10 in the upper left quarter of a black 256²
+    /// frame, at (64, 64): its first ghost (scale -1) is its mirror through the middle, round (192, 192) —
+    /// texel (48, 48) of the flare, a quarter of the frame's size. There the flare holds light; at
+    /// (192, 64), where no ghost of it lands, next to none. At an intensity of 0 the flare is black, and so
+    /// it is with a threshold above what the square reads at that size.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_lens_flare_ghosts_a_light_through_the_middle_and_is_black_while_off() {
+        let on = super::LensFlare::default().with_intensity(1.0);
+        let Some(lit) = chain(256, 16, (64, 64), 0.7, on) else {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        };
+        let n = lit.flare_side as usize;
+        // The flare's light within 4 texels of (x, y).
+        let near = |flare: &[f32], x: usize, y: usize| -> f32 {
+            (0..n * n).filter(|i| (i % n).abs_diff(x).pow(2) + (i / n).abs_diff(y).pow(2) <= 16).map(|i| flare[i]).sum()
+        };
+        let (ghost, elsewhere) = (near(&lit.flare, 48, 48), near(&lit.flare, 48, 16));
+        eprintln!("FLARE ghost {ghost:.3}, where none lands {elsewhere:.3}");
+        assert!(ghost > 1.0, "the square's ghost, through the middle of the frame: {ghost:.3}");
+        assert!(ghost > 20.0 * elsewhere, "and not where no ghost of it lands: {ghost:.3} against {elsewhere:.3}");
+        let off = chain(256, 16, (64, 64), 0.7, super::LensFlare::default()).expect("the adapter was there");
+        assert!(off.flare.iter().all(|&v| v == 0.0), "off, the flare is black");
+        let above = chain(256, 16, (64, 64), 0.7, on.with_threshold(100.0)).expect("the adapter was there");
+        assert!(above.flare.iter().all(|&v| v == 0.0), "under its threshold, the square does not flare");
     }
 
     /// **The bloom keeps the light it spreads, at any scatter, and spreads it further the higher the
