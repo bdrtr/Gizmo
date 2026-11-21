@@ -818,6 +818,80 @@ fn the_game_view_draws_what_the_game_draws_hud_included() {
     let _ = scene_px;
 }
 
+/// **Editor furniture is the Scene panel's alone**: an `EditorOnly` object (a light icon, the
+/// grid, the gizmo handles) is drawn where the scene is edited and nowhere the game is shown.
+///
+/// Written ahead of moving the Scene panel onto the game path (2026-11-22), whose draw leaves
+/// `EditorOnly` out everywhere: nothing tested that the viewport shows its furniture at all.
+#[test]
+fn editor_furniture_is_in_the_scene_panel_and_not_the_game_panel() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) {
+        return;
+    }
+    if pollster::block_on(Renderer::headless_adapter_is_software()) {
+        return;
+    }
+    // A bright green unlit cube above the scene's red one, in view of both cameras: the helper's
+    // cube's mesh and material, recoloured.
+    let (scene_px, game_px) = render_with_world(true, |_| {}, |world| {
+        let mesh = world.query::<&gizmo::renderer::components::Mesh>().iter().next().cloned().expect("the helper's cube");
+        let mat = world.query::<&Material>().iter().next().cloned().expect("the helper's cube's material");
+        let icon = world.spawn();
+        world.add_component(icon, Transform::new(Vec3::new(0.0, 1.6, 0.0)).with_scale(Vec3::splat(0.4)));
+        world.add_component(icon, mesh);
+        world.add_component(icon, mat.with_unlit(Vec4::new(0.0, 4.0, 0.0, 1.0)));
+        world.add_component(icon, MeshRenderer::new());
+        world.add_component(icon, gizmo::core::component::EditorOnly);
+    });
+    let green = |px: &[u8]| {
+        px.as_chunks::<{ BPP as usize }>().0.iter().filter(|p| p[1] > 200 && p[0] < 80 && p[2] < 80).count()
+    };
+    let (in_scene, in_game) = (green(&scene_px), green(&game_px));
+    assert!(in_scene > 20, "the furniture is not in the Scene panel ({in_scene} pixels)");
+    assert_eq!(in_game, 0, "the furniture is in the Game panel ({in_game} pixels)");
+}
+
+/// **The collider overlay draws**: with `show_colliders` on, a collider's outline is in the Scene
+/// panel, and with it off it is not. Written with the furniture test above, for the same move:
+/// nothing tested that the overlay reaches the viewport.
+///
+/// The outline is debug lines: the studio's update runs `physics_debug_system` when the switch is
+/// on, which writes them into the frame's `Gizmos`, and the frame's preparation hands them to the
+/// draw (`GizmoFrame`). The test does what the update does, then draws.
+#[test]
+fn the_collider_overlay_shows_when_asked_for() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) {
+        return;
+    }
+    if pollster::block_on(Renderer::headless_adapter_is_software()) {
+        return;
+    }
+    let collider = |overlay: bool| {
+        move |world: &mut World| {
+            world.spawn_bundle((
+                Transform::new(Vec3::new(0.0, 0.0, 0.0)),
+                GlobalTransform::default(),
+                gizmo::physics::Collider::box_collider(Vec3::splat(2.0)),
+            ));
+            // The studio's world has the frame's debug lines from its setup on.
+            world.insert_resource(gizmo::renderer::Gizmos::default());
+            if overlay {
+                gizmo::systems::physics::physics_debug_system(world);
+            }
+        }
+    };
+    let (on, _) = render_with_world(false, |ed| ed.show_colliders = true, collider(true));
+    let (off, _) = render_with_world(false, |ed| ed.show_colliders = false, collider(false));
+    let differing = target_difference(&on, &off);
+    assert!(
+        differing > on.len() / 200,
+        "the overlay changed {differing} of {} bytes: the collider's outline is not drawn",
+        on.len()
+    );
+}
+
 /// The other half: a Game panel nobody is looking at costs nothing.
 ///
 /// In the default layout Scene and Game are tabs of the same leaf, so at most one is ever on
