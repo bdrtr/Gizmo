@@ -49,6 +49,11 @@ pub struct PostProcessState {
     pub flare_params_bind_group_layout: wgpu::BindGroupLayout,
     /// Their group.
     pub flare_params_bind_group: wgpu::BindGroup,
+    /// The anamorphic streaks' passes' uniforms ([`LensFlare::streak`]), one a pass, rewritten every frame
+    /// they are drawn; in groups of the flare's layout.
+    pub streak_params_buffers: Vec<wgpu::Buffer>,
+    /// Their groups.
+    pub streak_params_bind_groups: Vec<wgpu::BindGroup>,
     /// The bloom and the depth buffer, as the composite pass reads them.
     pub composite_bloom_bind_group: wgpu::BindGroup,
 }
@@ -67,6 +72,10 @@ pub struct BloomPipelines {
     pub flare_extract: wgpu::RenderPipeline,
     /// The lens flare, from the last level of its source's chain.
     pub flare: wgpu::RenderPipeline,
+    /// A pass of the anamorphic streaks ([`LensFlare::streak`]) between their two targets.
+    pub streak: wgpu::RenderPipeline,
+    /// Their last pass, added to the flare.
+    pub streak_add: wgpu::RenderPipeline,
 }
 
 /// The lens flare ([`Renderer::lens_flare`](crate::Renderer::lens_flare)): Unreal's image-based one —
@@ -90,11 +99,32 @@ pub struct LensFlare {
     pub halo: f32,
     /// How far apart the halo's red and blue are, as a share of the frame.
     pub chromatic: f32,
+    /// How strong the anamorphic streaks are — the same lights drawn out sideways, far across the frame,
+    /// as an anamorphic lens draws them. 0, the default, draws none. Their light is the light's own,
+    /// spread along the streak, so a streak's strength wants to be several times the ghosts'.
+    pub streak: f32,
+    /// The luminance a texel of the bloom's first level must pass to streak (as [`threshold`](Self::threshold)
+    /// is to flare, and at least it): higher, so that the brightest points streak — a lamp's core, a
+    /// headlight facing the camera — and the broad highlights that flare do not draw lines across the frame.
+    pub streak_threshold: f32,
+    /// How far a streak reaches, as a share of the frame's width: its light falls to a third there.
+    pub streak_length: f32,
+    /// The streaks' colour: an anamorphic lens's coatings tint them blue.
+    pub streak_tint: [f32; 3],
 }
 
 impl Default for LensFlare {
     fn default() -> Self {
-        Self { intensity: 0.0, threshold: 1.0, halo: 0.45, chromatic: 0.006 }
+        Self {
+            intensity: 0.0,
+            threshold: 1.0,
+            halo: 0.45,
+            chromatic: 0.006,
+            streak: 0.0,
+            streak_threshold: 3.0,
+            streak_length: 0.12,
+            streak_tint: [0.6, 0.75, 1.0],
+        }
     }
 }
 
@@ -113,12 +143,52 @@ impl LensFlare {
         self
     }
 
+    /// This flare with anamorphic streaks of `strength` (0 for none).
+    #[must_use]
+    pub fn with_streaks(mut self, strength: f32) -> Self {
+        self.streak = strength;
+        self
+    }
+
+    /// This flare's streaks starting at `threshold`.
+    #[must_use]
+    pub fn with_streak_threshold(mut self, threshold: f32) -> Self {
+        self.streak_threshold = threshold;
+        self
+    }
+
+    /// The streak passes' uniforms for a source `width` texels across, the four one way and then the four
+    /// the other: `[step, attenuation, direction, threshold, scale.rgb, 0]` — the first pass of each way's
+    /// threshold what the streaks want past the flare's, the others' 0; the last pass's scale half the tint
+    /// times the strength, the others' one.
+    fn streak_passes(&self, width: u32) -> [[f32; 8]; 2 * STREAK_PASSES] {
+        let strength = if self.streak.is_finite() { self.streak.clamp(0.0, 1000.0) } else { 0.0 };
+        let length = if self.streak_length.is_finite() { self.streak_length.clamp(0.001, 4.0) } else { 0.25 };
+        // The power whose distance in texels falls to a third (1/e) at `length` of the width.
+        let attenuation = (-1.0 / (length * width.max(1) as f32)).exp();
+        let [_, flare_threshold, ..] = self.params();
+        let past = if self.streak_threshold.is_finite() { (self.streak_threshold - flare_threshold).max(0.0) } else { 0.0 };
+        std::array::from_fn(|i| {
+            let (n, direction) = (i % STREAK_PASSES, if i < STREAK_PASSES { 1.0 } else { -1.0 });
+            let scale = if n + 1 == STREAK_PASSES {
+                self.streak_tint.map(|c| if c.is_finite() { c.max(0.0) * strength * 0.5 } else { 0.0 })
+            } else {
+                [1.0; 3]
+            };
+            let threshold = if n == 0 { past } else { 0.0 };
+            [4f32.powi(n as i32), attenuation, direction, threshold, scale[0], scale[1], scale[2], 0.0]
+        })
+    }
+
     /// What its pass reads, every number made safe: `[intensity, threshold, halo, chromatic]`.
     fn params(&self) -> [f32; 4] {
         let safe = |v: f32, lo: f32, hi: f32, default: f32| if v.is_finite() { v.clamp(lo, hi) } else { default };
         [safe(self.intensity, 0.0, 100.0, 0.0), safe(self.threshold, 0.0, 1e6, 1.0), safe(self.halo, 0.0, 1.0, 0.45), safe(self.chromatic, 0.0, 0.1, 0.006)]
     }
 }
+
+/// The anamorphic streaks' passes each way ([`LensFlare::streak`]): taps 1, 4, 16 and 64 texels apart.
+const STREAK_PASSES: usize = 4;
 
 /// The most levels the bloom's chain has.
 pub const BLOOM_LEVELS: u32 = 8;
@@ -160,6 +230,8 @@ pub struct BloomChain {
     sources: Vec<wgpu::BindGroup>,
     flare_targets: Vec<wgpu::TextureView>,
     flare_sources: Vec<wgpu::BindGroup>,
+    streak_targets: [wgpu::TextureView; 2],
+    streak_sources: [wgpu::BindGroup; 2],
     flare_texture: wgpu::Texture,
     /// The first level: the finished bloom, as the composite reads it.
     pub view: wgpu::TextureView,
@@ -240,6 +312,32 @@ impl BloomChain {
                 })
             })
             .collect();
+        // The streaks' two targets, the size of the flare's source: each pass reads one, writes the other.
+        let streak_target = |label: &str| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d { width: fw, height: fh, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let streak_targets = [streak_target("Anamorphic Streak A"), streak_target("Anamorphic Streak B")];
+        let streak_sources = streak_targets.clone().map(|view| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("anamorphic_streak_bind_group"),
+                layout: post_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                ],
+            })
+        });
         let flare_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Lens Flare"),
             size: wgpu::Extent3d { width: fw, height: fh, depth_or_array_layers: 1 },
@@ -251,7 +349,7 @@ impl BloomChain {
             view_formats: &[],
         });
         let flare = flare_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        Self { view: level(0), texture, targets, sources, flare_targets, flare_sources, flare_texture, flare }
+        Self { view: level(0), texture, targets, sources, flare_targets, flare_sources, streak_targets, streak_sources, flare_texture, flare }
     }
 
     /// The lens flare's texture: for reading the flare back.
@@ -282,6 +380,13 @@ impl PostProcessState {
     /// intensity is 0. Nothing on the forward-only path.
     pub fn record_bloom(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, scatter: f32, flare: LensFlare) {
         let Some(pipelines) = self.bloom_pipelines.as_ref() else { return };
+        let streaks = flare.streak_passes(self.bloom.flare_texture.width());
+        let streak = streaks[STREAK_PASSES - 1][4..7].iter().any(|&c| c > 0.0);
+        if streak {
+            for (buffer, pass) in self.streak_params_buffers.iter().zip(&streaks) {
+                queue.write_buffer(buffer, 0, bytemuck::cast_slice(pass));
+            }
+        }
         let flare = flare.params();
         queue.write_buffer(&self.flare_params_buffer, 0, bytemuck::cast_slice(&flare));
         let scatter = f64::from(if scatter.is_finite() { scatter.clamp(0.0, 1.0) } else { DEFAULT_BLOOM_SCATTER });
@@ -325,7 +430,7 @@ impl PostProcessState {
         }
         // The flare, while the first level still holds the bright part alone; the way up blends it. Its
         // source thresholded on that level, filtered down its own chain, and copied from the last level.
-        if flare[0] > 0.0 {
+        if flare[0] > 0.0 || streak {
             let source = |encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, pipeline: &wgpu::RenderPipeline, from: &wgpu::BindGroup| {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Lens Flare Source"),
@@ -364,6 +469,38 @@ impl PostProcessState {
                 pass.set_pipeline(&pipelines.flare);
                 pass.set_bind_group(0, chain.flare_sources.last().expect("a level at least"), &[]);
                 pass.set_bind_group(1, &self.flare_params_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        // The streaks: from the flare's quarter-size source, back and forth between their two targets, the
+        // last pass added to the flare.
+        if streak {
+            for (i, params) in self.streak_params_bind_groups.iter().enumerate() {
+                // Each way's passes: from the flare's source, back and forth, the last added to the flare.
+                let n = i % STREAK_PASSES;
+                let last = n + 1 == STREAK_PASSES;
+                let (target, from) = match n {
+                    0 => (&chain.streak_targets[0], &chain.flare_sources[0]),
+                    _ if last => (&chain.flare, &chain.streak_sources[(n + 1) % 2]),
+                    _ => (&chain.streak_targets[n % 2], &chain.streak_sources[(n + 1) % 2]),
+                };
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Anamorphic Streak"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: if last { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(wgpu::Color::BLACK) },
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    ..Default::default()
+                });
+                pass.set_pipeline(if last { &pipelines.streak_add } else { &pipelines.streak });
+                pass.set_bind_group(0, from, &[]);
+                pass.set_bind_group(1, params, &[]);
                 pass.draw(0..3, 0..1);
             }
         }
@@ -566,6 +703,26 @@ pub fn build_post_process_resources(
         layout: &flare_params_bind_group_layout,
         entries: &[wgpu::BindGroupEntry { binding: 0, resource: flare_params_buffer.as_entire_binding() }],
     });
+    let streak_params_buffers: Vec<wgpu::Buffer> = (0..2 * STREAK_PASSES)
+        .map(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Anamorphic Streak Pass"),
+                size: 32,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        })
+        .collect();
+    let streak_params_bind_groups = streak_params_buffers
+        .iter()
+        .map(|buffer| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("anamorphic_streak_pass_bind_group"),
+                layout: &flare_params_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+            })
+        })
+        .collect();
 
     let composite_variant = CompositeVariant::default();
     let (bloom_pipelines, composite_pipeline) = build_post_pipelines(
@@ -613,6 +770,8 @@ pub fn build_post_process_resources(
         flare_params_buffer,
         flare_params_bind_group_layout,
         flare_params_bind_group,
+        streak_params_buffers,
+        streak_params_bind_groups,
         composite_bloom_bind_group,
         exposure,
         velocity,
@@ -795,6 +954,16 @@ fn build_post_pipelines(
         BloomPipelines {
             flare_extract: pipeline("Lens Flare Source Pipeline", &flare_layout, "fs_flare_extract", wgpu::BlendState::REPLACE),
             flare: pipeline("Lens Flare Pipeline", &flare_layout, "fs_lens_flare", wgpu::BlendState::REPLACE),
+            streak: pipeline("Anamorphic Streak Pipeline", &flare_layout, "fs_flare_streak", wgpu::BlendState::REPLACE),
+            streak_add: pipeline(
+                "Anamorphic Streak Add Pipeline",
+                &flare_layout,
+                "fs_flare_streak",
+                wgpu::BlendState {
+                    color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+                    alpha: wgpu::BlendComponent::REPLACE,
+                },
+            ),
             prefilter: pipeline("Bloom Prefilter Pipeline", &prefilter_layout, "fs_bloom_prefilter", wgpu::BlendState::REPLACE),
             down: pipeline("Bloom Down Pipeline", &level_layout, "fs_bloom_down", wgpu::BlendState::REPLACE),
             up: pipeline("Bloom Up Pipeline", &level_layout, "fs_bloom_up", wgpu::BlendState { color: scatter, alpha: scatter }),
@@ -1731,6 +1900,39 @@ mod bloom_tests {
             far_shares[0] < far_shares[1] && far_shares[1] < far_shares[2],
             "the share past 32 px grows with the scatter (0, 0.7, 0.95): {far_shares:?}"
         );
+    }
+
+    /// **The anamorphic streaks draw a light out sideways, and nowhere else, fading smoothly.** A 16-pixel
+    /// square of 10 at the middle of a black 1024² frame, the ghosts off and the streaks on: the flare (a
+    /// quarter of the frame, 256 texels a side) holds light 80 texels to the square's left and right, next to
+    /// none 80 above and below it, and along the streak's row it fades without a bead. Off, or with the
+    /// streaks' threshold above the square, it is black.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_anamorphic_streaks_draw_a_light_out_sideways() {
+        let streaks = super::LensFlare::default().with_streaks(1.0);
+        let Some(lit) = chain(1024, 16, (512, 512), 0.7, streaks) else {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        };
+        let n = lit.flare_side as usize;
+        let at = |x: usize, y: usize| lit.flare[y * n + x];
+        let middle = n / 2;
+        let sideways = at(middle - 80, middle) + at(middle + 80, middle);
+        let across = at(middle, middle - 80) + at(middle, middle + 80);
+        eprintln!("STREAK sideways {sideways:.5}, above and below {across:.5}");
+        assert!(sideways > 1e-4, "the streak reaches 80 texels either side: {sideways:.5}");
+        assert!(sideways > 50.0 * across, "and not above or below: {sideways:.5} against {across:.5}");
+        // And it fades smoothly: along its row, out from the square's edge to the frame's, each texel no
+        // brighter than the one before. Taps either side of each pass reached a distance more ways than
+        // one, and beaded the streak.
+        let row: Vec<f32> = (middle + 4..n).map(|x| at(x, middle)).collect();
+        let rises = row.windows(2).filter(|w| w[1] > w[0] * 1.001 + 1e-7).count();
+        assert_eq!(rises, 0, "the streak fades smoothly out from the light, {rises} texels brighter than the one before");
+        let off = chain(1024, 16, (512, 512), 0.7, super::LensFlare::default()).expect("the adapter was there");
+        assert!(off.flare.iter().all(|&v| v == 0.0), "without streaks or ghosts the flare is black");
+        let faint = chain(1024, 16, (512, 512), 0.7, streaks.with_streak_threshold(100.0)).expect("the adapter was there");
+        assert!(faint.flare.iter().all(|&v| v == 0.0), "under the streaks' threshold, the square does not streak");
     }
 
     /// The chain for 1080p: seven levels, from half the frame down to eight texels on the short side.

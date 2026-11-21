@@ -295,6 +295,42 @@ fn fs_flare_extract(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(sum * 0.25, 1.0);
 }
 
+// The anamorphic streaks (`post_process::LensFlare::streak`): a light drawn out sideways, as an
+// anamorphic lens draws it, by Kawase's streak filter ("Frame Buffer Postprocessing Effects in DOUBLE-S.T.E.A.L",
+// GDC 2003). Four passes along one way of X over the flare's quarter-size source, each of four taps 0, 1,
+// 2 and 3 times `step` texels on, `step` 1, 4, 16 and 64: every distance up to 255 texels is reached by one
+// choice of tap in each pass — its digits in base four — with the product of their weights, `attenuation`
+// to the power of the distance. So the four passes are a kernel that falls off exactly as that power, and
+// normalised pass by pass it keeps the light it spreads. Drawn once each way (`direction`); a symmetric
+// pass, taps either side, reaches a distance more ways than one, and beaded the streak. The last pass of
+// each way adds `scale` of it, the tint times the strength (halved, the light's own texel being in both).
+// The first pass of each way takes only what passes `threshold` more than the flare's source already
+// passed (`LensFlare::streak_threshold`): the brightest points streak, a car's lit roof does not.
+struct StreakPass {
+    step: f32,
+    attenuation: f32,
+    direction: f32,
+    threshold: f32,
+    scale: vec4<f32>,
+};
+@group(1) @binding(0) var<uniform> streak_pass: StreakPass;
+
+@fragment
+fn fs_flare_streak(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    let texel = 1.0 / f32(textureDimensions(t_source).x);
+    var sum = vec3<f32>(0.0);
+    var weight = 0.0;
+    for (var k = 0; k < 4; k++) {
+        let w = pow(streak_pass.attenuation, streak_pass.step * f32(k));
+        let at = in.uv - vec2<f32>(streak_pass.direction * f32(k) * streak_pass.step * texel, 0.0);
+        let c = textureSampleLevel(t_source, s_source, at, 0.0).rgb;
+        let l = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+        sum += c * (max(l - streak_pass.threshold, 0.0) / max(l, 1e-4)) * w;
+        weight += w;
+    }
+    return vec4<f32>(sum / weight * streak_pass.scale.rgb, 1.0);
+}
+
 // The flare's soft source (`t_source`, the last level of its chain, a sixteenth of the frame) at `uv`,
 // through a cubic B-spline: four bilinear taps weighted as the spline's sixteen texels are (Sigg and
 // Hadwiger, GPU Gems 2, ch. 20). The flare is drawn at four times the source's size, and a bilinear tap

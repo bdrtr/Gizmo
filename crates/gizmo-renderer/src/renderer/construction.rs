@@ -647,6 +647,8 @@ impl Renderer {
             flare_params_buffer: post_res.flare_params_buffer,
             flare_params_bind_group_layout: post_res.flare_params_bind_group_layout,
             flare_params_bind_group: post_res.flare_params_bind_group,
+            streak_params_buffers: post_res.streak_params_buffers,
+            streak_params_bind_groups: post_res.streak_params_bind_groups,
             post_bind_group_layout: post_res.post_bind_group_layout,
             bloom_pipelines: post_res.bloom_pipelines,
             composite_pipeline: post_res.composite_pipeline,

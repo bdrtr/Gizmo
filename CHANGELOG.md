@@ -50,6 +50,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Anamorphic streaks, with the lens flare (`LensFlare::streak`, `streak_threshold`, `streak_length`,
+  `streak_tint`).** The brightest lights are drawn out sideways across the frame, as an anamorphic lens draws
+  them, tinted blue by its coatings.
+  - Kawase's streak filter ("Frame Buffer Postprocessing Effects in DOUBLE-S.T.E.A.L", GDC 2003) runs over the
+    flare's quarter-size source: four passes one way along X, four taps each, 1, 4, 16 and 64 texels apart.
+    Every distance up to 255 texels is one choice of tap in each pass (its digits in base four), weighted by
+    the attenuation to the power of the distance. So the passes are an exact exponential falloff, and
+    normalised pass by pass they keep the light they spread.
+  - Each way is drawn in turn, and each way's last pass adds to the flare. A first try with taps either side
+    of each pass reached a distance more ways than one, and beaded the streak.
+  - The streaks have a threshold of their own, above the ghosts' (3 by default), so the broad highlights that
+    flare do not draw lines across the frame. They reach 0.12 of the frame's width by default.
+  - None by default.
+  - `the_anamorphic_streaks_draw_a_light_out_sideways`: light 80 texels either side and none above or below.
+    The streak fades without a bead (taps either side read 45 texels brighter than their neighbours), and
+    under its threshold there is none.
+
 - **A lens flare, as Unreal's image-based one (`Renderer::lens_flare`, `post_process::LensFlare`).** A lens's
   elements reflect a bright light between them. The reflections land on the image as copies of it scaled and
   mirrored about its middle (the ghosts) and as a ring round the middle (the halo), each blurred by the aperture
