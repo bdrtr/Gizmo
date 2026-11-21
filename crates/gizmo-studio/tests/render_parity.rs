@@ -593,6 +593,14 @@ fn every_render_capability_is_known_to_both_draw_paths() {
     /// Declared asymmetries: (component, which path, why).
     const EXCEPTIONS: &[(&str, Path, &str)] = &[
         (
+            "LodFade",
+            Path::GameOnly,
+            "a value, not a component: what `LodGroup::pick_faded` hands both loops, which each pass \
+             to `with_lod_fade`. The game path names the type because its walk carries the value in a \
+             struct field (`batching::Object::fade`); the studio's loop passes it on inferred. Until \
+             2026-11-22 neither named it and it was in `SILENT`.",
+        ),
+        (
             "PlanarReflection",
             Path::GameOnly,
             "a mirror is one more full draw of the scene through the game path's own view code \
@@ -1042,7 +1050,6 @@ fn every_capability_neither_path_names_is_accounted_for() {
     /// (capability, why neither draw path names it).
     const SILENT: &[(&str, &str)] = &[
         // ── Reached only through a driver both paths run ───────────────────────────────────
-        ("LodFade", "what `LodGroup::pick_faded` hands both loops, which each pass to `with_lod_fade`; a value, not a component."),
         ("ActiveBlend", "cross-fade state inside the animation drivers; the drivers are guarded by `both_draw_paths_run_the_same_per_frame_drivers`."),
         ("AnimationClip", "the clip data those drivers sample; same guard."),
         ("AnimationState", "a state machine's state; same guard."),

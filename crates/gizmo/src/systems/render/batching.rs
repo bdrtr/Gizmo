@@ -584,28 +584,10 @@ pub(crate) struct BatchData {
     ibuf: Option<std::sync::Arc<wgpu::Buffer>>,
     index_format: wgpu::IndexFormat,
     bind_group: std::sync::Arc<wgpu::BindGroup>,
-    unlit: bool,
-    baked_lit: bool,
-    is_skybox: bool,
-    is_backdrop: bool,
-    is_double_sided: bool,
-    lobes: bool,
-    details: bool,
-    casts_shadows: bool,
-    visible_in_camera: bool,
-    custom: Option<gizmo_renderer::custom_material::MaterialId>,
-    surface: Option<gizmo_renderer::custom_material::SurfaceId>,
-    closed: bool,
-    is_water: bool,
-    mirror: Option<Entity>,
-    is_grid: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     wire: Option<std::sync::Arc<wgpu::BindGroup>>,
-    discards: bool,
-    is_transparent: bool,
-    is_transmissive: bool,
-    blend_mode: crate::renderer::components::BlendMode,
-    /// The key this batch was made for — what a slot hint is checked against.
+    /// The key this batch was made for — what a slot hint is checked against — and so what it
+    /// is: its routing flags are read from here.
     key: BatchKey,
     /// Where it goes among the opaque world — [`opaque_order`].
     order: u128,
@@ -631,6 +613,38 @@ pub(crate) struct BatchData {
 /// was the asset loader's (`AssetManager::retain_data_meshes`). Not one collection, because a
 /// frame can collect several times — a reflection probe's faces, a mirror, split-screen views —
 /// and a batch one of them skips is drawn by the next.
+impl RenderCache {
+    /// The slot this object goes to: the one entity `id` went to last time, if it still holds
+    /// `key`; else the map's; else a new batch, which `make` builds from the key, its place among
+    /// the opaque world ([`opaque_order`]) and its serial.
+    fn slot_for(&mut self, id: usize, key: BatchKey, make: impl FnOnce(BatchKey, u128, u64) -> BatchData) -> u32 {
+        let hinted = self
+            .hints
+            .get(id)
+            .copied()
+            .filter(|&slot| self.batches.get(slot as usize).is_some_and(|b| b.key == key));
+        if let Some(slot) = hinted {
+            return slot;
+        }
+        let slot = match self.slots.get(&key) {
+            Some(&slot) => slot,
+            None => {
+                let slot = self.batches.len() as u32;
+                self.next_serial += 1;
+                let order = opaque_order(&key, &mut self.ranks);
+                self.batches.push(make(key.clone(), order, self.next_serial));
+                self.slots.insert(key, slot);
+                slot
+            }
+        };
+        if self.hints.len() <= id {
+            self.hints.resize(id + 1, u32::MAX);
+        }
+        self.hints[id] = slot;
+        slot
+    }
+}
+
 const IDLE_COLLECTIONS: u32 = 8;
 
 /// This view's occlusion buffer: every solid [`Occluder`](crate::renderer::components::Occluder)'s
@@ -738,13 +752,7 @@ pub(super) fn collect_draw_items(
     let wire_colors = world.query::<&crate::renderer::components::WireframeColor>();
     let wire_global = world.get_resource::<super::WireframeConfig>().is_some_and(|c| c.global);
     let wire_any = wire_global || wire_on.iter().next().is_some();
-    let occluded_objects = std::cell::Cell::new(0u32);
-    // The box around what this walk placed in the world, for the next frame's cascades
-    // (`ShadowSettings::fit_to_scene`). In a cell: the walk holds the renderer.
-    let drawn_extent = std::cell::Cell::new(crate::renderer::SceneExtent::default());
     let reflections = world.query::<&crate::renderer::components::PlanarReflection>();
-    let skip_mirrors = renderer.skip_mirrors;
-    let skip_sky = renderer.skip_sky;
 
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
     // The projection's vertical scale (its row 1: the view's up axis times it, perspective or
@@ -757,41 +765,8 @@ pub(super) fn collect_draw_items(
 
     RENDER_CACHE.with(|rc| {
         let mut cache = rc.borrow_mut();
-        
-        // Clear instances but keep allocations.
-        // Every per-instance array MUST start empty each collection: an earlier layout appended
-        // the off-screen shadow casters to a per-batch list that persisted across frames, and
-        // leaving it uncleared made it grow without bound. Once the total
-        // instance count crossed `instance_capacity` (8192) the buffer upload truncated
-        // the tail, so batches past the cap silently stopped drawing — meshes vanished
-        // one by one as more frames accumulated ("araç giderek kayboluyor"). Which mesh
-        // dropped first depended on nondeterministic HashMap batch order.
-        // Batches the last collection gave nothing count another idle collection, and go once
-        // they have had `IDLE_COLLECTIONS` of them; the rest are emptied for this one.
         let cache = &mut *cache;
-        let mut i = 0;
-        while i < cache.batches.len() {
-            let batch = &mut cache.batches[i];
-            let drew = batch.camera.1 + batch.shadow.1 > 0;
-            batch.idle = if drew { 0 } else { batch.idle + 1 };
-            if batch.idle > IDLE_COLLECTIONS {
-                // The last batch takes this slot: its key now points here (hints to either fail
-                // their key check and fall back to the map).
-                let gone = cache.batches.swap_remove(i);
-                release_order(&gone.key, &mut cache.ranks);
-                cache.slots.remove(&gone.key);
-                if let Some(moved) = cache.batches.get(i) {
-                    cache.slots.insert(moved.key.clone(), i as u32);
-                }
-                continue;
-            }
-            batch.camera = (0, 0);
-            batch.shadow = (0, 0);
-            i += 1;
-        }
-        cache.records.clear();
-        cache.instances.clear();
-        cache.draw_items.clear();
+        age_batches(cache);
 
         let pooled_storage = world.query::<&gizmo_core::pool::Pooled>();
         // What is kept of each object between collections (`kept`). Not on a frame that draws
@@ -800,385 +775,27 @@ pub(super) fn collect_draw_items(
         test_hooks::begin();
         let hidden_any = !hidden.is_empty();
 
-        // The whole way for one (entity, mesh): what its components say, worked out from them, then
-        // decided for this view. `$keep`: whether the part that does not depend on the view may be
-        // kept for the next collections (`kept`).
-        macro_rules! process_mesh {
-            ($e:expr, $mesh:expr, $trans:expr, $mat:expr, $mesh_renderer:expr, $reflection:expr, $is_occluder:expr, $skeleton:expr, $fade:expr, $keep:expr) => {
-                let mesh_renderer: &MeshRenderer = $mesh_renderer;
-
-                // Gizlenmiş nesneleri render etme — editörün 👁 düğmesi ve H kısayolu bu.
-                if hidden_any && hidden.contains(&$e) {
-                    continue;
-                }
-                // A mirror is not in a capture, its own or another's.
-                let mirror = $reflection.map(|_| $e);
-                if mirror.is_some() && skip_mirrors {
-                    continue;
-                }
-
-                let mut prepared = kept::prepare($mesh, $trans, $mat, mesh_renderer, $reflection, cam_pos);
-                let routing = prepared.routing;
-                // An irradiance volume's capture is the light bounced off the scene, not the sky's.
-                if skip_sky && (routing.is_skybox || routing.is_backdrop) {
-                    continue;
-                }
-                // Kept unless part of it follows the camera or the frame: a backdrop's box and model,
-                // a crossfading level's fade.
-                let keep = $keep && $fade.is_none() && !routing.is_backdrop;
-                if keep {
-                    cache.kept.store($e, mirror.is_some(), &prepared);
-                }
-                // A crossfading level's share of the pixels, in the cut-out's slot (never kept).
-                prepared.instance = prepared.instance.with_lod_fade($fade);
-                let world_c = prepared.centre;
-                let world_r = prepared.radius;
-                let drawn_world_aabb = prepared.aabb;
-
-                // Camera-visible → main passes; an off-screen shadow caster inside a
-                // cascade's light frustum → shadow maps only (main passes use
-                // `camera_count`, shadow passes the full range); otherwise skip. Shared
-                // with the studio path so the cull test + caster predicate can't drift —
-                // now the tighter AABB test (was a bounding sphere here).
-                // In the scene's box whether or not this view sees it: the next frame's view may.
-                if crate::renderer::SceneExtent::takes($mat.material_type) {
-                    let mut extent = drawn_extent.get();
-                    extent.include(drawn_world_aabb);
-                    drawn_extent.set(extent);
-                }
-                let camera_visible = match crate::renderer::classify_visibility_world(
-                    &frustum,
-                    &shadow_frusta,
-                    drawn_world_aabb,
-                    $mat.material_type,
-                    $mat.is_transparent,
-                    $mat.albedo.w,
-                ) {
-                    crate::renderer::Visibility::Culled => continue,
-                    crate::renderer::Visibility::Camera => true,
-                    crate::renderer::Visibility::ShadowOnly => false,
-                };
-                // Unseen and casting nothing: this object has no use for this frame. It used to go on
-                // to the shadow-only list anyway, because `classify_visibility_world` asks the
-                // material whether it can cast and only this entity knows it does not — an instance
-                // built and uploaded for a shadow pass that skips it. Measured with 19 882 such cubes
-                // and the camera turned away: all of them still uploaded.
-                let unseen_and_silent = |camera: bool| {
-                    !camera && !mesh_renderer.shadows.casts()
-                };
-                if unseen_and_silent(camera_visible) {
-                    continue;
-                }
-                // In view, and behind an occluder: the same as off screen. An occluder is not
-                // tested, and neither is what is pinned to the far plane rather than placed in
-                // the world (its box says nothing about where it draws).
-                let camera_visible = if camera_visible
-                    && occlusion.as_ref().is_some_and(|o| o.is_occluded(drawn_world_aabb))
-                    && !$is_occluder
-                    && !matches!(
-                        $mat.material_type,
-                        crate::renderer::components::MaterialType::Skybox
-                            | crate::renderer::components::MaterialType::Backdrop
-                            | crate::renderer::components::MaterialType::BackdropPlaced
-                            | crate::renderer::components::MaterialType::Grid
-                    ) {
-                    occluded_objects.set(occluded_objects.get() + 1);
-                    match crate::renderer::unseen_visibility(
-                        &shadow_frusta,
-                        drawn_world_aabb,
-                        $mat.material_type,
-                        $mat.is_transparent,
-                        $mat.albedo.w,
-                    ) {
-                        crate::renderer::Visibility::ShadowOnly if !unseen_and_silent(false) => false,
-                        _ => continue,
-                    }
-                } else {
-                    camera_visible
-                };
-
-                // How tall a skeleton was drawn, for how often it is posed (`gizmo_renderer::animation_lod`):
-                // its box's radius over the clip-space `w` (the depth, or 1 for an orthographic view)
-                // times the projection's vertical scale and the view's height in pixels. `|w|`: a
-                // shadow caster behind the camera has a negative one, and is as far as it is.
-                if let Some(skeleton) = $skeleton {
-                    let w = (unjittered_view_proj * world_c.extend(1.0)).w.abs().max(1.0e-3);
-                    let pixels = world_r * vertical_scale * renderer.size.height as f32 / w;
-                    renderer.skeletons_seen.record(skeleton, pixels);
-                }
-
-                // Auto-LOD (Level of Detail) Seçimi. The per-object bias means the same thing
-                // here as in the editor even though the mechanism differs (flattened `lod_vbufs`
-                // rather than a `LodGroup`) — that is what the shared helper is for.
-                let lod = prepared.lod_for(cam_pos);
-                let use_lod1 = lod == 1;
-
-                // Borrowed, not cloned: an `Arc` clone is an atomic increment and decrement per
-                // drawn object, and only a NEW batch needs its own handle (`or_insert_with` below).
-                let active_vbuf = if use_lod1 { &$mesh.lod_vbufs[0] } else { &$mesh.vbuf };
-                // LOD tamponları DÜZLEŞTİRİLMİŞ (`Mesh::new` meshopt çıktısını geri açıyor),
-                // yani mesh'in indeksleri tam çözünürlüklü vertex dizisine göre ve LOD1
-                // aktifken GEÇERSİZ. Onları burada düşürmek, karışık bir mesh'i indeksli
-                // sanıp yanlış üçgenler çizmenin tek engeli.
-                let (active_ibuf, active_index_format) = if use_lod1 {
-                    (None, wgpu::IndexFormat::Uint32)
-                } else {
-                    ($mesh.ibuf.as_ref(), $mesh.index_format)
-                };
-
-                // Where this entity was drawn last frame — the object half of its velocity.
-                let previous_model = if velocity_read {
-                    renderer.motion_history.previous($e.id(), $e.generation(), prepared.instance.model)
-                } else {
-                    [[0.0; 4]; 4]
-                };
-                let skel_bg = $skeleton.map(|s: &crate::renderer::components::Skeleton| &s.bind_group);
-
-                // Compute the pass-routing flags up front so they can be part of the
-                // batch key (see BatchKey docs) — not just read from the first material.
-                //
-                // What each material type *means* is decided once, in `gizmo-renderer::routing`,
-                // because this loop and `gizmo-studio`'s each used to decide it with a wildcard
-                // match and the wildcards disagreed: `BakedLit` was routed here and defaulted
-                // there, `Grid` the other way round. `MaterialType` is `#[non_exhaustive]`, so a
-                // wildcard is obligatory *here* and a tenth variant could never be a compile error
-                // in this file — which is why the decision moved to the crate that defines it.
-                let is_skybox = routing.is_skybox;
-                let baked_lit = routing.baked_lit;
-                let is_backdrop = routing.is_backdrop;
-                // "Not in the deferred path", which baked-lit also is not. The two part company in
-                // the shadow pass, where baked-lit casts and unlit does not. A backdrop rides the
-                // same flag, and that is what keeps it out of the z-prepass, the G-buffer and both
-                // shadow passes without any further edit to them.
-                let unlit = routing.skips_deferred;
-                // Which forward pipeline, once `unlit` has said "not the deferred one".
-                let is_water = routing.is_water;
-                let is_grid = routing.is_grid;
-                let is_transparent = draws_blended($mat.is_transparent, $mat.albedo.w, $mat.alpha_cutoff);
-                // Only a blended draw blends; an opaque one's mode is moot and must not split it
-                // from its opaque neighbours.
-                let is_transmissive = $mat.is_transmissive();
-                let blend_mode = if is_transparent && !is_transmissive { $mat.blend_mode } else { Default::default() };
-                // Honoured by this path since 2026-08-15. `Material::with_double_sided` has been
-                // public all along and only the editor acted on it, so a cloth or a leaf authored
-                // double-sided showed both faces in the viewport and lost its back faces in the
-                // game.
-                let is_double_sided = $mat.is_double_sided;
-                let lobes = cfg!(gizmo_forward_only)
-                    && ($mat.anisotropy > 0.0 || $mat.clear_coat > 0.0 || $mat.subsurface > 0.0);
-                // Honoured by BOTH paths from the start, unlike `is_double_sided` above — a flag
-                // the editor obeys and the game ignores makes the viewport lie about the build.
-                let shadows = mesh_renderer.shadows;
-                let casts_shadows = shadows.casts();
-                let visible_in_camera = shadows.visible();
-
-                let wire = (wire_any
-                    && crate::renderer::components::draws_wireframe(wire_global, wire_on.get($e).is_some(), wire_off.get($e).is_some()))
-                .then(|| {
-                    let color = wire_colors.get($e).map(|c| c.0);
-                    renderer.scene.wire_color_group(&renderer.device, color)
-                });
-
-                let discards = $mat.alpha_cutoff > 0.0 || $fade.is_some();
-                let details = cfg!(gizmo_forward_only)
-                    && crate::renderer::routing::needs_details(
-                        $mat.alpha_cutoff,
-                        $fade.is_some(),
-                        $mat.reflectance,
-                        $mat.specular_tint.to_array(),
-                        renderer.shading_mode,
-                    );
-
-                let key = BatchKey {
-                    vbuf_id: std::sync::Arc::as_ptr(active_vbuf) as usize,
-                    ibuf_id: active_ibuf.map(|b| std::sync::Arc::as_ptr(b) as usize),
-                    mat_id: std::sync::Arc::as_ptr(&$mat.bind_group) as usize,
-                    skeleton_id: skel_bg.map(|bg| std::sync::Arc::as_ptr(bg) as usize),
-                    is_transparent,
-                    is_transmissive,
-                    wire: wire.as_ref().map(|w| std::sync::Arc::as_ptr(w) as usize),
-                    discards,
-                    blend_mode,
-                    unlit,
-                    baked_lit,
-                    is_skybox,
-                    is_backdrop,
-                    is_double_sided,
-                    lobes,
-                    details,
-                    casts_shadows,
-                    visible_in_camera,
-                    custom: routing.custom,
-                    surface: routing.surface,
-                    closed: $mesh.closed,
-                    is_water,
-                    mirror,
-                    is_grid,
-                };
-
-                // The slot this object goes to: last time's, if it still holds this key; else
-                // the map's; else a new batch.
-                let id = $e.id() as usize;
-                let hinted = cache
-                    .hints
-                    .get(id)
-                    .copied()
-                    .filter(|&slot| cache.batches.get(slot as usize).is_some_and(|b| b.key == key));
-                let slot = match hinted {
-                    Some(slot) => slot,
-                    None => {
-                        let slot = match cache.slots.get(&key) {
-                            Some(&slot) => slot,
-                            None => {
-                                let slot = cache.batches.len() as u32;
-                                cache.next_serial += 1;
-                                cache.batches.push(BatchData {
-                    vbuf: active_vbuf.clone(),
-                    ibuf: active_ibuf.cloned(),
-                    index_format: active_index_format,
-                    bind_group: $mat.bind_group.clone(),
-                    unlit,
-                    baked_lit,
-                    is_skybox,
-                    is_backdrop,
-                    is_double_sided,
-                    lobes,
-                    details,
-                    casts_shadows,
-                    visible_in_camera,
-                    custom: routing.custom,
-                    surface: routing.surface,
-                    closed: $mesh.closed,
-                    is_water,
-                    mirror,
-                    is_grid,
-                    skeleton_bind_group: skel_bg.cloned(),
-                    wire,
-                    discards,
-                    is_transparent,
-                    is_transmissive,
-                    blend_mode,
-                                    order: opaque_order(&key, &mut cache.ranks),
-                                    key: key.clone(),
-                                    serial: cache.next_serial,
-                                    camera: (0, 0),
-                                    shadow: (0, 0),
-                                    idle: 0,
-                                });
-                                cache.slots.insert(key, slot);
-                                slot
-                            }
-                        };
-                        if cache.hints.len() <= id {
-                            cache.hints.resize(id + 1, u32::MAX);
-                        }
-                        cache.hints[id] = slot;
-                        slot
-                    }
-                };
-                if keep {
-                    let serial = cache.batches[slot as usize].serial;
-                    cache.kept.note_slot($e, lod, slot, serial);
-                }
-                cache.records.push(Record {
-                    slot,
-                    camera: camera_visible,
-                    instance: prepared.instance,
-                    previous: previous_model,
-                    bounds: drawn_world_aabb,
-                    range: prepared.ranges[lod],
-                });
-            };
-        }
-
-        // The kept way for one entity: its entry (`kept`), decided for this view, with nothing read
-        // from its components. Leaves the block — and the entity to the whole way after it — when it
-        // has no entry, or when it is drawn at a detail level whose batch it has not been to yet or
-        // that has been let go.
-        macro_rules! kept_draw {
-            ($e:expr, $mirror:expr, $is_occluder:expr) => {
-                let done = 'kept: {
-                    let Some(kept) = cache.kept.get($e, $mirror) else { break 'kept false };
-                    let p = &kept.prepared;
-                    if hidden_any && hidden.contains(&$e) {
-                        break 'kept true;
-                    }
-                    if $mirror && skip_mirrors {
-                        break 'kept true;
-                    }
-                    if skip_sky && (p.routing.is_skybox || p.routing.is_backdrop) {
-                        break 'kept true;
-                    }
-                    let lod = p.lod_for(cam_pos);
-                    let live = kept.slots[lod]
-                        .filter(|&(slot, serial)| cache.batches.get(slot as usize).is_some_and(|b| b.serial == serial));
-                    if crate::renderer::SceneExtent::takes(p.material_type) {
-                        let mut extent = drawn_extent.get();
-                        extent.include(p.aabb);
-                        drawn_extent.set(extent);
-                    }
-                    let camera_visible = match crate::renderer::classify_visibility_world(
-                        &frustum,
-                        &shadow_frusta,
-                        p.aabb,
-                        p.material_type,
-                        p.material_transparent,
-                        p.alpha,
-                    ) {
-                        crate::renderer::Visibility::Culled => break 'kept true,
-                        crate::renderer::Visibility::Camera => true,
-                        crate::renderer::Visibility::ShadowOnly => false,
-                    };
-                    if !camera_visible && !p.casts {
-                        break 'kept true;
-                    }
-                    let occluded = camera_visible
-                        && occlusion.as_ref().is_some_and(|o| o.is_occluded(p.aabb))
-                        && !$is_occluder
-                        && !matches!(
-                            p.material_type,
-                            crate::renderer::components::MaterialType::Skybox
-                                | crate::renderer::components::MaterialType::Backdrop
-                                | crate::renderer::components::MaterialType::BackdropPlaced
-                                | crate::renderer::components::MaterialType::Grid
-                        );
-                    let camera_visible = if occluded {
-                        match crate::renderer::unseen_visibility(&shadow_frusta, p.aabb, p.material_type, p.material_transparent, p.alpha) {
-                            crate::renderer::Visibility::ShadowOnly if p.casts => false,
-                            _ => {
-                                occluded_objects.set(occluded_objects.get() + 1);
-                                break 'kept true;
-                            }
-                        }
-                    } else {
-                        camera_visible
-                    };
-                    // Drawn from here on, so into a batch: the whole way finds it one if none is live.
-                    let Some((slot, _)) = live else { break 'kept false };
-                    if occluded {
-                        occluded_objects.set(occluded_objects.get() + 1);
-                    }
-                    let previous = if velocity_read {
-                        renderer.motion_history.previous($e.id(), $e.generation(), p.instance.model)
-                    } else {
-                        [[0.0; 4]; 4]
-                    };
-                    cache.records.push(Record {
-                        slot,
-                        camera: camera_visible,
-                        instance: p.instance,
-                        previous,
-                        bounds: p.aabb,
-                        range: p.ranges[lod],
-                    });
-                    test_hooks::kept_draw();
-                    true
-                };
-                if done {
-                    continue;
-                }
-            };
-        }
+        let mut walk = Walk {
+            hidden: &hidden,
+            hidden_any,
+            frustum,
+            shadow_frusta: &shadow_frusta,
+            occlusion: occlusion.as_ref(),
+            unjittered_view_proj,
+            vertical_scale,
+            cam_pos,
+            velocity_read,
+            skip_mirrors: renderer.skip_mirrors,
+            skip_sky: renderer.skip_sky,
+            wire_any,
+            wire_global,
+            wire_on: &wire_on,
+            wire_off: &wire_off,
+            wire_colors: &wire_colors,
+            keeping,
+            occluded_objects: 0,
+            drawn_extent: crate::renderer::SceneExtent::default(),
+        };
 
         let skeletons = world.query::<&crate::renderer::components::Skeleton>();
 
@@ -1218,28 +835,6 @@ pub(super) fn collect_draw_items(
             })
         };
 
-        // One entity of the component form, with what decides how it is walked fetched in the same
-        // query rather than looked up — the lookups, one per component per object, were a good part
-        // of the walk in a large scene.
-        macro_rules! walk {
-            ($e:expr, $mesh:expr, $trans:expr, $mat:expr, $mesh_renderer:expr, $skeleton:expr, $lod_group:expr, $reflection:expr, $pooled:expr, $editor_only:expr, $occluder:expr) => {
-                // Pooled (havuzda pasif) nesneleri render etme. Editor furniture never draws here.
-                if $pooled.is_some() || $editor_only.is_some() {
-                    continue;
-                }
-                // Kept only while nothing about it is decided per frame: a skeleton is posed for its
-                // drawn size, and a `LodGroup` picks its mesh by distance.
-                let keepable = keeping && $skeleton.is_none() && $lod_group.is_none();
-                if keepable {
-                    kept_draw!($e, $reflection.is_some(), $occluder.is_some());
-                }
-                let picks = crate::renderer::components::LodGroup::pick_faded($lod_group, $mesh, cam_pos.distance($trans.matrix.w_axis.truncate()));
-                for (mesh, fade) in picks.into_iter().flatten() {
-                    process_mesh!($e, mesh, $trans, $mat, $mesh_renderer, $reflection, $occluder.is_some(), $skeleton, fade, keepable);
-                }
-            };
-        }
-
         {
             let q = world.query::<(
                 Entity,
@@ -1257,14 +852,12 @@ pub(super) fn collect_draw_items(
             if let Some(candidates) = index_candidates.as_ref() {
                 for &candidate in candidates {
                     let Some(e) = q.entity(candidate) else { continue };
-                    let Some((_, mesh, trans, mat, mesh_renderer, skeleton, lod_group, reflection, pooled, editor_only, occluder)) = q.get(e) else {
-                        continue;
-                    };
-                    walk!(e, mesh, trans, mat, mesh_renderer, skeleton, lod_group, reflection, pooled, editor_only, occluder);
+                    let Some(walked) = q.get(e) else { continue };
+                    walk.component_entity(cache, renderer, walked);
                 }
             } else {
-                for (e, mesh, trans, mat, mesh_renderer, skeleton, lod_group, reflection, pooled, editor_only, occluder) in q.iter() {
-                    walk!(e, mesh, trans, mat, mesh_renderer, skeleton, lod_group, reflection, pooled, editor_only, occluder);
+                for walked in q.iter() {
+                    walk.component_entity(cache, renderer, walked);
                 }
             }
         }
@@ -1286,290 +879,769 @@ pub(super) fn collect_draw_items(
                         }
                         let picks = crate::renderer::components::LodGroup::pick_faded(lod_groups.get(e), mesh, cam_pos.distance(trans.matrix.w_axis.truncate()));
                         for (mesh, fade) in picks.into_iter().flatten() {
-                            process_mesh!(e, mesh, trans, mat, mesh_renderer, reflections.get(e), occluders.get(e).is_some(), skeletons.get(e), fade, false);
+                            let obj = Object {
+                                e,
+                                mesh,
+                                trans,
+                                mat,
+                                mesh_renderer,
+                                reflection: reflections.get(e),
+                                is_occluder: occluders.get(e).is_some(),
+                                skeleton: skeletons.get(e),
+                                fade,
+                            };
+                            walk.process_mesh(cache, renderer, obj, false);
                         }
                     }
                 }
             }
         }
 
-        renderer.occluded_objects = occluded_objects.get();
+        renderer.occluded_objects = walk.occluded_objects;
         test_hooks::records(&cache.records, &cache.batches);
 
-        // Deal the records out into each batch's runs: count, place the runs batch after batch,
-        // then copy every record to its batch's next index — walk order kept within a batch.
-        // `region_b`: where the off-screen casters start, after every camera-visible instance.
-        let region_b: usize = {
-            let n = cache.batches.len();
-            cache.cursors.clear();
-            cache.cursors.resize(n, [0, 0]);
-            for record in &cache.records {
-                cache.cursors[record.slot as usize][usize::from(!record.camera)] += 1;
-            }
-            let (mut camera_at, mut shadow_at) = (0u32, 0u32);
-            for (batch, cursor) in cache.batches.iter_mut().zip(cache.cursors.iter_mut()) {
-                batch.camera = (camera_at, cursor[0]);
-                batch.shadow = (shadow_at, cursor[1]);
-                *cursor = [camera_at, shadow_at];
-                camera_at += batch.camera.1;
-                shadow_at += batch.shadow.1;
-            }
-            // Straight into the final layout: region A, then region B after it.
-            let zero = <crate::renderer::gpu_types::InstanceRaw as bytemuck::Zeroable>::zeroed();
-            let (camera_n, total) = (camera_at as usize, (camera_at + shadow_at) as usize);
-            cache.instances.resize(total, zero);
-            cache.bounds.resize(total, crate::math::Aabb::empty());
-            cache.ranges.resize(total, MeshRange::default());
-            cache.previous.clear();
-            if velocity_read {
-                cache.previous.resize(total, [[0.0; 4]; 4]);
-            }
-            for record in &cache.records {
-                let cursor = &mut cache.cursors[record.slot as usize];
-                let at = if record.camera {
-                    cursor[0] += 1;
-                    cursor[0] as usize - 1
-                } else {
-                    cursor[1] += 1;
-                    camera_n + cursor[1] as usize - 1
-                };
-                cache.instances[at] = record.instance;
-                cache.bounds[at] = record.bounds;
-                cache.ranges[at] = record.range;
-                if velocity_read {
-                    cache.previous[at] = record.previous;
-                }
-            }
-            camera_n
-        };
-        renderer.scene_extent.absorb(drawn_extent.get());
-
-        // Sized once: grown push by push it was a chain of reallocations of ~200-byte items every
-        // frame — the list is handed to the caller, so it starts empty each time.
-        let mut local_draw_items: Vec<DrawItem> =
-            Vec::with_capacity(cache.batches.iter().filter(|b| b.camera.1 + b.shadow.1 > 0).count());
-
-        // Two-region instance layout. Region A = EVERY batch's camera-visible instances;
-        // region B (after A) = EVERY batch's shadow-only casters. The old layout
-        // packed each batch as [camera][shadow] contiguously, so when the total exceeded
-        // `instance_capacity` (8192) the tail truncation could drop a LATER batch's
-        // camera-visible geometry because an EARLIER batch's shadow-only casters had already
-        // eaten slots (and which mesh vanished flipped with nondeterministic HashMap order).
-        // Splitting the regions means truncation drops off-screen shadow casters first and
-        // never starves on-screen geometry. The two ranges are non-contiguous, so DrawItem
-        // carries its camera range (first_instance/camera_count) and chunks over both regions,
-        // which the shadow passes draw.
-        let shadow_run = |(start, len): (u32, u32)| region_b + start as usize..region_b + (start + len) as usize;
-        // Blending is paint order — the transparent pipeline writes no depth — so a transparent
-        // batch's instances have to be far-to-near too, not just the batches relative to each
-        // other. Only the editor did this; the engine appended them in collection order, so two
-        // overlapping panes of the SAME material composited by ECS iteration order.
-        // The scratch the reorder needs, made once for every batch rather than per batch.
-        let (mut order, mut scratch_instances, mut scratch_ranges) = (Vec::new(), Vec::new(), Vec::new());
-        for batch in &cache.batches {
-            if batch.is_transparent || batch.is_backdrop {
-                let range = run(batch.camera);
-                // Far to near, as `sort_back_to_front` orders them (stably), with each instance's
-                // range moved along with it.
-                let depth = |i: &crate::renderer::gpu_types::InstanceRaw| {
-                    cam_pos.distance_squared(Vec3::new(i.model[3][0], i.model[3][1], i.model[3][2]))
-                };
-                order.clear();
-                order.extend(0..range.len() as u32);
-                order.sort_by(|&a, &b| {
-                    let (a, b) = (&cache.instances[range.start + a as usize], &cache.instances[range.start + b as usize]);
-                    depth(b).partial_cmp(&depth(a)).unwrap_or(std::cmp::Ordering::Equal)
-                });
-                permute(&mut cache.instances, range.clone(), &order, &mut scratch_instances);
-                permute(&mut cache.ranges, range.clone(), &order, &mut scratch_ranges);
-                // The sort reorders the instances but not their previous models. Neither layer is
-                // drawn into the G-buffer, so their velocity is never read — give them none rather
-                // than another instance's history.
-                if velocity_read {
-                    for i in range {
-                        cache.previous[i] = cache.instances[i].model;
-                    }
-                }
-            }
-        }
-
+        let region_b = lay_out_instances(cache, velocity_read);
+        renderer.scene_extent.absorb(walk.drawn_extent);
+        sort_blended_back_to_front(cache, cam_pos, velocity_read);
         // A batch that casts into a shadow map this frame draws, in spatial order, so that its runs
         // of neighbours are compact and a shadow pass can draw the runs its frustum meets
         // (`gizmo_renderer::shadow_culling`). Opaque only: a transparent or backdrop batch casts
         // nothing, and its order is its paint order.
-        let shadows_drawn = !shadow_vp.is_empty();
-        {
-            let mut scratch_instances = Vec::new();
-            let mut scratch_models = Vec::new();
-            let mut scratch_bounds = Vec::new();
-            let mut scratch_ranges = Vec::new();
-            // Only an order that is not already the identity is applied — a batch of one or of a
-            // single chunk keeps its own (one batch per object in a scene of merged, unique meshes).
-            let identity = |order: &[u32]| order.iter().enumerate().all(|(i, &o)| i as u32 == o);
-            for batch in &cache.batches {
-                if !shadows_drawn || !batch.casts_shadows || batch.is_transparent || batch.is_backdrop {
-                    continue;
-                }
-                for range in [run(batch.camera), shadow_run(batch.shadow)] {
-                    let order = gizmo_renderer::shadow_culling::spatial_order(&cache.bounds[range.clone()]);
-                    if identity(&order) {
-                        continue;
-                    }
-                    permute(&mut cache.instances, range.clone(), &order, &mut scratch_instances);
-                    if velocity_read {
-                        permute(&mut cache.previous, range.clone(), &order, &mut scratch_models);
-                    }
-                    permute(&mut cache.bounds, range.clone(), &order, &mut scratch_bounds);
-                    permute(&mut cache.ranges, range, &order, &mut scratch_ranges);
-                }
+        if !shadow_vp.is_empty() {
+            order_casters_spatially(cache, region_b, velocity_read);
+        }
+        cache.draw_items = build_draw_items(cache, region_b, cam_pos, !shadow_vp.is_empty());
+        upload_instances(renderer, cache, velocity_read)
+    })
+}
+
+/// What one collection decides each object with — the view, the shadow maps, what is hidden and
+/// who draws lines — and what the walk tallies as it goes. Built once per collection.
+struct Walk<'a> {
+    hidden: &'a std::collections::HashSet<Entity>,
+    hidden_any: bool,
+    frustum: crate::math::Frustum,
+    shadow_frusta: &'a [crate::math::Frustum],
+    occlusion: Option<&'a crate::renderer::occlusion::OcclusionBuffer>,
+    unjittered_view_proj: Mat4,
+    vertical_scale: f32,
+    cam_pos: Vec3,
+    velocity_read: bool,
+    skip_mirrors: bool,
+    skip_sky: bool,
+    wire_any: bool,
+    wire_global: bool,
+    wire_on: &'a gizmo_core::query::Query<'a, &'a crate::renderer::components::Wireframe>,
+    wire_off: &'a gizmo_core::query::Query<'a, &'a crate::renderer::components::NoWireframe>,
+    wire_colors: &'a gizmo_core::query::Query<'a, &'a crate::renderer::components::WireframeColor>,
+    /// Whether what is kept of each object between collections may be used (`kept`).
+    keeping: bool,
+    /// Objects in view that an occluder hid, for `Renderer::occluded_objects`.
+    occluded_objects: u32,
+    /// The box around what this walk placed in the world, for the next frame's cascades
+    /// (`ShadowSettings::fit_to_scene`).
+    drawn_extent: crate::renderer::SceneExtent,
+}
+
+/// What a view makes of one object ([`Walk::seen`]).
+enum Seen {
+    /// Not drawn: outside every frustum it could draw into, or out of view and casting nothing.
+    Culled,
+    /// Not drawn: in view, hidden by an occluder, and casting into no shadow map. Counted in
+    /// `Renderer::occluded_objects`.
+    Occluded,
+    /// Drawn: into the main passes as well when `camera`, into the shadow maps only when not.
+    /// `occluded`: an occluder took it out of the main passes (counted as `Occluded` is).
+    Drawn { camera: bool, occluded: bool },
+}
+
+/// One (entity, mesh) the walk decides: the entity's components, with the mesh its `LodGroup`
+/// picked and that level's crossfade.
+struct Object<'o> {
+    e: Entity,
+    mesh: &'o Mesh,
+    trans: &'o gizmo_physics_core::components::GlobalTransform,
+    mat: &'o Material,
+    mesh_renderer: &'o MeshRenderer,
+    reflection: Option<&'o crate::renderer::components::PlanarReflection>,
+    is_occluder: bool,
+    skeleton: Option<&'o crate::renderer::components::Skeleton>,
+    fade: Option<crate::renderer::components::LodFade>,
+}
+
+/// What the walk fetches of each entity of the component form, in one query.
+type Walked<'q> = (
+    Entity,
+    &'q Mesh,
+    &'q gizmo_physics_core::components::GlobalTransform,
+    &'q Material,
+    &'q MeshRenderer,
+    Option<&'q crate::renderer::components::Skeleton>,
+    Option<&'q crate::renderer::components::LodGroup>,
+    Option<&'q crate::renderer::components::PlanarReflection>,
+    Option<&'q gizmo_core::pool::Pooled>,
+    Option<&'q crate::core::component::EditorOnly>,
+    Option<&'q crate::renderer::components::Occluder>,
+);
+
+impl Walk<'_> {
+    /// One entity of the component form, with what decides how it is walked fetched in the same
+    /// query rather than looked up — the lookups, one per component per object, were a good part
+    /// of the walk in a large scene.
+    fn component_entity(&mut self, cache: &mut RenderCache, renderer: &mut Renderer, walked: Walked<'_>) {
+        let (e, mesh, trans, mat, mesh_renderer, skeleton, lod_group, reflection, pooled, editor_only, occluder) = walked;
+        // Pooled (havuzda pasif) nesneleri render etme. Editor furniture never draws here.
+        if pooled.is_some() || editor_only.is_some() {
+            return;
+        }
+        // Kept only while nothing about it is decided per frame: a skeleton is posed for its
+        // drawn size, and a `LodGroup` picks its mesh by distance.
+        let keepable = self.keeping && skeleton.is_none() && lod_group.is_none();
+        if keepable && self.kept_draw(cache, renderer, e, reflection.is_some(), occluder.is_some()) {
+            return;
+        }
+        let picks = crate::renderer::components::LodGroup::pick_faded(lod_group, mesh, self.cam_pos.distance(trans.matrix.w_axis.truncate()));
+        for (mesh, fade) in picks.into_iter().flatten() {
+            let obj = Object { e, mesh, trans, mat, mesh_renderer, reflection, is_occluder: occluder.is_some(), skeleton, fade };
+            self.process_mesh(cache, renderer, obj, keepable);
+        }
+    }
+
+    /// The kept way for one entity: its entry (`kept`), decided for this view, with nothing read
+    /// from its components. Returns whether the entity is done with; `false` leaves it to the whole
+    /// way, when it has no entry, or when it is drawn at a detail level whose batch it has not been
+    /// to yet or that has been let go.
+    fn kept_draw(&mut self, cache: &mut RenderCache, renderer: &mut Renderer, e: Entity, mirror: bool, is_occluder: bool) -> bool {
+        let Walk { hidden, hidden_any, cam_pos, velocity_read, skip_mirrors, skip_sky, .. } = *self;
+        let Some(kept) = cache.kept.get(e, mirror) else { return false };
+        let p = &kept.prepared;
+        if hidden_any && hidden.contains(&e) {
+            return true;
+        }
+        if mirror && skip_mirrors {
+            return true;
+        }
+        if skip_sky && (p.routing.is_skybox || p.routing.is_backdrop) {
+            return true;
+        }
+        let lod = p.lod_for(cam_pos);
+        let live = kept.slots[lod]
+            .filter(|&(slot, serial)| cache.batches.get(slot as usize).is_some_and(|b| b.serial == serial));
+        let (camera_visible, occluded) = match self.seen(p, is_occluder) {
+            Seen::Culled => return true,
+            Seen::Occluded => {
+                self.occluded_objects += 1;
+                return true;
             }
+            Seen::Drawn { camera, occluded } => (camera, occluded),
+        };
+        // Drawn from here on, so into a batch: the whole way finds it one if none is live. Counted
+        // as occluded only then, since the whole way counts it otherwise.
+        let Some((slot, _)) = live else { return false };
+        if occluded {
+            self.occluded_objects += 1;
         }
-
-        let batches: Vec<&BatchData> = cache.batches.iter().filter(|b| b.camera.1 + b.shadow.1 > 0).collect();
-
-        // Every instance's range, shared by the frame's items.
-        let ranges: std::sync::Arc<[MeshRange]> = std::sync::Arc::from(&cache.ranges[..]);
-
-        // Region A — all camera-visible instances. One DrawItem per batch (shadow fields
-        // filled in the region-B pass below; the batch list order is stable between passes).
-        for batch in &batches {
-            let first_instance = batch.camera.0;
-            let camera_count = batch.camera.1;
-            let camera_instances = &cache.instances[run(batch.camera)];
-            // Depth key matters for the two layers the depth buffer cannot sort: transparent
-            // (no depth write) and backdrop (no depth write AND every vertex pinned to the
-            // same depth). A backdrop's instances are camera-RELATIVE offsets, so their
-            // distance is measured from the origin — see `DrawItem::sort_depth`.
-            let sort_depth = if batch.is_backdrop {
-                crate::renderer::batch_depth(camera_instances, Vec3::ZERO)
-            } else if batch.is_transparent {
-                crate::renderer::batch_depth(camera_instances, cam_pos)
-            } else {
-                0.0
-            };
-            local_draw_items.push(DrawItem {
-                vbuf: batch.vbuf.clone(),
-                ibuf: batch.ibuf.clone(),
-                ranges: ranges.clone(),
-                index_format: batch.index_format,
-                bind_group: batch.bind_group.clone(),
-                unlit: batch.unlit,
-                baked_lit: batch.baked_lit,
-                is_skybox: batch.is_skybox,
-                is_backdrop: batch.is_backdrop,
-                custom: batch.custom,
-                surface: batch.surface,
-                closed: batch.closed,
-                is_water: batch.is_water,
-                mirror: batch.mirror,
-                is_grid: batch.is_grid,
-                is_double_sided: batch.is_double_sided,
-                lobes: batch.lobes,
-                details: batch.details,
-                casts_shadows: batch.casts_shadows,
-                visible_in_camera: batch.visible_in_camera,
-                skeleton_bind_group: batch.skeleton_bind_group.clone(),
-                wire: batch.wire.clone(),
-                discards: batch.discards,
-                is_transparent: batch.is_transparent,
-                is_transmissive: batch.is_transmissive,
-                blend_mode: batch.blend_mode,
-                layer: draw_layer(batch.is_backdrop, batch.is_transmissive, batch.is_transparent),
-                first_instance,
-                camera_count,
-                shadow_chunks: {
-                    let mut chunks = Vec::new();
-                    if shadows_drawn && batch.casts_shadows {
-                        gizmo_renderer::shadow_culling::chunk(&cache.bounds[run(batch.camera)], first_instance, &mut chunks);
-                    }
-                    chunks
-                },
-                sort_depth,
-                order: batch.order,
-            });
-        }
-
-        // Region B — all shadow-only casters, after every camera instance. Backfill each
-        // DrawItem's shadow range (draw items were pushed in the same batch order above).
-        let draw_item_base = local_draw_items.len() - batches.len();
-        for (i, batch) in batches.iter().enumerate() {
-            let shadow_first_instance = (region_b + batch.shadow.0 as usize) as u32;
-            let item = &mut local_draw_items[draw_item_base + i];
-            if shadows_drawn && batch.casts_shadows {
-                gizmo_renderer::shadow_culling::chunk(&cache.bounds[shadow_run(batch.shadow)], shadow_first_instance, &mut item.shadow_chunks);
-            }
-        }
-
-        // Order draw items for correct compositing: backdrops first, then the opaque world,
-        // then transparent back-to-front. MUST run after region B backfill (which indexes draw
-        // items by batch order); reordering here is safe because the instance ranges are
-        // baked-in indices, independent of draw-item order, and every pass filters by its own
-        // flags. The forward pass draws these in order, and the backdrop and transparent
-        // pipelines both disable depth-write, so this order is the only thing that composites
-        // them correctly (previously they were drawn in arbitrary HashMap order). Stable sort
-        // keeps opaque batches in their build order.
-        //
-        // Within the opaque world the depth buffer decides what shows, so the order is free to serve
-        // the recording instead: see `opaque_order`.
-        //
-        // The keys are sorted, not the items: a `DrawItem` is some 200 bytes, and a sort moves what it
-        // sorts O(n log n) times — in the static city measurement the sort was a sixth of the
-        // collection, most of it `memmove`. The items then move once, into their places.
-        let mut keys: Vec<(DrawLayer, f32, u128, u32)> =
-            local_draw_items.iter().enumerate().map(|(i, item)| (item.layer, item.sort_depth, item.order, i as u32)).collect();
-        keys.sort_by(|a, b| {
-            cmp_draw_order((a.0, a.1), (b.0, b.1)).then_with(|| {
-                if a.0 == DrawLayer::Opaque { a.2.cmp(&b.2) } else { std::cmp::Ordering::Equal }
-            })
-        });
-        permute_into_order(&mut local_draw_items, keys.iter().map(|k| k.3 as usize));
-
-        cache.draw_items = local_draw_items;
-
-        // Grow the buffer to what this frame actually needs — the same call the editor has always
-        // made. The clamp below stays as the guard it was: capacity is now always sufficient, so
-        // it truncates nothing, but a slice bound is cheaper than trusting that to stay true.
-        //
-        // Growth is unbounded, deliberately and in step with the editor: a frame that wants
-        // 200 000 instances gets 25 MB of instance buffer rather than a picture missing whichever
-        // meshes the HashMap ordered last. A scene pathological enough for that to matter has a
-        // budget problem the renderer should not be papering over by dropping geometry.
-        renderer.ensure_instance_capacity(cache.instances.len());
-        if cache.draw_items.iter().any(|item| item.is_transmissive && item.camera_count > 0) {
-            renderer.ensure_behind_surface();
-        }
-
-        // Instance limiti kontrolü (Taşmaları önlemek için capaciteyi zorla)
-        let max_instances = renderer.scene.view_instance_capacity();
-        let instances_slice = if cache.instances.len() > max_instances {
-            &cache.instances[..max_instances]
+        let previous = if velocity_read {
+            renderer.motion_history.previous(e.id(), e.generation(), p.instance.model)
         } else {
-            &cache.instances
+            [[0.0; 4]; 4]
+        };
+        cache.records.push(Record {
+            slot,
+            camera: camera_visible,
+            instance: p.instance,
+            previous,
+            bounds: p.aabb,
+            range: p.ranges[lod],
+        });
+        test_hooks::kept_draw();
+        true
+    }
+
+    /// The whole way for one (entity, mesh): what its components say, worked out from them, then
+    /// decided for this view. `keep`: whether the part that does not depend on the view may be
+    /// kept for the next collections (`kept`).
+    fn process_mesh(&mut self, cache: &mut RenderCache, renderer: &mut Renderer, obj: Object<'_>, keep: bool) {
+        let Walk {
+            hidden,
+            hidden_any,
+            unjittered_view_proj,
+            vertical_scale,
+            cam_pos,
+            velocity_read,
+            skip_mirrors,
+            skip_sky,
+            wire_any,
+            wire_global,
+            wire_on,
+            wire_off,
+            wire_colors,
+            ..
+        } = *self;
+        let mesh_renderer: &MeshRenderer = obj.mesh_renderer;
+
+        // Gizlenmiş nesneleri render etme — editörün 👁 düğmesi ve H kısayolu bu.
+        if hidden_any && hidden.contains(&obj.e) {
+            return;
+        }
+        // A mirror is not in a capture, its own or another's.
+        let mirror = obj.reflection.map(|_| obj.e);
+        if mirror.is_some() && skip_mirrors {
+            return;
+        }
+
+        let mut prepared = kept::prepare(obj.mesh, obj.trans, obj.mat, mesh_renderer, obj.reflection, cam_pos);
+        let routing = prepared.routing;
+        // An irradiance volume's capture is the light bounced off the scene, not the sky's.
+        if skip_sky && (routing.is_skybox || routing.is_backdrop) {
+            return;
+        }
+        // Kept unless part of it follows the camera or the frame: a backdrop's box and model,
+        // a crossfading level's fade.
+        let keep = keep && obj.fade.is_none() && !routing.is_backdrop;
+        if keep {
+            cache.kept.store(obj.e, mirror.is_some(), &prepared);
+        }
+        // A crossfading level's share of the pixels, in the cut-out's slot (never kept).
+        prepared.instance = prepared.instance.with_lod_fade(obj.fade);
+        let world_c = prepared.centre;
+        let world_r = prepared.radius;
+        let drawn_world_aabb = prepared.aabb;
+
+        let camera_visible = match self.seen(&prepared, obj.is_occluder) {
+            Seen::Culled => return,
+            Seen::Occluded => {
+                self.occluded_objects += 1;
+                return;
+            }
+            Seen::Drawn { camera, occluded } => {
+                if occluded {
+                    self.occluded_objects += 1;
+                }
+                camera
+            }
         };
 
-        if !instances_slice.is_empty() {
-            // The active view's own buffer: its instances are what its camera sees.
-            renderer.queue.write_buffer(
-                renderer.scene.view_instance_buffer(),
-                0,
-                bytemuck::cast_slice(instances_slice),
+        // How tall a skeleton was drawn, for how often it is posed (`gizmo_renderer::animation_lod`):
+        // its box's radius over the clip-space `w` (the depth, or 1 for an orthographic view)
+        // times the projection's vertical scale and the view's height in pixels. `|w|`: a
+        // shadow caster behind the camera has a negative one, and is as far as it is.
+        if let Some(skeleton) = obj.skeleton {
+            let w = (unjittered_view_proj * world_c.extend(1.0)).w.abs().max(1.0e-3);
+            let pixels = world_r * vertical_scale * renderer.size.height as f32 / w;
+            renderer.skeletons_seen.record(skeleton, pixels);
+        }
+
+        // Auto-LOD (Level of Detail) Seçimi. The per-object bias means the same thing
+        // here as in the editor even though the mechanism differs (flattened `lod_vbufs`
+        // rather than a `LodGroup`) — that is what the shared helper is for.
+        let lod = prepared.lod_for(cam_pos);
+        let use_lod1 = lod == 1;
+
+        // Borrowed, not cloned: an `Arc` clone is an atomic increment and decrement per
+        // drawn object, and only a NEW batch needs its own handle (`or_insert_with` below).
+        let active_vbuf = if use_lod1 { &obj.mesh.lod_vbufs[0] } else { &obj.mesh.vbuf };
+        // LOD tamponları DÜZLEŞTİRİLMİŞ (`Mesh::new` meshopt çıktısını geri açıyor),
+        // yani mesh'in indeksleri tam çözünürlüklü vertex dizisine göre ve LOD1
+        // aktifken GEÇERSİZ. Onları burada düşürmek, karışık bir mesh'i indeksli
+        // sanıp yanlış üçgenler çizmenin tek engeli.
+        let (active_ibuf, active_index_format) = if use_lod1 {
+            (None, wgpu::IndexFormat::Uint32)
+        } else {
+            (obj.mesh.ibuf.as_ref(), obj.mesh.index_format)
+        };
+
+        // Where this entity was drawn last frame — the object half of its velocity.
+        let previous_model = if velocity_read {
+            renderer.motion_history.previous(obj.e.id(), obj.e.generation(), prepared.instance.model)
+        } else {
+            [[0.0; 4]; 4]
+        };
+        let skel_bg = obj.skeleton.map(|s: &crate::renderer::components::Skeleton| &s.bind_group);
+
+        // Compute the pass-routing flags up front so they can be part of the
+        // batch key (see BatchKey docs) — not just read from the first material.
+        //
+        // What each material type *means* is decided once, in `gizmo-renderer::routing`,
+        // because this loop and `gizmo-studio`'s each used to decide it with a wildcard
+        // match and the wildcards disagreed: `BakedLit` was routed here and defaulted
+        // there, `Grid` the other way round. `MaterialType` is `#[non_exhaustive]`, so a
+        // wildcard is obligatory *here* and a tenth variant could never be a compile error
+        // in this file — which is why the decision moved to the crate that defines it.
+        let is_skybox = routing.is_skybox;
+        let baked_lit = routing.baked_lit;
+        let is_backdrop = routing.is_backdrop;
+        // "Not in the deferred path", which baked-lit also is not. The two part company in
+        // the shadow pass, where baked-lit casts and unlit does not. A backdrop rides the
+        // same flag, and that is what keeps it out of the z-prepass, the G-buffer and both
+        // shadow passes without any further edit to them.
+        let unlit = routing.skips_deferred;
+        // Which forward pipeline, once `unlit` has said "not the deferred one".
+        let is_water = routing.is_water;
+        let is_grid = routing.is_grid;
+        let is_transparent = draws_blended(obj.mat.is_transparent, obj.mat.albedo.w, obj.mat.alpha_cutoff);
+        // Only a blended draw blends; an opaque one's mode is moot and must not split it
+        // from its opaque neighbours.
+        let is_transmissive = obj.mat.is_transmissive();
+        let blend_mode = if is_transparent && !is_transmissive { obj.mat.blend_mode } else { Default::default() };
+        // Honoured by this path since 2026-08-15. `Material::with_double_sided` has been
+        // public all along and only the editor acted on it, so a cloth or a leaf authored
+        // double-sided showed both faces in the viewport and lost its back faces in the
+        // game.
+        let is_double_sided = obj.mat.is_double_sided;
+        let lobes = cfg!(gizmo_forward_only)
+            && (obj.mat.anisotropy > 0.0 || obj.mat.clear_coat > 0.0 || obj.mat.subsurface > 0.0);
+        // Honoured by BOTH paths from the start, unlike `is_double_sided` above — a flag
+        // the editor obeys and the game ignores makes the viewport lie about the build.
+        let shadows = mesh_renderer.shadows;
+        let casts_shadows = shadows.casts();
+        let visible_in_camera = shadows.visible();
+
+        let wire = (wire_any
+            && crate::renderer::components::draws_wireframe(wire_global, wire_on.get(obj.e).is_some(), wire_off.get(obj.e).is_some()))
+        .then(|| {
+            let color = wire_colors.get(obj.e).map(|c| c.0);
+            renderer.scene.wire_color_group(&renderer.device, color)
+        });
+
+        let discards = obj.mat.alpha_cutoff > 0.0 || obj.fade.is_some();
+        let details = cfg!(gizmo_forward_only)
+            && crate::renderer::routing::needs_details(
+                obj.mat.alpha_cutoff,
+                obj.fade.is_some(),
+                obj.mat.reflectance,
+                obj.mat.specular_tint.to_array(),
+                renderer.shading_mode,
             );
+
+        let key = BatchKey {
+            vbuf_id: std::sync::Arc::as_ptr(active_vbuf) as usize,
+            ibuf_id: active_ibuf.map(|b| std::sync::Arc::as_ptr(b) as usize),
+            mat_id: std::sync::Arc::as_ptr(&obj.mat.bind_group) as usize,
+            skeleton_id: skel_bg.map(|bg| std::sync::Arc::as_ptr(bg) as usize),
+            is_transparent,
+            is_transmissive,
+            wire: wire.as_ref().map(|w| std::sync::Arc::as_ptr(w) as usize),
+            discards,
+            blend_mode,
+            unlit,
+            baked_lit,
+            is_skybox,
+            is_backdrop,
+            is_double_sided,
+            lobes,
+            details,
+            casts_shadows,
+            visible_in_camera,
+            custom: routing.custom,
+            surface: routing.surface,
+            closed: obj.mesh.closed,
+            is_water,
+            mirror,
+            is_grid,
+        };
+
+        let slot = cache.slot_for(obj.e.id() as usize, key, |key, order, serial| BatchData {
+            vbuf: active_vbuf.clone(),
+            ibuf: active_ibuf.cloned(),
+            index_format: active_index_format,
+            bind_group: obj.mat.bind_group.clone(),
+            skeleton_bind_group: skel_bg.cloned(),
+            wire,
+            order,
+            key,
+            serial,
+            camera: (0, 0),
+            shadow: (0, 0),
+            idle: 0,
+        });
+        if keep {
+            let serial = cache.batches[slot as usize].serial;
+            cache.kept.note_slot(obj.e, lod, slot, serial);
         }
-        // Last frame's models, in the same order and cut at the same length as the instances — when
-        // anything reads the velocity they make.
-        if let Some(def) = renderer.deferred.as_mut().filter(|_| velocity_read) {
-            let n = instances_slice.len().min(cache.previous.len());
-            def.motion.upload_previous(&renderer.device, &renderer.queue, &cache.previous[..n]);
+        cache.records.push(Record {
+            slot,
+            camera: camera_visible,
+            instance: prepared.instance,
+            previous: previous_model,
+            bounds: drawn_world_aabb,
+            range: prepared.ranges[lod],
+        });
+    }
+
+    /// What this view makes of an object, from what is worked out of it apart from the view
+    /// ([`kept::Prepared`]). Both ways an object is walked, the kept one and the whole one, decide
+    /// here; they were two copies of it until 2026-11-22.
+    ///
+    /// Camera-visible → main passes; an off-screen shadow caster inside a cascade's light frustum
+    /// → shadow maps only (main passes use `camera_count`, shadow passes the full range); otherwise
+    /// skip. Shared with the studio path (`classify_visibility_world`) so the cull test + caster
+    /// predicate can't drift — now the tighter AABB test (was a bounding sphere here).
+    fn seen(&mut self, p: &kept::Prepared, is_occluder: bool) -> Seen {
+        // In the scene's box whether or not this view sees it: the next frame's view may.
+        if crate::renderer::SceneExtent::takes(p.material_type) {
+            self.drawn_extent.include(p.aabb);
         }
-        
-        // The draw list is handed over, not copied: nothing reads the cache's copy after this, and
-        // cloning it cost every item's `Arc`s and shadow chunks a second time each frame — a
-        // tenth of the collection in a scene of 14 620 one-object batches, where the previous
-        // frame's copy was then dropped item by item as well. Also returned: how many instances
-        // actually made it into the GPU buffer, so draw ranges can be clamped.
-        let uploaded = instances_slice.len() as u32;
-        (std::mem::take(&mut cache.draw_items), uploaded)
-    })
+        let camera = match crate::renderer::classify_visibility_world(
+            &self.frustum,
+            self.shadow_frusta,
+            p.aabb,
+            p.material_type,
+            p.material_transparent,
+            p.alpha,
+        ) {
+            crate::renderer::Visibility::Culled => return Seen::Culled,
+            crate::renderer::Visibility::Camera => true,
+            crate::renderer::Visibility::ShadowOnly => false,
+        };
+        // Unseen and casting nothing: this object has no use for this frame. It used to go on
+        // to the shadow-only list anyway, because `classify_visibility_world` asks the
+        // material whether it can cast and only this entity knows it does not — an instance
+        // built and uploaded for a shadow pass that skips it. Measured with 19 882 such cubes
+        // and the camera turned away: all of them still uploaded.
+        if !camera && !p.casts {
+            return Seen::Culled;
+        }
+        // In view, and behind an occluder: the same as off screen. An occluder is not
+        // tested, and neither is what is pinned to the far plane rather than placed in
+        // the world (its box says nothing about where it draws).
+        let occluded = camera
+            && self.occlusion.is_some_and(|o| o.is_occluded(p.aabb))
+            && !is_occluder
+            && !matches!(
+                p.material_type,
+                crate::renderer::components::MaterialType::Skybox
+                    | crate::renderer::components::MaterialType::Backdrop
+                    | crate::renderer::components::MaterialType::BackdropPlaced
+                    | crate::renderer::components::MaterialType::Grid
+            );
+        if !occluded {
+            return Seen::Drawn { camera, occluded: false };
+        }
+        match crate::renderer::unseen_visibility(self.shadow_frusta, p.aabb, p.material_type, p.material_transparent, p.alpha) {
+            crate::renderer::Visibility::ShadowOnly if p.casts => Seen::Drawn { camera: false, occluded: true },
+            _ => Seen::Occluded,
+        }
+    }
+}
+
+/// Starts a collection. Batches the last collection gave nothing count another idle collection,
+/// and go once they have had `IDLE_COLLECTIONS` of them; the rest are emptied for this one, and
+/// every per-instance array is cleared, its allocation kept.
+///
+/// Every per-instance array MUST start empty each collection: an earlier layout appended
+/// the off-screen shadow casters to a per-batch list that persisted across frames, and
+/// leaving it uncleared made it grow without bound. Once the total
+/// instance count crossed `instance_capacity` (8192) the buffer upload truncated
+/// the tail, so batches past the cap silently stopped drawing — meshes vanished
+/// one by one as more frames accumulated ("araç giderek kayboluyor"). Which mesh
+/// dropped first depended on nondeterministic HashMap batch order.
+fn age_batches(cache: &mut RenderCache) {
+    let mut i = 0;
+    while i < cache.batches.len() {
+        let batch = &mut cache.batches[i];
+        let drew = batch.camera.1 + batch.shadow.1 > 0;
+        batch.idle = if drew { 0 } else { batch.idle + 1 };
+        if batch.idle > IDLE_COLLECTIONS {
+            // The last batch takes this slot: its key now points here (hints to either fail
+            // their key check and fall back to the map).
+            let gone = cache.batches.swap_remove(i);
+            release_order(&gone.key, &mut cache.ranks);
+            cache.slots.remove(&gone.key);
+            if let Some(moved) = cache.batches.get(i) {
+                cache.slots.insert(moved.key.clone(), i as u32);
+            }
+            continue;
+        }
+        batch.camera = (0, 0);
+        batch.shadow = (0, 0);
+        i += 1;
+    }
+    cache.records.clear();
+    cache.instances.clear();
+    cache.draw_items.clear();
+}
+
+/// Deal the records out into each batch's runs: count, place the runs batch after batch,
+/// then copy every record to its batch's next index — walk order kept within a batch.
+/// Returns `region_b`: where the off-screen casters start, after every camera-visible instance.
+fn lay_out_instances(cache: &mut RenderCache, velocity_read: bool) -> usize {
+    let n = cache.batches.len();
+    cache.cursors.clear();
+    cache.cursors.resize(n, [0, 0]);
+    for record in &cache.records {
+        cache.cursors[record.slot as usize][usize::from(!record.camera)] += 1;
+    }
+    let (mut camera_at, mut shadow_at) = (0u32, 0u32);
+    for (batch, cursor) in cache.batches.iter_mut().zip(cache.cursors.iter_mut()) {
+        batch.camera = (camera_at, cursor[0]);
+        batch.shadow = (shadow_at, cursor[1]);
+        *cursor = [camera_at, shadow_at];
+        camera_at += batch.camera.1;
+        shadow_at += batch.shadow.1;
+    }
+    // Straight into the final layout: region A, then region B after it.
+    let zero = <crate::renderer::gpu_types::InstanceRaw as bytemuck::Zeroable>::zeroed();
+    let (camera_n, total) = (camera_at as usize, (camera_at + shadow_at) as usize);
+    cache.instances.resize(total, zero);
+    cache.bounds.resize(total, crate::math::Aabb::empty());
+    cache.ranges.resize(total, MeshRange::default());
+    cache.previous.clear();
+    if velocity_read {
+        cache.previous.resize(total, [[0.0; 4]; 4]);
+    }
+    for record in &cache.records {
+        let cursor = &mut cache.cursors[record.slot as usize];
+        let at = if record.camera {
+            cursor[0] += 1;
+            cursor[0] as usize - 1
+        } else {
+            cursor[1] += 1;
+            camera_n + cursor[1] as usize - 1
+        };
+        cache.instances[at] = record.instance;
+        cache.bounds[at] = record.bounds;
+        cache.ranges[at] = record.range;
+        if velocity_read {
+            cache.previous[at] = record.previous;
+        }
+    }
+    camera_n
+}
+
+/// Where a batch's off-screen casters are: its run in region B, which starts at `region_b`.
+fn shadow_run(region_b: usize, (start, len): (u32, u32)) -> std::ops::Range<usize> {
+    region_b + start as usize..region_b + (start + len) as usize
+}
+
+/// Blending is paint order — the transparent pipeline writes no depth — so a transparent
+/// batch's instances have to be far-to-near too, not just the batches relative to each
+/// other. Only the editor did this; the engine appended them in collection order, so two
+/// overlapping panes of the SAME material composited by ECS iteration order.
+fn sort_blended_back_to_front(cache: &mut RenderCache, cam_pos: Vec3, velocity_read: bool) {
+    // The scratch the reorder needs, made once for every batch rather than per batch.
+    let (mut order, mut scratch_instances, mut scratch_ranges) = (Vec::new(), Vec::new(), Vec::new());
+    for batch in &cache.batches {
+        if batch.key.is_transparent || batch.key.is_backdrop {
+            let range = run(batch.camera);
+            // Far to near, as `sort_back_to_front` orders them (stably), with each instance's
+            // range moved along with it.
+            let depth = |i: &crate::renderer::gpu_types::InstanceRaw| {
+                cam_pos.distance_squared(Vec3::new(i.model[3][0], i.model[3][1], i.model[3][2]))
+            };
+            order.clear();
+            order.extend(0..range.len() as u32);
+            order.sort_by(|&a, &b| {
+                let (a, b) = (&cache.instances[range.start + a as usize], &cache.instances[range.start + b as usize]);
+                depth(b).partial_cmp(&depth(a)).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            permute(&mut cache.instances, range.clone(), &order, &mut scratch_instances);
+            permute(&mut cache.ranges, range.clone(), &order, &mut scratch_ranges);
+            // The sort reorders the instances but not their previous models. Neither layer is
+            // drawn into the G-buffer, so their velocity is never read — give them none rather
+            // than another instance's history.
+            if velocity_read {
+                for i in range {
+                    cache.previous[i] = cache.instances[i].model;
+                }
+            }
+        }
+    }
+}
+
+/// The spatial order of every casting batch's runs, on a frame that draws a shadow map (see the
+/// caller).
+fn order_casters_spatially(cache: &mut RenderCache, region_b: usize, velocity_read: bool) {
+    let mut scratch_instances = Vec::new();
+    let mut scratch_models = Vec::new();
+    let mut scratch_bounds = Vec::new();
+    let mut scratch_ranges = Vec::new();
+    // Only an order that is not already the identity is applied — a batch of one or of a
+    // single chunk keeps its own (one batch per object in a scene of merged, unique meshes).
+    let identity = |order: &[u32]| order.iter().enumerate().all(|(i, &o)| i as u32 == o);
+    for batch in &cache.batches {
+        if !batch.key.casts_shadows || batch.key.is_transparent || batch.key.is_backdrop {
+            continue;
+        }
+        for range in [run(batch.camera), shadow_run(region_b, batch.shadow)] {
+            let order = gizmo_renderer::shadow_culling::spatial_order(&cache.bounds[range.clone()]);
+            if identity(&order) {
+                continue;
+            }
+            permute(&mut cache.instances, range.clone(), &order, &mut scratch_instances);
+            if velocity_read {
+                permute(&mut cache.previous, range.clone(), &order, &mut scratch_models);
+            }
+            permute(&mut cache.bounds, range.clone(), &order, &mut scratch_bounds);
+            permute(&mut cache.ranges, range, &order, &mut scratch_ranges);
+        }
+    }
+}
+
+/// One draw item per batch that drew, in compositing order.
+fn build_draw_items(cache: &RenderCache, region_b: usize, cam_pos: Vec3, shadows_drawn: bool) -> Vec<DrawItem> {
+    // Sized once: grown push by push it was a chain of reallocations of ~200-byte items every
+    // frame — the list is handed to the caller, so it starts empty each time.
+    let mut local_draw_items: Vec<DrawItem> =
+        Vec::with_capacity(cache.batches.iter().filter(|b| b.camera.1 + b.shadow.1 > 0).count());
+
+    // Two-region instance layout. Region A = EVERY batch's camera-visible instances;
+    // region B (after A) = EVERY batch's shadow-only casters. The old layout
+    // packed each batch as [camera][shadow] contiguously, so when the total exceeded
+    // `instance_capacity` (8192) the tail truncation could drop a LATER batch's
+    // camera-visible geometry because an EARLIER batch's shadow-only casters had already
+    // eaten slots (and which mesh vanished flipped with nondeterministic HashMap order).
+    // Splitting the regions means truncation drops off-screen shadow casters first and
+    // never starves on-screen geometry. The two ranges are non-contiguous, so DrawItem
+    // carries its camera range (first_instance/camera_count) and chunks over both regions,
+    // which the shadow passes draw.
+
+    let batches: Vec<&BatchData> = cache.batches.iter().filter(|b| b.camera.1 + b.shadow.1 > 0).collect();
+
+    // Every instance's range, shared by the frame's items.
+    let ranges: std::sync::Arc<[MeshRange]> = std::sync::Arc::from(&cache.ranges[..]);
+
+    // Region A — all camera-visible instances. One DrawItem per batch (shadow fields
+    // filled in the region-B pass below; the batch list order is stable between passes).
+    for batch in &batches {
+        let first_instance = batch.camera.0;
+        let camera_count = batch.camera.1;
+        let camera_instances = &cache.instances[run(batch.camera)];
+        // Depth key matters for the two layers the depth buffer cannot sort: transparent
+        // (no depth write) and backdrop (no depth write AND every vertex pinned to the
+        // same depth). A backdrop's instances are camera-RELATIVE offsets, so their
+        // distance is measured from the origin — see `DrawItem::sort_depth`.
+        let sort_depth = if batch.key.is_backdrop {
+            crate::renderer::batch_depth(camera_instances, Vec3::ZERO)
+        } else if batch.key.is_transparent {
+            crate::renderer::batch_depth(camera_instances, cam_pos)
+        } else {
+            0.0
+        };
+        local_draw_items.push(DrawItem {
+            vbuf: batch.vbuf.clone(),
+            ibuf: batch.ibuf.clone(),
+            ranges: ranges.clone(),
+            index_format: batch.index_format,
+            bind_group: batch.bind_group.clone(),
+            unlit: batch.key.unlit,
+            baked_lit: batch.key.baked_lit,
+            is_skybox: batch.key.is_skybox,
+            is_backdrop: batch.key.is_backdrop,
+            custom: batch.key.custom,
+            surface: batch.key.surface,
+            closed: batch.key.closed,
+            is_water: batch.key.is_water,
+            mirror: batch.key.mirror,
+            is_grid: batch.key.is_grid,
+            is_double_sided: batch.key.is_double_sided,
+            lobes: batch.key.lobes,
+            details: batch.key.details,
+            casts_shadows: batch.key.casts_shadows,
+            visible_in_camera: batch.key.visible_in_camera,
+            skeleton_bind_group: batch.skeleton_bind_group.clone(),
+            wire: batch.wire.clone(),
+            discards: batch.key.discards,
+            is_transparent: batch.key.is_transparent,
+            is_transmissive: batch.key.is_transmissive,
+            blend_mode: batch.key.blend_mode,
+            layer: draw_layer(batch.key.is_backdrop, batch.key.is_transmissive, batch.key.is_transparent),
+            first_instance,
+            camera_count,
+            shadow_chunks: {
+                let mut chunks = Vec::new();
+                if shadows_drawn && batch.key.casts_shadows {
+                    gizmo_renderer::shadow_culling::chunk(&cache.bounds[run(batch.camera)], first_instance, &mut chunks);
+                }
+                chunks
+            },
+            sort_depth,
+            order: batch.order,
+        });
+    }
+
+    // Region B — all shadow-only casters, after every camera instance. Backfill each
+    // DrawItem's shadow range (draw items were pushed in the same batch order above).
+    let draw_item_base = local_draw_items.len() - batches.len();
+    for (i, batch) in batches.iter().enumerate() {
+        let shadow_first_instance = (region_b + batch.shadow.0 as usize) as u32;
+        let item = &mut local_draw_items[draw_item_base + i];
+        if shadows_drawn && batch.key.casts_shadows {
+            gizmo_renderer::shadow_culling::chunk(&cache.bounds[shadow_run(region_b, batch.shadow)], shadow_first_instance, &mut item.shadow_chunks);
+        }
+    }
+
+    // Order draw items for correct compositing: backdrops first, then the opaque world,
+    // then transparent back-to-front. MUST run after region B backfill (which indexes draw
+    // items by batch order); reordering here is safe because the instance ranges are
+    // baked-in indices, independent of draw-item order, and every pass filters by its own
+    // flags. The forward pass draws these in order, and the backdrop and transparent
+    // pipelines both disable depth-write, so this order is the only thing that composites
+    // them correctly (previously they were drawn in arbitrary HashMap order). Stable sort
+    // keeps opaque batches in their build order.
+    //
+    // Within the opaque world the depth buffer decides what shows, so the order is free to serve
+    // the recording instead: see `opaque_order`.
+    //
+    // The keys are sorted, not the items: a `DrawItem` is some 200 bytes, and a sort moves what it
+    // sorts O(n log n) times — in the static city measurement the sort was a sixth of the
+    // collection, most of it `memmove`. The items then move once, into their places.
+    let mut keys: Vec<(DrawLayer, f32, u128, u32)> =
+        local_draw_items.iter().enumerate().map(|(i, item)| (item.layer, item.sort_depth, item.order, i as u32)).collect();
+    keys.sort_by(|a, b| {
+        cmp_draw_order((a.0, a.1), (b.0, b.1)).then_with(|| {
+            if a.0 == DrawLayer::Opaque { a.2.cmp(&b.2) } else { std::cmp::Ordering::Equal }
+        })
+    });
+    permute_into_order(&mut local_draw_items, keys.iter().map(|k| k.3 as usize));
+    local_draw_items
+}
+
+/// Uploads the frame's instances (and their last-frame models) and hands the draw list over.
+fn upload_instances(renderer: &mut Renderer, cache: &mut RenderCache, velocity_read: bool) -> (Vec<DrawItem>, u32) {
+    // Grow the buffer to what this frame actually needs — the same call the editor has always
+    // made. The clamp below stays as the guard it was: capacity is now always sufficient, so
+    // it truncates nothing, but a slice bound is cheaper than trusting that to stay true.
+    //
+    // Growth is unbounded, deliberately and in step with the editor: a frame that wants
+    // 200 000 instances gets 25 MB of instance buffer rather than a picture missing whichever
+    // meshes the HashMap ordered last. A scene pathological enough for that to matter has a
+    // budget problem the renderer should not be papering over by dropping geometry.
+    renderer.ensure_instance_capacity(cache.instances.len());
+    if cache.draw_items.iter().any(|item| item.is_transmissive && item.camera_count > 0) {
+        renderer.ensure_behind_surface();
+    }
+
+    // Instance limiti kontrolü (Taşmaları önlemek için capaciteyi zorla)
+    let max_instances = renderer.scene.view_instance_capacity();
+    let instances_slice = if cache.instances.len() > max_instances {
+        &cache.instances[..max_instances]
+    } else {
+        &cache.instances
+    };
+
+    if !instances_slice.is_empty() {
+        // The active view's own buffer: its instances are what its camera sees.
+        renderer.queue.write_buffer(
+            renderer.scene.view_instance_buffer(),
+            0,
+            bytemuck::cast_slice(instances_slice),
+        );
+    }
+    // Last frame's models, in the same order and cut at the same length as the instances — when
+    // anything reads the velocity they make.
+    if let Some(def) = renderer.deferred.as_mut().filter(|_| velocity_read) {
+        let n = instances_slice.len().min(cache.previous.len());
+        def.motion.upload_previous(&renderer.device, &renderer.queue, &cache.previous[..n]);
+    }
+
+    // The draw list is handed over, not copied: nothing reads the cache's copy after this, and
+    // cloning it cost every item's `Arc`s and shadow chunks a second time each frame — a
+    // tenth of the collection in a scene of 14 620 one-object batches, where the previous
+    // frame's copy was then dropped item by item as well. Also returned: how many instances
+    // actually made it into the GPU buffer, so draw ranges can be clamped.
+    let uploaded = instances_slice.len() as u32;
+    (std::mem::take(&mut cache.draw_items), uploaded)
 }
 
 /// What the tests watch of a collection (the test build's `test_hooks`, at the end of this
