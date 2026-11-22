@@ -405,6 +405,22 @@ impl JointSolver {
             return;
         }
 
+        self.solve_velocity_passes(joints, entity_index_map, rigid_bodies, transforms, velocities, dt);
+        self.solve_force_joints(joints, entity_index_map, rigid_bodies, transforms, velocities, dt);
+        check_breaks(joints, entity_index_map, rigid_bodies, velocities, dt);
+    }
+
+    /// The velocity passes: the warm start's injection sweep when there is one, then `iterations`
+    /// sweeps over every joint that is whole, has both its bodies, and is not inert.
+    fn solve_velocity_passes(
+        &self,
+        joints: &mut [Joint],
+        entity_index_map: &crate::world::EntityIndexMap,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        dt: f32,
+    ) {
         // Warm start AÇIKSA iterasyonların önüne fazladan bir süpürme konur ve o süpürmede
         // her satır λ hesaplamak yerine `factor · λ_prev` enjekte eder. Ayrı süpürme olması
         // ŞART: satırın kendi yerinde enjeksiyon cebirsel bir no-op (bkz.
@@ -418,15 +434,9 @@ impl JointSolver {
                 if joint.is_broken {
                     continue;
                 }
-
-                let idx_a = entity_index_map.get(&joint.entity_a.id()).copied();
-                let idx_b = entity_index_map.get(&joint.entity_b.id()).copied();
-                let (Some(idx_a), Some(idx_b)) = (idx_a, idx_b) else {
+                let Some((idx_a, idx_b)) = joint_bodies(joint, entity_index_map) else {
                     continue;
                 };
-                if idx_a == idx_b {
-                    continue;
-                }
                 // Both ends immobile → nothing to solve. `PhysicsWorld` runs its joint-graph
                 // wake pass immediately BEFORE this call and wakes every dynamic body in a
                 // component containing a mover, so this gate is a strictly weaker test
@@ -440,77 +450,103 @@ impl JointSolver {
                 if injecting {
                     joint.scratch.set_warm_injection(self.warm_start_factor);
                 }
-
-                // Dispatch on the JointType enum (a Copy value derived from joint.data via
-                // the compile-forced From impl), not the &str — so a new JointData variant
-                // that forgot a solver case is a compile error, not a silent no-op.
-                match JointType::from(&joint.data) {
-                    JointType::Fixed => self.solve_fixed_joint(
-                        joint,
-                        rigid_bodies,
-                        transforms,
-                        velocities,
-                        idx_a,
-                        idx_b,
-                        dt,
-                    ),
-                    JointType::Hinge => self.solve_hinge_joint(
-                        joint,
-                        rigid_bodies,
-                        transforms,
-                        velocities,
-                        idx_a,
-                        idx_b,
-                        dt,
-                    ),
-                    JointType::BallSocket => self.solve_ball_socket_joint(
-                        joint,
-                        rigid_bodies,
-                        transforms,
-                        velocities,
-                        idx_a,
-                        idx_b,
-                        dt,
-                    ),
-                    JointType::Slider => self.solve_slider_joint(
-                        joint,
-                        rigid_bodies,
-                        transforms,
-                        velocities,
-                        idx_a,
-                        idx_b,
-                        dt,
-                    ),
-                    JointType::Distance => self.solve_distance_joint(
-                        joint,
-                        rigid_bodies,
-                        transforms,
-                        velocities,
-                        idx_a,
-                        idx_b,
-                        dt,
-                    ),
-                    JointType::D6 => self.solve_d6_joint(
-                        joint,
-                        rigid_bodies,
-                        transforms,
-                        velocities,
-                        idx_a,
-                        idx_b,
-                        dt,
-                    ),
-                    // Spring is force-based (depends on position, not velocity); running it
-                    // inside the iteration loop would apply the force ~iterations times.
-                    // It is applied once per step outside the loop (see below).
-                    JointType::Spring => {}
-                }
-
+                self.solve_constraint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt);
                 if injecting {
                     joint.scratch.set_warm_injection(0.0);
                 }
             }
         }
+    }
 
+    /// One sweep of `joint`'s constraint rows, by its type.
+    #[allow(clippy::too_many_arguments)]
+    fn solve_constraint(
+        &self,
+        joint: &mut Joint,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        idx_a: usize,
+        idx_b: usize,
+        dt: f32,
+    ) {
+        // Dispatch on the JointType enum (a Copy value derived from joint.data via
+        // the compile-forced From impl), not the &str — so a new JointData variant
+        // that forgot a solver case is a compile error, not a silent no-op.
+        match JointType::from(&joint.data) {
+            JointType::Fixed => self.solve_fixed_joint(
+                joint,
+                rigid_bodies,
+                transforms,
+                velocities,
+                idx_a,
+                idx_b,
+                dt,
+            ),
+            JointType::Hinge => self.solve_hinge_joint(
+                joint,
+                rigid_bodies,
+                transforms,
+                velocities,
+                idx_a,
+                idx_b,
+                dt,
+            ),
+            JointType::BallSocket => self.solve_ball_socket_joint(
+                joint,
+                rigid_bodies,
+                transforms,
+                velocities,
+                idx_a,
+                idx_b,
+                dt,
+            ),
+            JointType::Slider => self.solve_slider_joint(
+                joint,
+                rigid_bodies,
+                transforms,
+                velocities,
+                idx_a,
+                idx_b,
+                dt,
+            ),
+            JointType::Distance => self.solve_distance_joint(
+                joint,
+                rigid_bodies,
+                transforms,
+                velocities,
+                idx_a,
+                idx_b,
+                dt,
+            ),
+            JointType::D6 => self.solve_d6_joint(
+                joint,
+                rigid_bodies,
+                transforms,
+                velocities,
+                idx_a,
+                idx_b,
+                dt,
+            ),
+            // Spring is force-based (depends on position, not velocity); running it
+            // inside the iteration loop would apply the force ~iterations times.
+            // It is applied once per step outside the loop (see below).
+            JointType::Spring => {}
+        }
+    }
+
+    /// The force-based joints, once per step: a spring's force depends on position, not velocity, so
+    /// it is constant over the velocity sweeps and applied outside them — Spring always, and the
+    /// optional suspension and torsion springs of Slider and Hinge, and D6's drives.
+    fn solve_force_joints(
+        &self,
+        joints: &mut [Joint],
+        entity_index_map: &crate::world::EntityIndexMap,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        dt: f32,
+    ) {
         // ── Kuvvet-tabanlı eklemler: step başına BİR kez ──────────────────
         // Yay kuvveti pozisyona bağlı olduğundan velocity-solver iterasyonları
         // boyunca sabittir; döngü dışında tek sefer uygulanmalıdır.
@@ -518,15 +554,9 @@ impl JointSolver {
             if joint.is_broken {
                 continue;
             }
-            let (Some(idx_a), Some(idx_b)) = (
-                entity_index_map.get(&joint.entity_a.id()).copied(),
-                entity_index_map.get(&joint.entity_b.id()).copied(),
-            ) else {
+            let Some((idx_a, idx_b)) = joint_bodies(joint, entity_index_map) else {
                 continue;
             };
-            if idx_a == idx_b {
-                continue;
-            }
             // Same gate as the velocity phase, and it does real work here: a sleeping slider's
             // suspension spring would otherwise keep writing velocities that position
             // integration discards, AND keep reporting load — `solve_spring_joint`,
@@ -552,58 +582,6 @@ impl JointSolver {
                     self.solve_d6_drives(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt)
                 }
                 _ => {}
-            }
-        }
-
-        // ── Kopma kontrolü: geçiş başına BİR kez, NET tepki üzerinden ─────────
-        //
-        // Eskiden her joint türü kendi içinde, İTERASYON DÖNGÜSÜNÜN İÇİNDE kontrol
-        // ediyordu (8 ayrı yer) ve ölçtüğü şey `Σ|λᵢ|` — satır büyüklüklerinin L1
-        // toplamı — idi. Üç ayrı biçimde yanlıştı:
-        //   * eş-doğrusal OLMAYAN satırların büyüklüklerini topluyordu: Fixed'in üç dik
-        //     lineer satırında bu net tepkiyi √3'e kadar abartır, ball-socket'te
-        //     (koni + twist + swing, dik bile değiller) daha da fazla;
-        //   * `iterations` ile ölçekleniyordu — `world.joint_solver.iterations` public
-        //     bir alan, yani onu değiştirmek sahnedeki HER eşiği sessizce yeniden
-        //     ölçekliyordu;
-        //   * `fixed.rs`'teki `err_len >= 1e-4` kapısı, kusursuz sabitlenmiş bir kaynağın
-        //     lineer kontrolünü tamamen atlıyordu.
-        //
-        // Artık ölçülen şey geçişin NET impulse vektörü `‖Σ λᵢ·nᵢ‖ / dt` — yani eklemin
-        // gerçekten taşıdığı kuvvet/tork. Kuvvet-tabanlı yaylar da (Spring, slider
-        // süspansiyonu, hinge torsiyon yayı) bu toplama katkı verir; motorlar/sürücüler
-        // VERMEZ, çünkü onlar dış yük değil eyleyicidir (bkz. docs/ENGINE.md §7).
-        for joint in joints.iter_mut() {
-            if joint.is_broken {
-                continue;
-            }
-            let force = joint.scratch.impulse_lin.length() / dt;
-            let torque = joint.scratch.impulse_ang.length() / dt;
-            // A pair with both ends asleep or static was not solved: it reports the load it last
-            // carried, not the zero this pass left in its scratch — a weight that settles on a
-            // rope has not stopped weighing on it.
-            let solved = match (
-                entity_index_map.get(&joint.entity_a.id()).copied(),
-                entity_index_map.get(&joint.entity_b.id()).copied(),
-            ) {
-                (Some(a), Some(b)) => !joint_is_inert(rigid_bodies, velocities, a, b),
-                _ => false,
-            };
-            if solved {
-                joint.scratch.force = force;
-                joint.scratch.torque = torque;
-            }
-            if joint.check_break(force, torque) {
-                tracing::debug!(
-                    entity_a = ?joint.entity_a,
-                    entity_b = ?joint.entity_b,
-                    joint_type = joint.joint_type(),
-                    applied_force = force,
-                    break_force = joint.break_force,
-                    applied_torque = torque,
-                    break_torque = joint.break_torque,
-                    "Joint broke (net reaction exceeded break threshold)"
-                );
             }
         }
     }
@@ -1111,6 +1089,76 @@ impl JointSolver {
 
 // god-file Tier 3 round-2 bölmesi: per-joint çözücüler joint_types alt-modülünde
 mod joint_types;
+
+
+/// The rows of `joint`'s two bodies; `None` when either is not in the world or they are one body.
+fn joint_bodies(joint: &Joint, entity_index_map: &crate::world::EntityIndexMap) -> Option<(usize, usize)> {
+    let idx_a = entity_index_map.get(&joint.entity_a.id()).copied()?;
+    let idx_b = entity_index_map.get(&joint.entity_b.id()).copied()?;
+    (idx_a != idx_b).then_some((idx_a, idx_b))
+}
+
+/// The break check, once per pass, on the net reaction; and the force and torque each joint that
+/// was solved reports.
+fn check_breaks(
+    joints: &mut [Joint],
+    entity_index_map: &crate::world::EntityIndexMap,
+    rigid_bodies: &[RigidBody],
+    velocities: &[Velocity],
+    dt: f32,
+) {
+    // ── Kopma kontrolü: geçiş başına BİR kez, NET tepki üzerinden ─────────
+    //
+    // Eskiden her joint türü kendi içinde, İTERASYON DÖNGÜSÜNÜN İÇİNDE kontrol
+    // ediyordu (8 ayrı yer) ve ölçtüğü şey `Σ|λᵢ|` — satır büyüklüklerinin L1
+    // toplamı — idi. Üç ayrı biçimde yanlıştı:
+    //   * eş-doğrusal OLMAYAN satırların büyüklüklerini topluyordu: Fixed'in üç dik
+    //     lineer satırında bu net tepkiyi √3'e kadar abartır, ball-socket'te
+    //     (koni + twist + swing, dik bile değiller) daha da fazla;
+    //   * `iterations` ile ölçekleniyordu — `world.joint_solver.iterations` public
+    //     bir alan, yani onu değiştirmek sahnedeki HER eşiği sessizce yeniden
+    //     ölçekliyordu;
+    //   * `fixed.rs`'teki `err_len >= 1e-4` kapısı, kusursuz sabitlenmiş bir kaynağın
+    //     lineer kontrolünü tamamen atlıyordu.
+    //
+    // Artık ölçülen şey geçişin NET impulse vektörü `‖Σ λᵢ·nᵢ‖ / dt` — yani eklemin
+    // gerçekten taşıdığı kuvvet/tork. Kuvvet-tabanlı yaylar da (Spring, slider
+    // süspansiyonu, hinge torsiyon yayı) bu toplama katkı verir; motorlar/sürücüler
+    // VERMEZ, çünkü onlar dış yük değil eyleyicidir (bkz. docs/ENGINE.md §7).
+    for joint in joints.iter_mut() {
+        if joint.is_broken {
+            continue;
+        }
+        let force = joint.scratch.impulse_lin.length() / dt;
+        let torque = joint.scratch.impulse_ang.length() / dt;
+        // A pair with both ends asleep or static was not solved: it reports the load it last
+        // carried, not the zero this pass left in its scratch — a weight that settles on a
+        // rope has not stopped weighing on it.
+        let solved = match (
+            entity_index_map.get(&joint.entity_a.id()).copied(),
+            entity_index_map.get(&joint.entity_b.id()).copied(),
+        ) {
+            (Some(a), Some(b)) => !joint_is_inert(rigid_bodies, velocities, a, b),
+            _ => false,
+        };
+        if solved {
+            joint.scratch.force = force;
+            joint.scratch.torque = torque;
+        }
+        if joint.check_break(force, torque) {
+            tracing::debug!(
+                entity_a = ?joint.entity_a,
+                entity_b = ?joint.entity_b,
+                joint_type = joint.joint_type(),
+                applied_force = force,
+                break_force = joint.break_force,
+                applied_torque = torque,
+                break_torque = joint.break_torque,
+                "Joint broke (net reaction exceeded break threshold)"
+            );
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
