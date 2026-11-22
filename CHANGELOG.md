@@ -730,6 +730,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **Breaking: `gizmo_ai::navmesh` (`NavMesh`, `NavMeshConfig`, `NavMeshStats`, `NavPoly`).** A
+  second navigation structure beside `NavGrid`, used by nothing in the engine, a game or a test. It
+  was built from the same flat rasterisation of static colliders, with one Y per polygon,
+  `agent_height` and `max_slope` carried but never enforced, and paths through shared-edge
+  midpoints with no smoothing, where `NavGrid`'s are smoothed with clearance. The names that
+  called the grid's rebuild a navmesh's follow it: `ai_navmesh_rebuild_system` is
+  `ai_nav_grid_rebuild_system`, `SceneSettings::rebuild_navmesh_request` is `rebuild_nav_grid_request`,
+  and the editor's *NavMesh Kur* is *Gezinme ızgarasını kur*. A real navigation mesh (floors over
+  floors, slopes, a funnel) is a separate piece of work for the game that needs one.
 - **Breaking: `BoneAttachment::target_entity`.** The skeleton an attachment follows is the nearest
   ancestor carrying one (`systems::bone_attachment_skeleton`), which the placement already required
   it to be under. A stored handle is a run's: after the editor's ▶ or a scene load, which spawn the

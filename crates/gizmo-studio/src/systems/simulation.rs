@@ -228,7 +228,7 @@ fn sync_fight_hud(world: &World, editor_state: &mut EditorState, dt: f32) {
         editor_state.fight_hud = gizmo::editor::editor_state::FightHudState::default();
     }
 
-    // The navmesh's obstacle cells are drawn by the render pipeline into the editor's own lines
+    // The navigation grid's obstacle cells are drawn by the render pipeline into the editor's own lines
     // (`render_pipeline::furniture`), the Scene panel's alone. They were written into the game's
     // `Gizmos` here, and showed in the Game panel and in play.
 }

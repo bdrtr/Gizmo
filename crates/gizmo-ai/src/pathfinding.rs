@@ -6,8 +6,14 @@
 //! per step, 8-connected, with no smoothing or string-pulling.
 //!
 //! This is the structure the crate's own navigation systems drive: [`crate::system`] keeps a
-//! `NavGrid` resource in sync and steers agents along its paths. The polygon-based
-//! [`crate::navmesh`] is a separate structure that is built and queried independently.
+//! `NavGrid` resource in sync and steers agents along its paths.
+//!
+//! It is the engine's one navigation structure. A polygon `navmesh` module sat beside it until
+//! 2026-11-22, built from the same flat rasterisation and used by nothing: one Y per polygon,
+//! `agent_height` and `max_slope` carried but never enforced, and paths through shared-edge
+//! midpoints with no smoothing, where this grid's are smoothed with clearance. A real navigation
+//! mesh — floors over floors, slopes, a funnel — is a separate piece of work for the game that
+//! needs it.
 
 use gizmo_math::Vec3;
 use std::cmp::Ordering;
@@ -81,7 +87,7 @@ pub struct NavGrid {
     pub obstacles: HashSet<GridPos>,
     /// Rebuild request flag: `true` after [`NavGrid::new`], cleared by
     /// [`NavGrid::update_from_physics_world`]. Nothing in this type acts on it; it is polled
-    /// by this crate's `system::ai_navmesh_rebuild_system`, which runs the rebuild when set.
+    /// by this crate's `system::ai_nav_grid_rebuild_system`, which runs the rebuild when set.
     pub needs_rebuild: bool,
     /// Bumped by every change to the walkable set made through this type — see
     /// [`mark_changed`](Self::mark_changed).
@@ -353,8 +359,7 @@ impl NavGrid {
         neighbors
     }
 
-    /// Scans the static objects in the physics world and updates the navigation obstacle grid
-    /// (NavMesh)
+    /// Scans the static objects in the physics world and updates the navigation obstacle grid.
     ///
     /// Rebuilds `obstacles` from scratch out of every non-dynamic body in `physics`: each body's
     /// world AABB is rasterised into cells on all three axes, so a tall box blocks several `y`

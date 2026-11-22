@@ -2919,7 +2919,7 @@ including one made by whoever is doing the measuring.**
 
 **Small known limits (left open on purpose):**
 - Nothing raises `NavGrid::needs_rebuild` when static geometry changes; the scene's owner or the
-  editor's "Rebuild NavMesh" button raises it.
+  editor's "Gezinme ızgarasını kur" button raises it.
 - ~~`BehaviorTree` can only be built from Rust (`Box<dyn BtNode>`) and does not serialise, so a scene
   cannot carry one.~~ **Closed 2026-11-14:** a tree is data (`BtNode`: composites, decorators, a wait,
   and leaves that name an action or condition the game registers in a `BtLibrary` resource), saved
@@ -3016,7 +3016,7 @@ modellenmeli.
   olduğu yere koyuyor. `new` hâlâ orijini sıfır bırakıyor — eski davranış aynen duruyor.
 - **`fitted_to`.** Sınırlar artık statik geometriden **ölçülüyor** (dinamik gövdeler ve yarı-uzaylar
   hariç), tahmin edilmiyor; ölçülecek geometri yoksa dünya merkezli 128×128'lik yedek.
-- **`ai_frame`.** Tek giriş noktası: davranış ağaçları, ızgara garantisi, navmesh yeniden kurulumu,
+- **`ai_frame`.** Tek giriş noktası: davranış ağaçları, ızgara garantisi, ızgaranın yeniden kurulumu,
   navigasyon — bu sırayla, çünkü sıra ücretsiz değil. İki host da (studio'nun update kancası ve
   `PlayLoop`) aynı fonksiyonu çağırıyor; "iki host, tek sözleşme" bu oturumun beş kez tekrarlanan
   dersi.

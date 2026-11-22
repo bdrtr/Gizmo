@@ -1,6 +1,6 @@
 //! ECS systems that move [`NavAgent`] entities along paths found on a [`NavGrid`].
 //!
-//! Both systems are meant to run once per frame, [`ai_navmesh_rebuild_system`] before
+//! Both systems are meant to run once per frame, [`ai_nav_grid_rebuild_system`] before
 //! [`ai_navigation_system`]. Neither takes `&mut World` — both mutate resources and components
 //! through a shared `&World` reference.
 //!
@@ -30,7 +30,7 @@ use gizmo_physics_rigid::components::Velocity;
 /// and a copy of "grid, then rebuild, then steer" in each of them is a contract with two
 /// implementations — the shape that had already put the fight clock, the animation drivers and
 /// GPU physics in only one of the two paths. The order is not free: navigation reads the grid
-/// [`ai_navmesh_rebuild_system`] fills, so the reverse plans one frame of paths against a stale
+/// [`ai_nav_grid_rebuild_system`] fills, so the reverse plans one frame of paths against a stale
 /// one, and both read agents a behaviour tree may have retargeted.
 ///
 /// Takes `&mut World` because [`ensure_nav_grid`] may have to *create* the grid resource, which
@@ -40,7 +40,7 @@ use gizmo_physics_rigid::components::Velocity;
 pub fn ai_frame(world: &mut World, dt: f32) {
     crate::behavior_tree::behavior_tree_system(world, dt);
     ensure_nav_grid(world);
-    ai_navmesh_rebuild_system(world, dt);
+    ai_nav_grid_rebuild_system(world, dt);
     ai_navigation_system(world, dt);
 }
 
@@ -51,7 +51,7 @@ pub fn ai_frame(world: &mut World, dt: f32) {
 /// exist, so a script could ask for navigation, but the grid those two need had no way into a
 /// world at all. [`ai_navigation_system`] returns on its first line without one, so every
 /// `NavAgent` ever created stood still, in the editor and in exported games alike. This is the
-/// missing constructor, and it is the same call the studio's *Rebuild NavMesh* button makes.
+/// missing constructor, and it is the same call the studio's navigation-grid rebuild button makes.
 ///
 /// Only fires when at least one [`NavAgent`] exists: a scene with no agents pays a component
 /// count per frame and nothing else, and — more to the point — a grid fitted before the level's
@@ -107,7 +107,7 @@ pub fn ensure_nav_grid(world: &mut World) {
 /// `_dt` is ignored — a rebuild does not integrate anything. Run it before
 /// [`ai_navigation_system`] in the frame, otherwise agents plan one frame's worth of paths
 /// against the stale grid.
-pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
+pub fn ai_nav_grid_rebuild_system(world: &World, _dt: f32) {
     let grid_opt = world.get_resource_mut::<NavGrid>();
     let physics_opt = world.get_resource::<gizmo_physics_rigid::world::PhysicsWorld>();
 
@@ -116,7 +116,7 @@ pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
             grid.update_from_physics_world(&physics_world);
             tracing::info!(
                 obstacle_count = grid.obstacles.len(),
-                "[AI] NavMesh PhysicsWorld üzerinden yeniden oluşturuldu"
+                "[AI] NavGrid PhysicsWorld üzerinden yeniden oluşturuldu"
             );
         }
     }

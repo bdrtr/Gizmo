@@ -21,8 +21,8 @@
 //! - [`utility_ai`]: utility-based decision making with scoring curves.
 //! - [`steering`]: steering and flocking forces (seek, arrive, obstacle
 //!   avoidance, separation, cohesion, alignment) for boid-like movement.
-//! - [`pathfinding`]: A* grid pathfinding.
-//! - [`navmesh`]: navigation-mesh construction and querying.
+//! - [`pathfinding`]: A* pathfinding over a navigation grid ([`NavGrid`]), the one the engine's
+//!   navigation runs on.
 //! - [`components`] and [`system`]: ECS components and systems that wire
 //!   navigation into the engine's world.
 //!
@@ -35,7 +35,6 @@ pub mod avoidance;
 pub mod behavior_tree;
 pub mod components;
 pub mod goap;
-pub mod navmesh;
 pub mod pathfinding;
 pub mod steering;
 pub mod system;
@@ -44,7 +43,6 @@ pub mod utility_ai;
 pub use behavior_tree::{behavior_tree_system, BehaviorTree, BtLibrary, BtNode, BtStatus};
 pub use components::{NavAgent, NavAgentState};
 pub use goap::{GoapAction, GoapGoal, GoapPlanner, GoapState};
-pub use navmesh::{NavMesh, NavMeshConfig, NavMeshStats, NavPoly};
 pub use pathfinding::NavGrid; // NavGrid::new() ile constructor açık, low-level fns (GridPos, find_path) encapsulate edildi.
 pub use steering::{
     alignment, arrive, avoid_obstacles, cohesion, combined_steering, seek, separate,
@@ -59,12 +57,10 @@ pub use utility_ai::{
 /// Glob-import target for everyday use of this crate: `use gizmo_ai::prelude::*;`.
 ///
 /// Re-exports the behavior-tree, GOAP, utility-AI, steering and navigation items that agent
-/// code normally touches. It is slightly narrower than the crate root: the navmesh detail types
-/// [`crate::navmesh::NavMeshStats`] and [`crate::navmesh::NavPoly`] are omitted here but
-/// available at the root.
+/// code normally touches.
 ///
 /// Four public items are reachable only through their own modules, from neither this prelude nor
-/// the crate root: [`crate::system::ai_navmesh_rebuild_system`], [`crate::steering::clamp_force`],
+/// the crate root: [`crate::system::ai_nav_grid_rebuild_system`], [`crate::steering::clamp_force`],
 /// [`crate::pathfinding::GridPos`] and [`crate::components::NavAgentRecalcState`] — the last of
 /// which is the type of the public [`crate::components::NavAgent::recalc`] field.
 pub mod prelude {
@@ -72,6 +68,6 @@ pub mod prelude {
         ai_navigation_system, alignment, arrive, avoid_obstacles, behavior_tree_system, cohesion,
         combined_steering, seek, separate, BehaviorTree, BtLibrary, BtNode, BtStatus,
         ContextScorer, GoapAction, GoapGoal, GoapPlanner, GoapState, LinearCurve,
-        LogisticCurve, NavAgent, NavAgentState, NavGrid, NavMesh, NavMeshConfig, SteeringWeights, UtilityAction, UtilityBrain, UtilityConsideration, UtilityCurve,
+        LogisticCurve, NavAgent, NavAgentState, NavGrid, SteeringWeights, UtilityAction, UtilityBrain, UtilityConsideration, UtilityCurve,
     };
 }

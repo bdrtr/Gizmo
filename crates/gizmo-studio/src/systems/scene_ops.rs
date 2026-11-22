@@ -25,8 +25,8 @@ pub fn handle_scene_operations(
     if let Some((ent_id, comp_name)) = editor_state.remove_component_request.take() {
         remove_requested_component(world, editor_state, ent_id, comp_name);
     }
-    if editor_state.scene.rebuild_navmesh_request {
-        rebuild_navmesh(world, editor_state);
+    if editor_state.scene.rebuild_nav_grid_request {
+        rebuild_nav_grid(world, editor_state);
     }
     if !editor_state.despawn_requests.is_empty() {
         despawn_requested(world, editor_state);
@@ -225,9 +225,9 @@ fn remove_requested_component(world: &mut World, editor_state: &mut EditorState,
     }
 }
 
-/// The navigation mesh, built again from the scene (`SceneSettings::rebuild_navmesh_request`).
-fn rebuild_navmesh(world: &mut World, editor_state: &mut EditorState) {
-    editor_state.scene.rebuild_navmesh_request = false;
+/// The navigation grid, built again from the scene (`SceneSettings::rebuild_nav_grid_request`).
+fn rebuild_nav_grid(world: &mut World, editor_state: &mut EditorState) {
+    editor_state.scene.rebuild_nav_grid_request = false;
 
     // Tetiklendiğinde gizmo-ai içindeki grid'in needs_rebuild bayrağını true yaparız.
     //
@@ -242,7 +242,7 @@ fn rebuild_navmesh(world: &mut World, editor_state: &mut EditorState) {
         })
         .is_some();
     if existing {
-        editor_state.log_info("🤖 NavMesh yeniden oluşturulması talep edildi...");
+        editor_state.log_info("🤖 Gezinme ızgarasının yeniden kurulması istendi...");
     } else {
         let grid = match world.get_resource::<gizmo::physics::world::PhysicsWorld>() {
             Some(physics) => gizmo::ai::pathfinding::NavGrid::fitted_to(

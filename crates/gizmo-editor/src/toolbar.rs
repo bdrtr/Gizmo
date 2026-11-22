@@ -16,7 +16,7 @@ pub fn draw_toolbar(ui: &mut egui::Ui, state: &mut EditorState) {
     // a tool row (mode buttons, then labelled chips for the modal settings).
     //
     // Everything that used to live in the single 36 px row is still reachable — the file actions,
-    // the layout commands, the profiler, the settings, the navmesh build and the build target all
+    // the layout commands, the profiler, the settings, the navigation grid build and the build target all
     // moved into the menus rather than disappearing.
     draw_menu_bar(ui, state);
     draw_tool_row(ui, state);
@@ -64,14 +64,14 @@ fn draw_menu_bar(ui: &mut egui::Ui, state: &mut EditorState) {
 
                 ui.menu_button("Entity", |ui| {
                     if ui
-                        .button("NavMesh Kur")
+                        .button("Gezinme ızgarasını kur")
                         .on_hover_text(
                             "Fiziksel dünyadaki statik objelere göre Yapay Zeka navigasyon \
-                             ızgarasını (NavMesh) yeniden oluşturur.",
+                             ızgarasını (NavGrid) yeniden oluşturur.",
                         )
                         .clicked()
                     {
-                        state.scene.rebuild_navmesh_request = true;
+                        state.scene.rebuild_nav_grid_request = true;
                         ui.close();
                     }
                 });

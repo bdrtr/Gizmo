@@ -361,7 +361,7 @@ pub struct SceneState {
     /// "Empty the scene", keeping the editor's own entities.
     pub clear_request: bool,
     /// "Rebuild the navigation mesh from what is in the scene now."
-    pub rebuild_navmesh_request: bool,
+    pub rebuild_nav_grid_request: bool,
     /// Open the native save dialog — the scene has no path yet, or Save As was used.
     pub request_save_dialog: bool,
     /// A load waiting on "you have unsaved changes, continue?", carrying the path it would load.
