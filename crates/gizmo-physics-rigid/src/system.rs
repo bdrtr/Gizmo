@@ -376,11 +376,13 @@ pub fn physics_step_system(world: &World, dt: f32) {
         mark_written_since(world, &mut sync);
     }
 
-    // 3. Bring the bodies over that need it (`gather_bodies`), and the still ones that have no
-    // `Velocity` (`gather_still_bodies`).
+    // 3. Bring the bodies over that need it (`gather_bodies`), the still ones that have no
+    // `Velocity` (`gather_still_bodies`), and the colliders with no body at all, which are static
+    // geometry (`gather_static_colliders`).
     let mut brought = BroughtOver::default();
     gather_bodies(world, &physics_world, &mut sync, dt, &mut brought);
     gather_still_bodies(world, &physics_world, &mut sync, &mut brought);
+    gather_static_colliders(world, &physics_world, &mut sync, &mut brought);
 
     // 4. Step Simulation
     // An id whose entity was despawned and handed to a new one since the last step is a new
@@ -645,6 +647,113 @@ fn gather_still_bodies(world: &World, physics_world: &PhysicsWorld, sync: &mut E
             tracing::warn!(entity = %id, "[Physics] a moving RigidBody has no Velocity and there is no CommandQueue to add one — it is not simulated");
         }
     }
+}
+
+/// 3c. Colliders without a `RigidBody`: static geometry.
+///
+/// A collider on its own is a wall, a floor, a level's mesh — static, as in every engine with this
+/// split (Unity's static collider, Rapier's collider with no parent body). The editor's ➕ Collider
+/// adds just one, the collider overlay drew them as static, and the character controller has always
+/// stood on them, reading them from the ECS. This world left them out: a ball dropped on a floor
+/// that was only a collider fell through it while a character walked on it, and a car's suspension
+/// rays, which go through this world's broadphase, found it on their first step and never again.
+///
+/// Two kinds of bare collider are not static geometry and stay out: one under a body is a part of
+/// that body's compound (`body_collider`), and one with a `Velocity` is moved by something else —
+/// a character controller. A collider under a parent that is no body (a group in the editor) is
+/// placed at its world pose, since its `Transform` is local; it is brought over every step, as a
+/// body with children is, because what moves it is written on its ancestors.
+///
+/// Appended after every body, so a scene with no bare collider steps exactly as before.
+fn gather_static_colliders(world: &World, physics_world: &PhysicsWorld, sync: &mut EcsSync, brought: &mut BroughtOver) {
+    use gizmo_core::query::Without;
+    let parents = world.query::<&gizmo_core::component::Parent>();
+    let bodies = world.query::<&RigidBody>();
+    let trans_query = world.query::<&Transform>();
+    let parts = compound_parts(world);
+    let query = world.query_filtered::<(
+        Entity,
+        &Transform,
+        &Collider,
+        Option<&gizmo_physics_core::components::PhysicsMaterial>,
+        Option<&gizmo_core::component::Parent>,
+    ), (Without<RigidBody>, Without<Velocity>, Without<gizmo_core::pool::Pooled>, Without<gizmo_core::component::IsDeleted>)>();
+    for (id, transform, col, material, parent) in query.iter() {
+        if parts.contains(&id.id()) {
+            continue;
+        }
+        let pose = match parent {
+            None => *transform,
+            Some(_) => match world_pose_outside_bodies(id, transform, &parents, &bodies, &trans_query) {
+                Some(pose) => pose,
+                None => continue,
+            },
+        };
+        let rb = RigidBody::new_static();
+        let mut collider = col.clone();
+        collider.material = col.material_with(material);
+        if !sync.needs(id.id(), material.is_some(), None, parent.is_some()) {
+            if cfg!(debug_assertions) {
+                assert_clean(physics_world, id, &rb, &pose, &Velocity::default(), &collider);
+            }
+            continue;
+        }
+        brought.bodies.push((BodyHandle::from_id(id.id()), rb, pose, Velocity::default(), collider));
+        brought.entities.push(id);
+    }
+}
+
+/// The ids under a body's `Children`, at any depth: the parts `body_collider` builds its compound
+/// from. Read from the `Children` side because that is the side the compound walk follows — a
+/// child listed there without a `Parent` of its own is still a part.
+fn compound_parts(world: &World) -> std::collections::HashSet<u32> {
+    let children_query = world.query::<&gizmo_core::component::Children>();
+    let mut parts = std::collections::HashSet::new();
+    let roots = world.query_filtered::<(Entity, &gizmo_core::component::Children), gizmo_core::query::With<RigidBody>>();
+    for (root, children) in roots.iter() {
+        let mut stack: Vec<Entity> = children.0.clone();
+        while let Some(e) = stack.pop() {
+            if e == root || !parts.insert(e.id()) {
+                continue;
+            }
+            if let Some(grand) = children_query.get(e) {
+                stack.extend(grand.0.iter().copied());
+            }
+        }
+    }
+    parts
+}
+
+/// The world pose of `id`, at `local` under its `Parent` chain — or `None` when an ancestor is a
+/// `RigidBody`, whose compound the collider is part of. The ancestors' rotations and scales carry
+/// the offsets, as the render's propagation does; the chain is followed 32 links at most, so a
+/// `Parent` loop ends.
+fn world_pose_outside_bodies(
+    id: Entity,
+    local: &Transform,
+    parents: &gizmo_core::query::Query<'_, &gizmo_core::component::Parent>,
+    bodies: &gizmo_core::query::Query<'_, &RigidBody>,
+    trans_query: &gizmo_core::query::Query<'_, &Transform>,
+) -> Option<Transform> {
+    let mut chain = Vec::new();
+    let mut at = id;
+    while let Some(parent) = parents.get(at) {
+        let up = parent.0;
+        if up == id || chain.len() >= 32 {
+            break;
+        }
+        if bodies.get(up).is_some() {
+            return None;
+        }
+        chain.push(trans_query.get(up).copied().unwrap_or_default());
+        at = up;
+    }
+    let mut pose = Relative { position: gizmo_math::Vec3::ZERO, rotation: gizmo_math::Quat::IDENTITY, scale: gizmo_math::Vec3::ONE };
+    for ancestor in chain.iter().rev() {
+        pose = pose.then(ancestor);
+    }
+    let pose = pose.then(local);
+    Some(Transform::new(pose.position).with_rotation(pose.rotation).with_scale(local.scale))
 }
 
 /// The stepped rows of the bodies brought over, for the write-back; a driven body lands on its

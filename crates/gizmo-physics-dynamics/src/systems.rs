@@ -62,8 +62,8 @@ use crate::vehicle::{
 /// the one step before the physics world has been populated — it queries the broadphase
 /// instead. [`character_controller_system`] still calls it every step: the KCC is the twin of
 /// the same defect and is deliberately left for a follow-up, because it needs a *capsule
-/// sweep* rather than a ray and because it is routinely run against `Collider`-only entities
-/// that never enter a `PhysicsWorld` (see this module's tests).
+/// sweep* rather than a ray, and because it is run without a `PhysicsWorld` at all (see this
+/// module's tests).
 fn gather_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collider)> {
     let mut colliders = Vec::new();
     // The same material rule as the rigid step (`Collider::material_with`), so the first-frame
@@ -99,14 +99,14 @@ fn gather_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collider)> {
 ///
 /// The set of surfaces a wheel can rest on therefore changed:
 ///
-/// * **A wheel now rests only on bodies the rigid pipeline simulates** — entities carrying
-///   `RigidBody` + `Transform` + `Velocity` + `Collider` and neither `Pooled` nor `IsDeleted`,
-///   because that is exactly what `physics_step_system` syncs into the [`PhysicsWorld`]. A
-///   bare `Collider` + `Transform` entity (no `RigidBody`) is no longer drivable. It was
-///   before — while being intangible to the chassis, which collided with nothing there. Give
-///   level geometry a `RigidBody::new_static()` and a `Velocity`, as every vehicle demo in
-///   this repo already does, or call [`update_vehicle`](crate::vehicle::update_vehicle)
-///   directly with your own list.
+/// * **A wheel rests only on bodies the rigid pipeline simulates** — what `physics_step_system`
+///   syncs into the [`PhysicsWorld`]: entities with a `RigidBody`, `Transform` and `Collider`,
+///   and the colliders with no `RigidBody` at all, which are static geometry (neither `Pooled`
+///   nor `IsDeleted`). So the wheels and the chassis agree about every surface. They did not
+///   while a bare `Collider` + `Transform` was left out of that world: the chassis fell through
+///   one, and the wheels, which read it from the ECS until this path went through the
+///   broadphase, parked on it. Anything else — a surface of your own — goes through
+///   [`update_vehicle`](crate::vehicle::update_vehicle) with your own list.
 /// * **A body becomes visible to the wheels one step after it is spawned**, when the next
 ///   `physics_step_system` syncs it. Before the world's very first step the `PhysicsWorld`
 ///   holds no bodies at all, and this system falls back to the old ECS scan for that step, so
@@ -119,9 +119,8 @@ fn gather_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collider)> {
 ///   wheels next frame. The old ECS scan read those writes immediately. At 120 Hz a platform
 ///   moving 10 m/s is 8 cm of lag; if that matters, step physics before the controller or drive
 ///   the mover through the solver.
-/// * **A body must be in the ECS to stay in the world.** `physics_step_system` calls
-///   `sync_bodies` with the ECS `RigidBody`+`Transform`+`Velocity`+`Collider` set and *deletes*
-///   every body absent from it — so a surface pushed straight into the world with
+/// * **A body must be in the ECS to stay in the world.** `physics_step_system` syncs the ECS's
+///   bodies and static colliders and *deletes* every body absent from them — so a surface pushed straight into the world with
 ///   `PhysicsWorld::add_body`, without the matching components, is evicted on the first step
 ///   and is then invisible to the wheels as well as to the solver.
 /// * **A wheel sees the collider the *solver* sees**, which is the entity's own shape merged
@@ -1064,15 +1063,15 @@ mod tests {
         e
     }
 
-    /// **The regression test for this change.** The wheel rays go through the
-    /// `PhysicsWorld` broadphase, so they see the bodies the solver simulates — and *only*
-    /// those. A `Collider`-only floor is not one of them.
+    /// The wheel rays go through the `PhysicsWorld` broadphase, so they see what the solver
+    /// simulates — and a floor that is only a `Collider` is simulated, as static geometry.
     ///
-    /// Red before the fix: the old system cloned every `(Transform, Collider)` entity in the
-    /// ECS into a slice and scanned it, so all four wheels parked happily on a floor the
-    /// chassis would have fallen straight through.
+    /// The wheels and the chassis agree. They did not: the old system cloned every
+    /// `(Transform, Collider)` entity in the ECS for the wheels, which parked on a bare floor
+    /// the chassis fell straight through; then the wheels went through the broadphase, which
+    /// held no bare collider, and this test pinned them off it. The solver now holds it.
     #[test]
-    fn wheels_ignore_ecs_only_colliders_the_solver_never_sees() {
+    fn wheels_rest_on_a_collider_only_floor_the_solver_simulates() {
         let mut world = World::new();
         world.insert_resource(PhysicsWorld::new());
         spawn_ecs_only_ground(&mut world);
@@ -1080,21 +1079,21 @@ mod tests {
 
         let dt = 1.0 / 120.0;
         // One step so the physics world is populated (and so the pre-first-step fallback is
-        // not what answers). Only the chassis is a rigid body, so only it gets synced.
+        // not what answers): the chassis, and the floor as static geometry.
         physics_step_system(&world, dt);
         assert_eq!(
             world.get_resource::<PhysicsWorld>().unwrap().entities.len(),
-            1,
-            "only the chassis has a RigidBody, so only it reaches the PhysicsWorld"
+            2,
+            "the chassis and the Collider-only floor reach the PhysicsWorld"
         );
 
         vehicle_controller_system(&world, dt);
 
         assert_eq!(
             grounded_flags(&world, car),
-            vec![false; 4],
-            "a Collider-only floor is invisible to the solver, so it must be invisible to \
-             the wheels too — see vehicle_controller_system's docs"
+            vec![true; 4],
+            "the solver holds the Collider-only floor, so the wheels rest on it too — see \
+             vehicle_controller_system's docs"
         );
     }
 

@@ -40,10 +40,6 @@ pub fn setup_studio_scene(
             gizmo::renderer::components::LightRole::Sun,
         ),
     );
-    world.add_component(
-        light,
-        Collider::box_collider(gizmo::math::Vec3::new(0.5, 0.5, 0.5)),
-    );
 
     // Light Icon (Kesişen prizmalar ile yıldız/güneş imgesi)
     let icon1 = world.spawn();
