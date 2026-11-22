@@ -159,14 +159,15 @@ fn the_script_command_counts_in_prose_match_the_enum() {
 /// itself is handed back, and the host's chain takes eight of those.
 ///
 /// Checked against the code, not against itself: the applied count is the number of variants
-/// matched inside `flush_commands`, and the returned count is the rest.
+/// matched inside `apply_command` (which `flush_commands` runs for each queued command), and the
+/// returned count is the rest.
 #[test]
 fn the_applied_and_returned_split_matches_flush_commands() {
     let root = workspace_root();
     let total = script_command_variants(&root).len();
 
     let engine_rs = read_normalised(root.join("crates/gizmo-scripting/src/engine.rs"), "engine.rs");
-    let body = fn_body(&engine_rs, "pub fn flush_commands");
+    let body = fn_body(&engine_rs, "fn apply_command(");
     let applied = script_command_variants(&root)
         .iter()
         .filter(|v| body.contains(&format!("ScriptCommand::{v}")))
@@ -180,7 +181,7 @@ fn the_applied_and_returned_split_matches_flush_commands() {
     assert_eq!(
         claimed_applied, applied,
         "play.rs says {claimed_applied} variants are applied inside the scripting crate; \
-         `flush_commands` matches {applied}"
+         `apply_command` matches {applied}"
     );
     assert_eq!(
         claimed_returned,
