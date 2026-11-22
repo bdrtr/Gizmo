@@ -1039,6 +1039,26 @@ fn apply_force_at_point(
 mod tests {
     use super::*;
 
+    /// The axle of a wheel at `z` along the body. The vehicle drives along its local −Z (see
+    /// `update_vehicle`'s axes), so the front axle is at negative `z`.
+    ///
+    /// The harnesses here built every car the other way round: front axle at `+z`, behind the
+    /// centre of mass, and `is_left` on the right. Every test of a "front-driven" or steered car
+    /// was testing a car that steered with its back wheels. The engine's own cars
+    /// (`gizmo-app`'s gameplay, `simple`, `systems`) put the front at `z = −1.4`.
+    fn axle_at(z: f32) -> Axle {
+        if z < 0.0 {
+            Axle::Front
+        } else {
+            Axle::Rear
+        }
+    }
+
+    /// Is a wheel at `x` across the body on the left? Right is local +X.
+    fn is_left_at(x: f32) -> bool {
+        x < 0.0
+    }
+
     /// Minimal headless harness: build a 4-wheel VehicleController on flat ground and
     /// drive `update_vehicle` with a hand-rolled semi-implicit integrator (the ECS
     /// rigid integrator is not a dep here). Returns the final state after `steps`.
@@ -1059,17 +1079,12 @@ mod tests {
             rb.center_of_mass = Vec3::new(0.0, 0.2, 0.0);
             let t = Transform::new(Vec3::new(0.0, 1.0, 0.0)); // start above ground
             let mut vc = VehicleController::new();
-            for (x, z, front) in [
-                (0.7_f32, 1.0_f32, true),
-                (-0.7, 1.0, true),
-                (0.7, -1.0, false),
-                (-0.7, -1.0, false),
-            ] {
+            for (x, z) in [(0.7_f32, 1.0_f32), (-0.7, 1.0), (0.7, -1.0), (-0.7, -1.0)] {
                 vc.add_wheel(Wheel {
                     attachment_local_pos: Vec3::new(x, 0.2, z),
                     radius: 0.3,
-                    axle_type: if front { Axle::Front } else { Axle::Rear },
-                    is_left: x > 0.0,
+                    axle_type: axle_at(z),
+                    is_left: is_left_at(x),
                     suspension_rest_length: 0.15,
                     suspension_max_travel: 0.15,
                     suspension_stiffness: 40000.0,
@@ -1194,6 +1209,28 @@ mod tests {
         }
     }
 
+    /// **The harness's car is a car: it steers with its front wheels and turns the way it is
+    /// steered.** Steered right at speed, it goes right (+X, a clockwise yaw from above), the
+    /// steered wheels are ahead of the centre of mass, and the inner — right — one steers more.
+    /// The harnesses built every car facing backwards, so every steering test here was testing a
+    /// car that steered with its rear wheels and turned left when steered right.
+    #[test]
+    fn the_harness_car_steers_with_its_front_wheels_and_turns_the_way_it_is_steered() {
+        let settled = sim_vehicle(0.0, 0.0, 120, None);
+        let rolling = sim_vehicle(1.0, 0.0, 120, Some(settled));
+        let (_, t, v, vc) = sim_vehicle(0.3, 0.5, 60, Some(rolling));
+        assert!(t.position.x > 0.5, "steered right, the car went to x {}", t.position.x);
+        assert!(v.angular.y < 0.0, "steered right, the yaw rate is {}", v.angular.y);
+        let steered: Vec<&Wheel> = vc.wheels.iter().filter(|w| w.steering_angle != 0.0).collect();
+        assert_eq!(steered.len(), 2);
+        for w in &steered {
+            assert!(w.attachment_local_pos.z < 0.0, "a steered wheel at z {} is behind the centre", w.attachment_local_pos.z);
+        }
+        let angle = |left: bool| steered.iter().find(|w| w.is_left == left).map(|w| w.steering_angle.abs());
+        let (inner, outer) = (angle(false).expect("a right front wheel"), angle(true).expect("a left front wheel"));
+        assert!(inner > outer, "turning right, the right wheel is the inner one: {inner} against {outer}");
+    }
+
     /// **Left and right turns are mirror images.** A symmetric car at speed, steered half left and
     /// half right for two seconds, must end mirrored: the same lateral offset with the opposite
     /// sign, the same yaw rate negated. With the wheels' forces applied one after another (each
@@ -1306,17 +1343,12 @@ mod tests {
         rb.center_of_mass = Vec3::new(0.0, 0.2, 0.0);
         let t = Transform::new(Vec3::new(0.0, 100.0, 0.0)); // havada
         let mut vc = VehicleController::new();
-        for (x, z, front) in [
-            (0.7_f32, 1.0_f32, true),
-            (-0.7, 1.0, true),
-            (0.7, -1.0, false),
-            (-0.7, -1.0, false),
-        ] {
+        for (x, z) in [(0.7_f32, 1.0_f32), (-0.7, 1.0), (0.7, -1.0), (-0.7, -1.0)] {
             vc.add_wheel(Wheel {
                 attachment_local_pos: Vec3::new(x, 0.2, z),
                 radius: 0.3,
-                axle_type: if front { Axle::Front } else { Axle::Rear },
-                is_left: x > 0.0,
+                axle_type: axle_at(z),
+                is_left: is_left_at(x),
                 suspension_rest_length: 0.15,
                 suspension_max_travel: 0.15,
                 ..Default::default()
@@ -1715,12 +1747,12 @@ mod tests {
         rb.calculate_box_inertia(1.4, 0.7, 2.4);
         rb.wake_up();
         let mut vc = VehicleController::new();
-        for (x, z, front) in [(0.7_f32, 1.2_f32, true), (-0.7, 1.2, true), (0.7, -1.2, false), (-0.7, -1.2, false)] {
+        for (x, z) in [(0.7_f32, 1.2_f32), (-0.7, 1.2), (0.7, -1.2), (-0.7, -1.2)] {
             vc.add_wheel(Wheel {
                 attachment_local_pos: Vec3::new(x, 0.2, z),
                 radius: 0.3,
-                axle_type: if front { Axle::Front } else { Axle::Rear },
-                is_left: x > 0.0,
+                axle_type: axle_at(z),
+                is_left: is_left_at(x),
                 suspension_rest_length: 0.2,
                 suspension_max_travel: 0.15,
                 suspension_stiffness: 40000.0,
@@ -1945,12 +1977,11 @@ mod tests {
         let mut vc = VehicleController::new();
         vc.drivetrain = drivetrain;
         for (x, z) in [(0.7_f32, 1.0_f32), (-0.7, 1.0), (0.7, -1.0), (-0.7, -1.0)] {
-            let front = all_front || z > 0.0;
             vc.add_wheel(Wheel {
                 attachment_local_pos: Vec3::new(x, 0.2, z),
                 radius: 0.3,
-                axle_type: if front { Axle::Front } else { Axle::Rear },
-                is_left: x > 0.0,
+                axle_type: if all_front { Axle::Front } else { axle_at(z) },
+                is_left: is_left_at(x),
                 suspension_rest_length: 0.15,
                 suspension_max_travel: 0.15,
                 suspension_stiffness: 40000.0,
