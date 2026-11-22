@@ -274,6 +274,103 @@ pub fn update_vehicle_with_query(
     let forward_speed = v_com.dot(forward);
     vehicle.current_speed_kmh = forward_speed * 3.6;
 
+    // --------------------------------------------------------
+    // 1. GÜÇ AKTARMA ORGANı (1.5 otomatik vites dahil) — `drive_for_step`
+    // --------------------------------------------------------
+    let drive = drive_for_step(vehicle, dt);
+
+    // --------------------------------------------------------
+    // 2. AERODİNAMİK (fiziksel — ½ρCdAv²) — `apply_aerodynamics`
+    // --------------------------------------------------------
+    let com = vehicle_transform.position
+        + vehicle_transform
+            .rotation
+            .mul_vec3(vehicle_rb.center_of_mass);
+    let ge_factor = apply_aerodynamics(vehicle, vehicle_rb, vehicle_transform, v_com, up, com, &mut kick, dt);
+
+    // --------------------------------------------------------
+    // 3. ACKERMANN DİREKSİYON
+    // --------------------------------------------------------
+    // The input's positive is right (what a stick or the D key gives); the geometry below works
+    // in yaw, where positive turns the wheels left about +Y — hence the sign.
+    let steer_angle = -vehicle.steering_input * vehicle.max_steering_angle;
+    let turn_radius = if steer_angle.abs() > 0.01 {
+        vehicle.tuning.wheelbase / steer_angle.tan()
+    } else {
+        f32::MAX
+    };
+
+    // --------------------------------------------------------
+    // 4. TEKERLEK DÖNGÜSÜ — 1. geçiş: Raycast + Süspansiyon setup — `place_wheels`
+    // --------------------------------------------------------
+    place_wheels(vehicle, vehicle_entity, vehicle_transform, ground, &drive, steer_angle, turn_radius);
+
+    // --------------------------------------------------------
+    // 5. Anti-roll bar farkları — `anti_roll_diffs`
+    // --------------------------------------------------------
+    let (front_diff, rear_diff) = anti_roll_diffs(&vehicle.wheels);
+
+    // --------------------------------------------------------
+    // 6. TEKERLEK DÖNGÜSÜ — 2. geçiş: Kuvvetler + Tekerlek integrasyon
+    // --------------------------------------------------------
+    // How many contacts share stopping the body (the tyre-force limit below); the rays above have
+    // set `is_grounded`.
+    let step = WheelStep {
+        vehicle_entity,
+        vehicle_transform,
+        vehicle_vel: *vehicle_vel,
+        up,
+        forward,
+        right,
+        com,
+        front_diff,
+        rear_diff,
+        tuning: &vehicle.tuning,
+        brake_input: vehicle.brake_input,
+        drive: &drive,
+        // Motor/volan ataleti — sürülen tekerlekte gear² ile yansır (`step_wheel`).
+        flywheel_inertia: vehicle.flywheel_inertia,
+        // How many contacts share stopping the body (the tyre-force limit); the rays above have
+        // set `is_grounded`.
+        grounded_share: vehicle.wheels.iter().filter(|w| w.is_grounded).count().max(1) as f32,
+        weather_grip,
+        dt,
+    };
+    for wheel in &mut vehicle.wheels {
+        step_wheel(wheel, &step, vehicle_rb, &mut kick);
+    }
+
+    // Per-step özet (yalnız trace etkinken alanlar hesaplanır — tracing makro seviye-kapılıdır).
+    vehicle_vel.linear += kick.linear;
+    vehicle_vel.angular += kick.angular;
+
+    tracing::trace!(
+        entity = ?vehicle_entity,
+        speed_kmh = vehicle.current_speed_kmh,
+        engine_rpm = vehicle.engine_rpm,
+        gear = vehicle.current_gear,
+        grounded_wheels = vehicle.wheels.iter().filter(|w| w.is_grounded).count(),
+        wheel_count = vehicle.wheels.len(),
+        ge_factor,
+        "[Vehicle] step complete"
+    );
+}
+
+/// What the drivetrain hands the wheels for one step.
+struct Drive {
+    drivetrain: Drivetrain,
+    /// The gear's ratio times the final drive's (negative in reverse).
+    total_ratio: f32,
+    /// How many wheels are driven, at least 1: they share the torque, the engine brake and the
+    /// reflected flywheel inertia.
+    driven_count_f: f32,
+    drive_torque_total: f32,
+    engine_brake_at_wheels: f32,
+}
+
+/// The drivetrain for one step (section 1): the engine's revs from the driven wheels, the torque
+/// and the engine brake at the wheels, then the automatic gearbox's tick.
+fn drive_for_step(vehicle: &mut VehicleController, dt: f32) -> Drive {
     let drivetrain = vehicle.drivetrain;
 
     // --------------------------------------------------------
@@ -317,10 +414,28 @@ pub fn update_vehicle_with_query(
     // 1.5 Otomatik vites
     // --------------------------------------------------------
     vehicle.auto_shift_tick(dt);
+    Drive {
+        drivetrain,
+        total_ratio,
+        driven_count_f: driven_count.max(1.0),
+        drive_torque_total,
+        engine_brake_at_wheels,
+    }
+}
 
-    // --------------------------------------------------------
-    // 2. AERODİNAMİK (fiziksel — ½ρCdAv²)
-    // --------------------------------------------------------
+/// The aerodynamic drag and lift (section 2: `½ρCdAv²`, with ground effect from the suspension's
+/// compression), applied at the centre of pressure into `kick`. Returns the ground-effect factor.
+#[allow(clippy::too_many_arguments)]
+fn apply_aerodynamics(
+    vehicle: &VehicleController,
+    vehicle_rb: &RigidBody,
+    vehicle_transform: &Transform,
+    v_com: Vec3,
+    up: Vec3,
+    com: Vec3,
+    kick: &mut Velocity,
+    dt: f32,
+) -> f32 {
     const AIR_DENSITY: f32 = 1.225; // kg/m³
     let spd = v_com.length();
     let spd_sq = spd * spd;
@@ -363,37 +478,30 @@ pub fn update_vehicle_with_query(
     // Aero kuvvetini basınç merkezinden uygula (tork üretir)
     let cop_world =
         vehicle_transform.position + vehicle_transform.rotation.mul_vec3(a.center_of_pressure);
-    let com = vehicle_transform.position
-        + vehicle_transform
-            .rotation
-            .mul_vec3(vehicle_rb.center_of_mass);
     apply_force_at_point(
         vehicle_rb,
-        &mut kick,
+        kick,
         com,
         vehicle_transform.rotation,
         drag_force + lift_force,
         cop_world,
         dt,
     );
+    ge_factor
+}
 
-    // --------------------------------------------------------
-    // 3. ACKERMANN DİREKSİYON
-    // --------------------------------------------------------
-    // The input's positive is right (what a stick or the D key gives); the geometry below works
-    // in yaw, where positive turns the wheels left about +Y — hence the sign.
-    let steer_angle = -vehicle.steering_input * vehicle.max_steering_angle;
-    let turn_radius = if steer_angle.abs() > 0.01 {
-        vehicle.tuning.wheelbase / steer_angle.tan()
-    } else {
-        f32::MAX
-    };
-
-    // --------------------------------------------------------
-    // 4. TEKERLEK DÖNGÜSÜ — 1. geçiş: Raycast + Süspansiyon setup
-    // --------------------------------------------------------
-    let driven_count_f = driven_count.max(1.0);
-
+/// Each wheel's ray to the ground and its suspension's length, its Ackermann angle, and its share
+/// of the drive torque and the brake (section 4).
+fn place_wheels(
+    vehicle: &mut VehicleController,
+    vehicle_entity: BodyHandle,
+    vehicle_transform: &Transform,
+    ground: &dyn WheelGroundQuery,
+    drive: &Drive,
+    steer_angle: f32,
+    turn_radius: f32,
+) {
+    let Drive { drivetrain, driven_count_f, drive_torque_total, engine_brake_at_wheels, .. } = *drive;
     for wheel in &mut vehicle.wheels {
         let attach_world = vehicle_transform.position
             + vehicle_transform
@@ -480,12 +588,13 @@ pub fn update_vehicle_with_query(
         wheel.brake_torque = vehicle.brake_input * vehicle.tuning.max_brake_torque * bias
             + if drivetrain.drives(&wheel.axle_type) { engine_brake_at_wheels / driven_count_f } else { 0.0 };
     }
+}
 
-    // --------------------------------------------------------
-    // 5. Anti-roll bar farkları
-    // --------------------------------------------------------
+/// The anti-roll bars' inputs (section 5): each axle's difference in suspension travel, left minus
+/// right.
+fn anti_roll_diffs(wheels: &[Wheel]) -> (f32, f32) {
     let (mut fl, mut fr, mut rl, mut rr) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-    for w in &vehicle.wheels {
+    for w in wheels {
         let travel = w.suspension_rest_length - w.suspension_length;
         match (&w.axle_type, w.is_left) {
             (Axle::Front, true) => fl = travel,
@@ -496,365 +605,412 @@ pub fn update_vehicle_with_query(
     }
     let front_diff = fl - fr;
     let rear_diff = rl - rr;
+    (front_diff, rear_diff)
+}
 
-    // --------------------------------------------------------
-    // 6. TEKERLEK DÖNGÜSÜ — 2. geçiş: Kuvvetler + Tekerlek integrasyon
-    // --------------------------------------------------------
-    // How many contacts share stopping the body (the tyre-force limit below); the rays above have
-    // set `is_grounded`.
-    let grounded_share = vehicle.wheels.iter().filter(|w| w.is_grounded).count().max(1) as f32;
+/// What every wheel of one step reads: the body as the step began, its axes and centre of mass,
+/// the anti-roll differences, the tuning and the driver's brake, the drivetrain's share-out.
+struct WheelStep<'a> {
+    vehicle_entity: BodyHandle,
+    vehicle_transform: &'a Transform,
+    /// The body's velocity at the start of the step: every wheel reads this one (Jacobi).
+    vehicle_vel: Velocity,
+    up: Vec3,
+    forward: Vec3,
+    right: Vec3,
+    com: Vec3,
+    front_diff: f32,
+    rear_diff: f32,
+    tuning: &'a VehicleTuning,
+    brake_input: f32,
+    drive: &'a Drive,
+    flywheel_inertia: f32,
+    grounded_share: f32,
+    weather_grip: f32,
+    dt: f32,
+}
 
-    // Motor/volan ataleti — sürülen tekerlekte gear² ile yansır (aşağıda). Döngü
-    // içinde `vehicle`'a erişilemez (wheels mutable borrow), o yüzden burada yakala.
-    let flywheel_inertia = vehicle.flywheel_inertia;
-
-    for wheel in &mut vehicle.wheels {
-        let attach_world = vehicle_transform.position
-            + vehicle_transform
-                .rotation
-                .mul_vec3(wheel.attachment_local_pos);
-        let ray_dir = vehicle_transform
+/// One wheel's step (section 6): its suspension and tyre forces into `kick` (6.1, 6.2), its spin
+/// (6.3), the traction control and the brake's lock, and the airborne wheel's own rules.
+fn step_wheel(wheel: &mut Wheel, step: &WheelStep, vehicle_rb: &RigidBody, kick: &mut Velocity) {
+    let WheelStep {
+        vehicle_transform,
+        brake_input,
+        drive,
+        flywheel_inertia,
+        dt,
+        ..
+    } = *step;
+    let Drive { drivetrain, total_ratio, driven_count_f, .. } = *drive;
+    let attach_world = vehicle_transform.position
+        + vehicle_transform
             .rotation
-            .mul_vec3(wheel.direction_local)
-            .normalize();
+            .mul_vec3(wheel.attachment_local_pos);
+    let ray_dir = vehicle_transform
+        .rotation
+        .mul_vec3(wheel.direction_local)
+        .normalize();
 
-        // --- YAY KUVVET ENTEGRASYONu (her zaman, grounded veya değil) ---
-        // Tekerlek ataletini (I = 0.5 m r²) hesapla.
-        // Guard: wheel_mass=0 veya radius=0 ise inertia=0 → net_torque/wheel_inertia
-        // = inf/NaN ve tüm simülasyon sessizce bozulur. Epsilon-clamp ile tek
-        // noktada koruyarak aşağıdaki tüm bölmeleri (690/693/710/713) güvene al.
-        let wheel_inertia = (0.5 * wheel.wheel_mass * wheel.radius.powi(2)).max(1e-6);
+    // --- YAY KUVVET ENTEGRASYONu (her zaman, grounded veya değil) ---
+    // Tekerlek ataletini (I = 0.5 m r²) hesapla.
+    // Guard: wheel_mass=0 veya radius=0 ise inertia=0 → net_torque/wheel_inertia
+    // = inf/NaN ve tüm simülasyon sessizce bozulur. Epsilon-clamp ile tek
+    // noktada koruyarak aşağıdaki tüm bölmeleri (690/693/710/713) güvene al.
+    let wheel_inertia = (0.5 * wheel.wheel_mass * wheel.radius.powi(2)).max(1e-6);
 
-        // Sürülen (Rear) tekerlek motora şanzımanla kenetli → motor+volan ataleti
-        // gear² ile YANSIR (I_eff = I_wheel + I_flywheel·ratio²). Bunu katmadan tekerlek
-        // yalnız kendi minik ataletiyle (~0.8) anında redline'a fırlıyordu = kalkışta
-        // patinaj + tüm vitesleri geçme. Yansıyan atalet (düşük viteste ~30 kg·m²) motoru
-        // gerçekçi biçimde kademeli döndürür; yüksek viteste ratio küçülür → daha çevik.
-        //
-        // Shared, like the torque: one engine turns every driven wheel, so each carries its
-        // `1/driven` share of the reflected inertia — the engine's `½·I·R²·ω²` split over the
-        // wheels. Each carried all of it until 2026-11-15: a two-wheel-drive car spun up two
-        // engines, ~31 kg·m² too much on each rear wheel in first gear, ~1.3 kN of the launch.
-        let effective_inertia = if drivetrain.drives(&wheel.axle_type) {
-            wheel_inertia + flywheel_inertia * total_ratio * total_ratio / driven_count_f
-        } else {
-            wheel_inertia
-        };
+    // Sürülen (Rear) tekerlek motora şanzımanla kenetli → motor+volan ataleti
+    // gear² ile YANSIR (I_eff = I_wheel + I_flywheel·ratio²). Bunu katmadan tekerlek
+    // yalnız kendi minik ataletiyle (~0.8) anında redline'a fırlıyordu = kalkışta
+    // patinaj + tüm vitesleri geçme. Yansıyan atalet (düşük viteste ~30 kg·m²) motoru
+    // gerçekçi biçimde kademeli döndürür; yüksek viteste ratio küçülür → daha çevik.
+    //
+    // Shared, like the torque: one engine turns every driven wheel, so each carries its
+    // `1/driven` share of the reflected inertia — the engine's `½·I·R²·ω²` split over the
+    // wheels. Each carried all of it until 2026-11-15: a two-wheel-drive car spun up two
+    // engines, ~31 kg·m² too much on each rear wheel in first gear, ~1.3 kN of the launch.
+    let effective_inertia = if drivetrain.drives(&wheel.axle_type) {
+        wheel_inertia + flywheel_inertia * total_ratio * total_ratio / driven_count_f
+    } else {
+        wheel_inertia
+    };
 
-        if wheel.is_grounded {
-            if let Some(hit) = wheel.ground_hit.as_ref() {
-                // 6.1 Gelişmiş Süspansiyon: baskı/geri dönüş ayrı damper
-                let point_rel = attach_world - vehicle_transform.position;
-                let point_vel = vehicle_vel.linear + vehicle_vel.angular.cross(point_rel);
-                let susp_vel = point_vel.dot(ray_dir); // pozitif = yay sıkışıyor
-                let compression = wheel.suspension_rest_length - wheel.suspension_length;
-
-                let spring_force = wheel.suspension_stiffness * compression;
-
-                // Baskı: damping_compression, geri dönüş: damping_rebound (genelde 2-3x baskı)
-                let damper_coeff = if susp_vel > 0.0 {
-                    wheel.suspension_damping // baskı katsayısı
-                } else {
-                    // rebound — ayrı verildiyse o, yoksa eski kural: 2.5× baskı
-                    wheel.suspension_rebound_damping.unwrap_or(wheel.suspension_damping * 2.5)
-                };
-                let mut damper_force = damper_coeff * susp_vel;
-                // Rebound damper'ı (2.5×) statik yay yükünü İPTAL etmesin. Açık (explicit)
-                // entegratörde sert rebound damping + aşağıdaki `.max(0.0)` kırpması +
-                // baskı/rebound anahtarlaması, DURAĞAN araçta küçük bir dikey limit-cycle
-                // doğuruyordu: yay pozitif sıkışmada olsa bile (compression>0) rebound
-                // fazında damper yayı tam götürüp `suspension_force`'u 0'a düşürüyordu.
-                // Normal yük 0 → Pacejka lastik kuvveti (∝ Fz) 0 → sürülen tekerlek grip'siz
-                // → tam gazda yerinde patinaj (rpm redline'a fırlar, araç KALKMAZ). Damper'ı
-                // yay kuvvetinin yarısıyla tabanlayarak tekerleğin zemine basılı kalmasını
-                // (Fz>0) garanti et; baskı fazını (pozitif) etkilemez, yalnız rebound'u sınırlar.
-                damper_force = damper_force.max(-spring_force * 0.5);
-
-                // Bump stop: max seyahat sonunda sert non-linear yay
-                let bump_stop_travel = wheel.suspension_max_travel * 0.1;
-                let bump_excess = compression - (wheel.suspension_max_travel - bump_stop_travel);
-                let bump_stop_force = if bump_excess > 0.0 {
-                    tracing::trace!(
-                        entity = ?vehicle_entity,
-                        axle = ?wheel.axle_type,
-                        is_left = wheel.is_left,
-                        bump_excess,
-                        compression,
-                        max_travel = wheel.suspension_max_travel,
-                        "[Vehicle] suspension bottoming out — bump-stop engaged"
-                    );
-                    bump_excess * wheel.suspension_stiffness * 8.0
-                } else {
-                    0.0
-                };
-
-                // Anti-roll bar — adds up-force to the more-compressed corner to
-                // resist roll (see `anti_roll_force`; the sign was previously
-                // inverted, amplifying roll).
-                let axle_diff = match wheel.axle_type {
-                    Axle::Front => front_diff,
-                    Axle::Rear => rear_diff,
-                };
-                let t = &vehicle.tuning;
-                let arb_stiffness = match wheel.axle_type {
-                    Axle::Front => t.anti_roll_front,
-                    Axle::Rear => t.anti_roll_rear,
-                }
-                .unwrap_or(t.anti_roll_stiffness);
-                let arb_force = anti_roll_force(wheel.is_left, axle_diff, arb_stiffness);
-
-                wheel.suspension_force =
-                    (spring_force + damper_force + bump_stop_force + arb_force).max(0.0);
-                let susp_impulse = (-ray_dir) * wheel.suspension_force;
-                apply_force_at_point(
-                    vehicle_rb,
-                    &mut kick,
-                    com,
-                    vehicle_transform.rotation,
-                    susp_impulse,
-                    attach_world,
-                    dt,
-                );
-
-                // 6.2 Pacejka Kuvvetleri
-                let steering_rot = Quat::from_axis_angle(up, wheel.steering_angle);
-                let wheel_forward = steering_rot.mul_vec3(forward).normalize();
-                let wheel_right = steering_rot.mul_vec3(right).normalize();
-
-                let v_long = point_vel.dot(wheel_forward);
-                let v_lat = point_vel.dot(wheel_right);
-
-                // Denom: düşük hızda sıfır bölünmeyi önle
-                let ref_vel = v_long.abs().max(0.5);
-
-                // Longitudinal slip ratio
-                let wheel_linear_vel = wheel.angular_velocity * wheel.radius;
-                let slip_ratio = (wheel_linear_vel - v_long) / ref_vel;
-
-                // Lateral slip angle [rad]
-                let slip_angle = -(v_lat / ref_vel).atan();
-
-                let normal_load = wheel.suspension_force;
-
-                // Kombine Pacejka MF — sürtünme çemberi dahilinde
-                // The traction weight counts while the wheel is driven forward (`traction_circle_weight`).
-                let fx_weight = if wheel.drive_torque > 1.0 { wheel.traction_circle_weight } else { 1.0 };
-                let (final_long, _) = pacejka_combined_weighted(
-                    &wheel.pacejka_long,
-                    &wheel.pacejka_lat,
-                    slip_ratio,
-                    slip_angle,
-                    normal_load,
-                    wheel.sliding_grip_floor,
-                    fx_weight,
-                );
-
-                // Yüzey materyali (buz/kum/asfalt) + hava durumu (yağmur/kar) grip çarpanı.
-                // Sürtünme çemberi Pacejka içinde uygulandı; tüm vektörü ölçeklemek yönü korur,
-                // etkin μ'yü orantılı ölçekler (buzda düşük tutuş → redline patinaj vb.).
-                let grip = (wheel.surface_friction / PhysicsMaterial::ASPHALT.dynamic_friction)
-                    * weather_grip;
-                let final_long = final_long * grip;
-
-                // 6.3 Tekerlek angular_velocity entegrasyonu (Semi-implicit Euler)
-                // Reaksiyon torku lastikten gelen geri tepme
-                let brake_dir = if wheel.angular_velocity.abs() > 0.01 {
-                    -wheel.angular_velocity.signum()
-                } else {
-                    0.0
-                };
-                let effective_brake = wheel.brake_torque * brake_dir;
-
-                let external = wheel.drive_torque + effective_brake;
-
-                // **The wheel and the chassis take the same force.** The spin update is implicit
-                // in the tyre's stiffness at zero slip, `k = B·C·D·Fz / ref` per m/s of slip
-                // velocity — the steepest the curve gets, so it is stable wherever the slip is —
-                // which to first order is the wheel balancing against
-                //   F = (F₀ + k·dt·r·T/I) / (1 + k·dt·r²/I),
-                // and that `F` is what the chassis is pushed with too. The chassis used to be pushed
-                // with the curve's force at the slip the update left instead: equal to `F` only on the
-                // curve's straight part, and at a crawl, where the slip is tiny and the stiffness
-                // ~10⁵ N per m/s, the two parted by enough to pump — a parked car fell into a slow
-                // spin on the spot, left and right wheels rolling opposite ways for good, and a heavy
-                // car could not pull away gently (`a_parked_car_comes_to_rest_and_stays`,
-                // `a_heavy_car_driven_by_one_axle_pulls_away`).
-                let r_contact = hit.point - com;
-                let inv_inertia = vehicle_rb.inv_world_inertia_tensor(vehicle_transform.rotation);
-                let inv_mass_along = |dir: Vec3| {
-                    let rn = r_contact.cross(dir);
-                    vehicle_rb.inv_mass() + rn.dot(inv_inertia * rn)
-                };
-                let k = wheel.pacejka_long.b * wheel.pacejka_long.c * wheel.pacejka_long.d * normal_load / ref_vel;
-                let radius = wheel.radius;
-                let solved_force = (final_long + k * dt * radius * external / effective_inertia)
-                    / (1.0 + k * dt * radius * radius / effective_inertia);
-                wheel.angular_velocity += (external - solved_force * radius) / effective_inertia * dt;
-                let solved_spin = wheel.angular_velocity;
-
-                // --- TRAKSİYON KONTROL (patinaj sınırı) ---
-                // Sürülen tekerleğin drive_torque'u lastik tutuşunun ürettiği reaksiyon
-                // torkunu (≤ μ·Fz·r) kat kat aşabilir → ω dengeye oturmayıp KAÇAR
-                // (ω·r ≫ v_long, gözlemde 109 m/s). Böyle bir slip_ratio sürtünme
-                // çemberini BOYUNA doldurur ve Lorentzian çapraz-ağırlık (gy) yüzünden
-                // lastiğin YANAL tutuşunu ~0'a çeker: sürülen aks yanal kuvvet üretemez,
-                // en küçük yaw bozunumu büyür → araç DÜZ tam gazda kendiliğinden spin
-                // atar (kalkışta da yerinde patinaj). ω'yı hedef slip'e kırpmak boyuna
-                // kuvveti Pacejka tepesi civarında (iyi hızlanma) tutar ama yanal tutuşu
-                // korur (kararlılık). Yalnız TAHRİKLİ tekerlek etkilenir → ön direksiyon
-                // yetkisi ve fren/ABS yolu (drive_torque≈0) değişmez; hız arttıkça
-                // (ref_vel↑) izin verilen ω da büyür → araç normal hızlanır.
-                if wheel.drive_torque.abs() > 1.0 && wheel.radius > 1e-4 {
-                    const TC_TARGET_SLIP: f32 = 0.2; // ~Pacejka tepe slip'i
-                    let spin_margin = TC_TARGET_SLIP * ref_vel;
-                    let hi = (v_long + spin_margin) / wheel.radius;
-                    let lo = (v_long - spin_margin) / wheel.radius;
-                    let pre_clamp_ω = wheel.angular_velocity;
-                    wheel.angular_velocity = wheel.angular_velocity.clamp(lo, hi);
-                    if (wheel.angular_velocity - pre_clamp_ω).abs() > 1e-3 {
-                        tracing::trace!(
-                            entity = ?vehicle_entity,
-                            axle = ?wheel.axle_type,
-                            is_left = wheel.is_left,
-                            omega_before = pre_clamp_ω,
-                            omega_after = wheel.angular_velocity,
-                            v_long,
-                            "[Vehicle] traction control — clamped driven-wheel spin to target slip"
-                        );
-                    }
-                }
-
-                // Fren kilitleme: abs >= tekerlek hızı değilse sıfırla
-                let max_brake_decel = wheel.brake_torque / effective_inertia * dt;
-                if vehicle.brake_input > 0.01 && wheel.angular_velocity.abs() < max_brake_decel {
-                    wheel.angular_velocity = 0.0;
-                }
-
-                // The slip the wheel has now, after its update and the traction control's and the
-                // brake's say: the lateral force is taken at it, and it caps the solved force —
-                // a first-order step that ran past the curve's peak (a big torque on a light wheel),
-                // or a spin the clamps changed after the solve, leaves the tyre with what the curve
-                // gives there and no more.
-                let slip_ratio = (wheel.angular_velocity * wheel.radius - v_long) / ref_vel;
-                let (at_slip, final_lat) = pacejka_combined_weighted(
-                    &wheel.pacejka_long,
-                    &wheel.pacejka_lat,
-                    slip_ratio,
-                    slip_angle,
-                    normal_load,
-                    wheel.sliding_grip_floor,
-                    fx_weight,
-                );
-                let at_slip = at_slip * grip;
-                // A spin the traction control or the brake's lock set after the solve is held there,
-                // not free to take the slip up as the solve assumed (`r²/I`): the tyre then gives what
-                // the curve gives at it — a locked wheel slides at its full sliding grip.
-                let held = wheel.angular_velocity != solved_spin;
-                let long_force = if held || solved_force * at_slip < 0.0 || solved_force.abs() > at_slip.abs() {
-                    at_slip
-                } else {
-                    solved_force
-                };
-                // **The tyre never pushes the contact past standing still sideways in one step**:
-                // the lateral half of the same stiffness, limited to what stops the contact's
-                // sideways velocity through its effective mass, shared among the grounded wheels.
-                // At speed the limit is far above any tyre force and nothing changes.
-                let tire_force = {
-                    let at_most = |dir: Vec3, force: f32, v: f32| -> f32 {
-                        if force * v >= 0.0 {
-                            return force;
-                        }
-                        let inv_mass = inv_mass_along(dir);
-                        if inv_mass <= 0.0 {
-                            return force;
-                        }
-                        let stop = v.abs() / (inv_mass * dt * grounded_share);
-                        force.clamp(-stop, stop)
-                    };
-                    // Rolling resistance (`Wheel::rolling_resistance`): what a free-rolling tyre's
-                    // `Crr·Fz·r` comes to at the contact — a force against the contact's motion of
-                    // at most `Crr·Fz`, and at most what stops it. As a torque on the wheel it was a
-                    // light wheel crossing zero and being caught there every other step, and the car
-                    // crept on at a fraction of a millimetre a second.
-                    let rolling = if v_long == 0.0 {
-                        0.0
-                    } else {
-                        at_most(wheel_forward, -v_long.signum() * wheel.rolling_resistance * normal_load, v_long)
-                    };
-                    wheel_forward * (long_force + rolling) + wheel_right * at_most(wheel_right, final_lat * grip, v_lat)
-                };
-                apply_force_at_point(
-                    vehicle_rb,
-                    &mut kick,
-                    com,
-                    vehicle_transform.rotation,
-                    tire_force,
-                    hit.point,
-                    dt,
-                );
-            }
-        } else {
-            // Havada: sadece motor + fren, yay kuvveti yok
-            wheel.suspension_force = 0.0;
-
-            let brake_dir = if wheel.angular_velocity.abs() > 0.01 {
-                -wheel.angular_velocity.signum()
-            } else {
-                0.0
-            };
-
-            let effective_brake = wheel.brake_torque * brake_dir;
-            let net_torque = wheel.drive_torque + effective_brake;
-            wheel.angular_velocity += (net_torque / effective_inertia) * dt;
-
-            // Fren kilitleme: abs >= tekerlek hızı değilse sıfırla
-            let max_brake_decel = wheel.brake_torque / effective_inertia * dt;
-            if vehicle.brake_input > 0.01 && wheel.angular_velocity.abs() < max_brake_decel {
-                wheel.angular_velocity = 0.0;
-            }
+    if wheel.is_grounded {
+        if let Some(hit_point) = wheel.ground_hit.as_ref().map(|hit| hit.point) {
+            step_grounded_wheel(wheel, step, vehicle_rb, kick, attach_world, ray_dir, hit_point, effective_inertia);
         }
-
-        // Viskoz spin sönümü SADECE havadaki tekerleğe (hava/rulman sürtünmesi serbest
-        // dönen tekerleği yavaşça durdurur). YERDEKİ tekerlekte uygulamak, lastiğin
-        // yuvarlanma-kısıtını korumak için sürekli negatif slip üretip şasiye büyük,
-        // hıza-orantılı FANTOM geri-sürükleme (~600 N/tekerlek) biniyordu → düz/coast
-        // sürüşte ve dönüşte hız kaybı. Yerde: lastik/yuvarlanma zaten yönetir.
-        if !wheel.is_grounded {
-            let damping_coeff = 2.0; // rad/s² / (rad/s)
-            wheel.angular_velocity *= (1.0 - damping_coeff * dt).max(0.0);
-        }
-
-        // A slow, unpowered wheel in the AIR stops. Only in the air: on the ground the tyre owns ω
-        // (it settles at ≈ v/r), and zeroing it there turned every crawling undriven wheel into a
-        // locked one — a heavy car driven by one axle could not pull away against its own
-        // standing wheels (`a_heavy_car_driven_by_one_axle_pulls_away`).
-        if !wheel.is_grounded
-            && wheel.angular_velocity.abs() < 0.05
-            && wheel.drive_torque.abs() < 1.0
-            && wheel.brake_torque < 1.0
-        {
-            wheel.angular_velocity = 0.0;
-        }
-
-        // Görsel rotasyon
-        wheel.rotation_angle += wheel.angular_velocity * dt;
-        wheel.rotation_angle %= std::f32::consts::TAU;
+    } else {
+        step_airborne_wheel(wheel, brake_input, effective_inertia, dt);
     }
 
-    // Per-step özet (yalnız trace etkinken alanlar hesaplanır — tracing makro seviye-kapılıdır).
-    vehicle_vel.linear += kick.linear;
-    vehicle_vel.angular += kick.angular;
+    // Viskoz spin sönümü SADECE havadaki tekerleğe (hava/rulman sürtünmesi serbest
+    // dönen tekerleği yavaşça durdurur). YERDEKİ tekerlekte uygulamak, lastiğin
+    // yuvarlanma-kısıtını korumak için sürekli negatif slip üretip şasiye büyük,
+    // hıza-orantılı FANTOM geri-sürükleme (~600 N/tekerlek) biniyordu → düz/coast
+    // sürüşte ve dönüşte hız kaybı. Yerde: lastik/yuvarlanma zaten yönetir.
+    if !wheel.is_grounded {
+        let damping_coeff = 2.0; // rad/s² / (rad/s)
+        wheel.angular_velocity *= (1.0 - damping_coeff * dt).max(0.0);
+    }
 
-    tracing::trace!(
-        entity = ?vehicle_entity,
-        speed_kmh = vehicle.current_speed_kmh,
-        engine_rpm = vehicle.engine_rpm,
-        gear = vehicle.current_gear,
-        grounded_wheels = vehicle.wheels.iter().filter(|w| w.is_grounded).count(),
-        wheel_count = vehicle.wheels.len(),
-        ge_factor,
-        "[Vehicle] step complete"
+    // A slow, unpowered wheel in the AIR stops. Only in the air: on the ground the tyre owns ω
+    // (it settles at ≈ v/r), and zeroing it there turned every crawling undriven wheel into a
+    // locked one — a heavy car driven by one axle could not pull away against its own
+    // standing wheels (`a_heavy_car_driven_by_one_axle_pulls_away`).
+    if !wheel.is_grounded
+        && wheel.angular_velocity.abs() < 0.05
+        && wheel.drive_torque.abs() < 1.0
+        && wheel.brake_torque < 1.0
+    {
+        wheel.angular_velocity = 0.0;
+    }
+
+    // Görsel rotasyon
+    wheel.rotation_angle += wheel.angular_velocity * dt;
+    wheel.rotation_angle %= std::f32::consts::TAU;
+}
+
+/// A wheel on the ground, for one step: its suspension force (6.1) and its tyre forces (6.2) into
+/// `kick`, and its spin through them (6.3), the traction control and the brake's lock. `hit_point`
+/// is where its ray met the ground.
+#[allow(clippy::too_many_arguments)]
+fn step_grounded_wheel(
+    wheel: &mut Wheel,
+    step: &WheelStep,
+    vehicle_rb: &RigidBody,
+    kick: &mut Velocity,
+    attach_world: Vec3,
+    ray_dir: Vec3,
+    hit_point: Vec3,
+    effective_inertia: f32,
+) {
+    let WheelStep {
+        vehicle_entity,
+        vehicle_transform,
+        vehicle_vel,
+        up,
+        forward,
+        right,
+        com,
+        front_diff,
+        rear_diff,
+        tuning,
+        brake_input,
+        grounded_share,
+        weather_grip,
+        dt,
+        ..
+    } = *step;
+    // 6.1 Gelişmiş Süspansiyon: baskı/geri dönüş ayrı damper
+    let point_rel = attach_world - vehicle_transform.position;
+    let point_vel = vehicle_vel.linear + vehicle_vel.angular.cross(point_rel);
+    let susp_vel = point_vel.dot(ray_dir); // pozitif = yay sıkışıyor
+    let compression = wheel.suspension_rest_length - wheel.suspension_length;
+
+    let spring_force = wheel.suspension_stiffness * compression;
+
+    // Baskı: damping_compression, geri dönüş: damping_rebound (genelde 2-3x baskı)
+    let damper_coeff = if susp_vel > 0.0 {
+        wheel.suspension_damping // baskı katsayısı
+    } else {
+        // rebound — ayrı verildiyse o, yoksa eski kural: 2.5× baskı
+        wheel.suspension_rebound_damping.unwrap_or(wheel.suspension_damping * 2.5)
+    };
+    let mut damper_force = damper_coeff * susp_vel;
+    // Rebound damper'ı (2.5×) statik yay yükünü İPTAL etmesin. Açık (explicit)
+    // entegratörde sert rebound damping + aşağıdaki `.max(0.0)` kırpması +
+    // baskı/rebound anahtarlaması, DURAĞAN araçta küçük bir dikey limit-cycle
+    // doğuruyordu: yay pozitif sıkışmada olsa bile (compression>0) rebound
+    // fazında damper yayı tam götürüp `suspension_force`'u 0'a düşürüyordu.
+    // Normal yük 0 → Pacejka lastik kuvveti (∝ Fz) 0 → sürülen tekerlek grip'siz
+    // → tam gazda yerinde patinaj (rpm redline'a fırlar, araç KALKMAZ). Damper'ı
+    // yay kuvvetinin yarısıyla tabanlayarak tekerleğin zemine basılı kalmasını
+    // (Fz>0) garanti et; baskı fazını (pozitif) etkilemez, yalnız rebound'u sınırlar.
+    damper_force = damper_force.max(-spring_force * 0.5);
+
+    // Bump stop: max seyahat sonunda sert non-linear yay
+    let bump_stop_travel = wheel.suspension_max_travel * 0.1;
+    let bump_excess = compression - (wheel.suspension_max_travel - bump_stop_travel);
+    let bump_stop_force = if bump_excess > 0.0 {
+        tracing::trace!(
+            entity = ?vehicle_entity,
+            axle = ?wheel.axle_type,
+            is_left = wheel.is_left,
+            bump_excess,
+            compression,
+            max_travel = wheel.suspension_max_travel,
+            "[Vehicle] suspension bottoming out — bump-stop engaged"
+        );
+        bump_excess * wheel.suspension_stiffness * 8.0
+    } else {
+        0.0
+    };
+
+    // Anti-roll bar — adds up-force to the more-compressed corner to
+    // resist roll (see `anti_roll_force`; the sign was previously
+    // inverted, amplifying roll).
+    let axle_diff = match wheel.axle_type {
+        Axle::Front => front_diff,
+        Axle::Rear => rear_diff,
+    };
+    let t = tuning;
+    let arb_stiffness = match wheel.axle_type {
+        Axle::Front => t.anti_roll_front,
+        Axle::Rear => t.anti_roll_rear,
+    }
+    .unwrap_or(t.anti_roll_stiffness);
+    let arb_force = anti_roll_force(wheel.is_left, axle_diff, arb_stiffness);
+
+    wheel.suspension_force =
+        (spring_force + damper_force + bump_stop_force + arb_force).max(0.0);
+    let susp_impulse = (-ray_dir) * wheel.suspension_force;
+    apply_force_at_point(
+        vehicle_rb,
+        kick,
+        com,
+        vehicle_transform.rotation,
+        susp_impulse,
+        attach_world,
+        dt,
     );
+
+    // 6.2 Pacejka Kuvvetleri
+    let steering_rot = Quat::from_axis_angle(up, wheel.steering_angle);
+    let wheel_forward = steering_rot.mul_vec3(forward).normalize();
+    let wheel_right = steering_rot.mul_vec3(right).normalize();
+
+    let v_long = point_vel.dot(wheel_forward);
+    let v_lat = point_vel.dot(wheel_right);
+
+    // Denom: düşük hızda sıfır bölünmeyi önle
+    let ref_vel = v_long.abs().max(0.5);
+
+    // Longitudinal slip ratio
+    let wheel_linear_vel = wheel.angular_velocity * wheel.radius;
+    let slip_ratio = (wheel_linear_vel - v_long) / ref_vel;
+
+    // Lateral slip angle [rad]
+    let slip_angle = -(v_lat / ref_vel).atan();
+
+    let normal_load = wheel.suspension_force;
+
+    // Kombine Pacejka MF — sürtünme çemberi dahilinde
+    // The traction weight counts while the wheel is driven forward (`traction_circle_weight`).
+    let fx_weight = if wheel.drive_torque > 1.0 { wheel.traction_circle_weight } else { 1.0 };
+    let (final_long, _) = pacejka_combined_weighted(
+        &wheel.pacejka_long,
+        &wheel.pacejka_lat,
+        slip_ratio,
+        slip_angle,
+        normal_load,
+        wheel.sliding_grip_floor,
+        fx_weight,
+    );
+
+    // Yüzey materyali (buz/kum/asfalt) + hava durumu (yağmur/kar) grip çarpanı.
+    // Sürtünme çemberi Pacejka içinde uygulandı; tüm vektörü ölçeklemek yönü korur,
+    // etkin μ'yü orantılı ölçekler (buzda düşük tutuş → redline patinaj vb.).
+    let grip = (wheel.surface_friction / PhysicsMaterial::ASPHALT.dynamic_friction)
+        * weather_grip;
+    let final_long = final_long * grip;
+
+    // 6.3 Tekerlek angular_velocity entegrasyonu (Semi-implicit Euler)
+    // Reaksiyon torku lastikten gelen geri tepme
+    let effective_brake = brake_against_spin(wheel);
+
+    let external = wheel.drive_torque + effective_brake;
+
+    // **The wheel and the chassis take the same force.** The spin update is implicit
+    // in the tyre's stiffness at zero slip, `k = B·C·D·Fz / ref` per m/s of slip
+    // velocity — the steepest the curve gets, so it is stable wherever the slip is —
+    // which to first order is the wheel balancing against
+    //   F = (F₀ + k·dt·r·T/I) / (1 + k·dt·r²/I),
+    // and that `F` is what the chassis is pushed with too. The chassis used to be pushed
+    // with the curve's force at the slip the update left instead: equal to `F` only on the
+    // curve's straight part, and at a crawl, where the slip is tiny and the stiffness
+    // ~10⁵ N per m/s, the two parted by enough to pump — a parked car fell into a slow
+    // spin on the spot, left and right wheels rolling opposite ways for good, and a heavy
+    // car could not pull away gently (`a_parked_car_comes_to_rest_and_stays`,
+    // `a_heavy_car_driven_by_one_axle_pulls_away`).
+    let r_contact = hit_point - com;
+    let inv_inertia = vehicle_rb.inv_world_inertia_tensor(vehicle_transform.rotation);
+    let inv_mass_along = |dir: Vec3| {
+        let rn = r_contact.cross(dir);
+        vehicle_rb.inv_mass() + rn.dot(inv_inertia * rn)
+    };
+    let k = wheel.pacejka_long.b * wheel.pacejka_long.c * wheel.pacejka_long.d * normal_load / ref_vel;
+    let radius = wheel.radius;
+    let solved_force = (final_long + k * dt * radius * external / effective_inertia)
+        / (1.0 + k * dt * radius * radius / effective_inertia);
+    wheel.angular_velocity += (external - solved_force * radius) / effective_inertia * dt;
+    let solved_spin = wheel.angular_velocity;
+
+    // --- TRAKSİYON KONTROL (patinaj sınırı) ---
+    // Sürülen tekerleğin drive_torque'u lastik tutuşunun ürettiği reaksiyon
+    // torkunu (≤ μ·Fz·r) kat kat aşabilir → ω dengeye oturmayıp KAÇAR
+    // (ω·r ≫ v_long, gözlemde 109 m/s). Böyle bir slip_ratio sürtünme
+    // çemberini BOYUNA doldurur ve Lorentzian çapraz-ağırlık (gy) yüzünden
+    // lastiğin YANAL tutuşunu ~0'a çeker: sürülen aks yanal kuvvet üretemez,
+    // en küçük yaw bozunumu büyür → araç DÜZ tam gazda kendiliğinden spin
+    // atar (kalkışta da yerinde patinaj). ω'yı hedef slip'e kırpmak boyuna
+    // kuvveti Pacejka tepesi civarında (iyi hızlanma) tutar ama yanal tutuşu
+    // korur (kararlılık). Yalnız TAHRİKLİ tekerlek etkilenir → ön direksiyon
+    // yetkisi ve fren/ABS yolu (drive_torque≈0) değişmez; hız arttıkça
+    // (ref_vel↑) izin verilen ω da büyür → araç normal hızlanır.
+    if wheel.drive_torque.abs() > 1.0 && wheel.radius > 1e-4 {
+        const TC_TARGET_SLIP: f32 = 0.2; // ~Pacejka tepe slip'i
+        let spin_margin = TC_TARGET_SLIP * ref_vel;
+        let hi = (v_long + spin_margin) / wheel.radius;
+        let lo = (v_long - spin_margin) / wheel.radius;
+        let pre_clamp_ω = wheel.angular_velocity;
+        wheel.angular_velocity = wheel.angular_velocity.clamp(lo, hi);
+        if (wheel.angular_velocity - pre_clamp_ω).abs() > 1e-3 {
+            tracing::trace!(
+                entity = ?vehicle_entity,
+                axle = ?wheel.axle_type,
+                is_left = wheel.is_left,
+                omega_before = pre_clamp_ω,
+                omega_after = wheel.angular_velocity,
+                v_long,
+                "[Vehicle] traction control — clamped driven-wheel spin to target slip"
+            );
+        }
+    }
+
+    lock_braked_wheel(wheel, brake_input, effective_inertia, dt);
+
+    // The slip the wheel has now, after its update and the traction control's and the
+    // brake's say: the lateral force is taken at it, and it caps the solved force —
+    // a first-order step that ran past the curve's peak (a big torque on a light wheel),
+    // or a spin the clamps changed after the solve, leaves the tyre with what the curve
+    // gives there and no more.
+    let slip_ratio = (wheel.angular_velocity * wheel.radius - v_long) / ref_vel;
+    let (at_slip, final_lat) = pacejka_combined_weighted(
+        &wheel.pacejka_long,
+        &wheel.pacejka_lat,
+        slip_ratio,
+        slip_angle,
+        normal_load,
+        wheel.sliding_grip_floor,
+        fx_weight,
+    );
+    let at_slip = at_slip * grip;
+    // A spin the traction control or the brake's lock set after the solve is held there,
+    // not free to take the slip up as the solve assumed (`r²/I`): the tyre then gives what
+    // the curve gives at it — a locked wheel slides at its full sliding grip.
+    let held = wheel.angular_velocity != solved_spin;
+    let long_force = if held || solved_force * at_slip < 0.0 || solved_force.abs() > at_slip.abs() {
+        at_slip
+    } else {
+        solved_force
+    };
+    // **The tyre never pushes the contact past standing still sideways in one step**:
+    // the lateral half of the same stiffness, limited to what stops the contact's
+    // sideways velocity through its effective mass, shared among the grounded wheels.
+    // At speed the limit is far above any tyre force and nothing changes.
+    let tire_force = {
+        let at_most = |dir: Vec3, force: f32, v: f32| -> f32 {
+            if force * v >= 0.0 {
+                return force;
+            }
+            let inv_mass = inv_mass_along(dir);
+            if inv_mass <= 0.0 {
+                return force;
+            }
+            let stop = v.abs() / (inv_mass * dt * grounded_share);
+            force.clamp(-stop, stop)
+        };
+        // Rolling resistance (`Wheel::rolling_resistance`): what a free-rolling tyre's
+        // `Crr·Fz·r` comes to at the contact — a force against the contact's motion of
+        // at most `Crr·Fz`, and at most what stops it. As a torque on the wheel it was a
+        // light wheel crossing zero and being caught there every other step, and the car
+        // crept on at a fraction of a millimetre a second.
+        let rolling = if v_long == 0.0 {
+            0.0
+        } else {
+            at_most(wheel_forward, -v_long.signum() * wheel.rolling_resistance * normal_load, v_long)
+        };
+        wheel_forward * (long_force + rolling) + wheel_right * at_most(wheel_right, final_lat * grip, v_lat)
+    };
+    apply_force_at_point(
+        vehicle_rb,
+        kick,
+        com,
+        vehicle_transform.rotation,
+        tire_force,
+        hit_point,
+        dt,
+    );
+}
+
+/// A wheel in the air, for one step: the engine and the brake turn it, and no spring holds it.
+fn step_airborne_wheel(wheel: &mut Wheel, brake_input: f32, effective_inertia: f32, dt: f32) {
+    // Havada: sadece motor + fren, yay kuvveti yok
+    wheel.suspension_force = 0.0;
+
+    let effective_brake = brake_against_spin(wheel);
+    let net_torque = wheel.drive_torque + effective_brake;
+    wheel.angular_velocity += (net_torque / effective_inertia) * dt;
+
+    lock_braked_wheel(wheel, brake_input, effective_inertia, dt);
+}
+
+/// The brake's torque on `wheel`, against its spin; none on a wheel all but stopped, which a brake
+/// does not drive backwards.
+fn brake_against_spin(wheel: &Wheel) -> f32 {
+    let brake_dir = if wheel.angular_velocity.abs() > 0.01 {
+        -wheel.angular_velocity.signum()
+    } else {
+        0.0
+    };
+    wheel.brake_torque * brake_dir
+}
+
+/// Fren kilitleme: a braked wheel slower than one step of its brake's deceleration stops.
+fn lock_braked_wheel(wheel: &mut Wheel, brake_input: f32, effective_inertia: f32, dt: f32) {
+    let max_brake_decel = wheel.brake_torque / effective_inertia * dt;
+    if brake_input > 0.01 && wheel.angular_velocity.abs() < max_brake_decel {
+        wheel.angular_velocity = 0.0;
+    }
 }
 
 // ============================================================
