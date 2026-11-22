@@ -101,7 +101,11 @@ fn body_collider(
                 }
                 let local = trans_query.get(child);
                 let rel = curr.then(&local.copied().unwrap_or_default());
-                if let (Some(_), Some(child_col)) = (local, col_query.get(child)) {
+                // A trigger under the body is not part of its solid shape: it is a trigger of its own,
+                // carried with the body (`compound_parts`, `gather_static_colliders`). Merged in, it
+                // took the body's flags — a trigger zone in a moving tray was a solid block, and
+                // nothing ever entered it.
+                if let (Some(_), Some(child_col)) = (local, col_query.get(child).filter(|c| !c.is_trigger)) {
                     let local_t = gizmo_physics_core::Transform::new(rel.position).with_rotation(rel.rotation);
                     compound_shapes.push((local_t, Box::new(child_col.shape.clone())));
                 }
@@ -419,6 +423,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
         return;
     }
 
+    forget_owners_in_triggers(&mut physics_world, &brought.trigger_owners);
     let write_all = physics_world.body_revision != revision_before_step;
 
     read_back(&mut physics_world, &mut brought);
@@ -449,6 +454,9 @@ struct BroughtOver {
     /// Kinematic bodies driven to a pose: their index in `bodies`, and the pose to put them on after
     /// the step.
     targets: Vec<(usize, crate::components::KinematicTarget)>,
+    /// Each trigger carried by a body, and that body: the trigger's own body is not something that
+    /// enters it (`forget_owners_in_triggers`).
+    trigger_owners: Vec<(u32, u32)>,
 }
 
 /// Counts the `RigidBody`s without a `Collider`, which are not simulated, and warns when the count
@@ -679,20 +687,30 @@ fn gather_static_colliders(world: &World, physics_world: &PhysicsWorld, sync: &m
         Option<&gizmo_core::component::Parent>,
     ), (Without<RigidBody>, Without<Velocity>, Without<gizmo_core::pool::Pooled>, Without<gizmo_core::component::IsDeleted>)>();
     for (id, transform, col, material, parent) in query.iter() {
-        if parts.contains(&id.id()) {
+        if parts.solid.contains(&id.id()) {
             continue;
         }
-        let pose = match parent {
-            None => *transform,
-            Some(_) => match world_pose_outside_bodies(id, transform, &parents, &bodies, &trans_query) {
-                Some(pose) => pose,
-                None => continue,
-            },
+        let carried = parts.triggers.get(&id.id()).copied();
+        let pose = if let Some((owner, rel)) = carried {
+            // Where the body holds it, as the body stood at the start of this step.
+            let Some(body) = trans_query.get(owner) else { continue };
+            brought.trigger_owners.push((id.id(), owner.id()));
+            Transform::new(body.position + body.rotation * rel.position)
+                .with_rotation(body.rotation * rel.rotation)
+                .with_scale(transform.scale)
+        } else {
+            match parent {
+                None => *transform,
+                Some(_) => match world_pose_outside_bodies(id, transform, &parents, &bodies, &trans_query) {
+                    Some(pose) => pose,
+                    None => continue,
+                },
+            }
         };
         let rb = RigidBody::new_static();
         let mut collider = col.clone();
         collider.material = col.material_with(material);
-        if !sync.needs(id.id(), material.is_some(), None, parent.is_some()) {
+        if !sync.needs(id.id(), material.is_some(), None, parent.is_some() || carried.is_some()) {
             if cfg!(debug_assertions) {
                 assert_clean(physics_world, id, &rb, &pose, &Velocity::default(), &collider);
             }
@@ -703,21 +721,54 @@ fn gather_static_colliders(world: &World, physics_world: &PhysicsWorld, sync: &m
     }
 }
 
-/// The ids under a body's `Children`, at any depth: the parts `body_collider` builds its compound
-/// from. Read from the `Children` side because that is the side the compound walk follows — a
-/// child listed there without a `Parent` of its own is still a part.
-fn compound_parts(world: &World) -> std::collections::HashSet<u32> {
+/// Drops the step's trigger events between a trigger a body carries and that body. A zone in a tray
+/// overlaps the tray, and "the tray entered its own zone" on every step is no event anyone asked
+/// for — the trigger is the body's, as a child collider of a Unity rigidbody is.
+fn forget_owners_in_triggers(physics_world: &mut PhysicsWorld, owners: &[(u32, u32)]) {
+    if owners.is_empty() {
+        return;
+    }
+    physics_world.trigger_events.retain(|e| {
+        let (a, b) = (e.trigger_entity.id(), e.other_entity.id());
+        !owners.iter().any(|&(trigger, owner)| (a == trigger && b == owner) || (b == trigger && a == owner))
+    });
+}
+
+/// What lies under the bodies' `Children`, at any depth: the parts `body_collider` builds its
+/// compound from, and the triggers it leaves out. Read from the `Children` side because that is
+/// the side the compound walk follows — a child listed there without a `Parent` of its own is still
+/// a part.
+#[derive(Default)]
+struct BodyParts {
+    /// The ids that are part of a body's compound.
+    solid: std::collections::HashSet<u32>,
+    /// Each trigger under a body: the body, and the trigger's pose in its frame — composed as the
+    /// compound composes its parts.
+    triggers: std::collections::HashMap<u32, (Entity, Relative)>,
+}
+
+fn compound_parts(world: &World) -> BodyParts {
     let children_query = world.query::<&gizmo_core::component::Children>();
-    let mut parts = std::collections::HashSet::new();
-    let roots = world.query_filtered::<(Entity, &gizmo_core::component::Children), gizmo_core::query::With<RigidBody>>();
-    for (root, children) in roots.iter() {
-        let mut stack: Vec<Entity> = children.0.clone();
-        while let Some(e) = stack.pop() {
-            if e == root || !parts.insert(e.id()) {
+    let trans_query = world.query::<&Transform>();
+    let col_query = world.query::<&Collider>();
+    let mut parts = BodyParts::default();
+    let roots = world.query_filtered::<(Entity, &gizmo_core::component::Children, &Transform), gizmo_core::query::With<RigidBody>>();
+    for (root, children, root_t) in roots.iter() {
+        let top = Relative { position: gizmo_math::Vec3::ZERO, rotation: gizmo_math::Quat::IDENTITY, scale: root_t.scale };
+        let mut stack: Vec<(Entity, Relative)> = children.0.iter().map(|&c| (c, top)).collect();
+        let mut seen = std::collections::HashSet::new();
+        while let Some((e, above)) = stack.pop() {
+            if e == root || !seen.insert(e.id()) {
                 continue;
             }
+            let rel = above.then(&trans_query.get(e).copied().unwrap_or_default());
+            if col_query.get(e).is_some_and(|c| c.is_trigger) {
+                parts.triggers.insert(e.id(), (root, rel));
+            } else {
+                parts.solid.insert(e.id());
+            }
             if let Some(grand) = children_query.get(e) {
-                stack.extend(grand.0.iter().copied());
+                stack.extend(grand.0.iter().map(|&c| (c, rel)));
             }
         }
     }
