@@ -621,10 +621,13 @@ fn row_context_menu(ui: &mut egui::Ui, row: &Row, state: &mut EditorState) {
 
     // === DIŞA AKTARMA ===
     if ui.button("💾 Prefab Olarak Kaydet").clicked() {
-        let path = format!(
-            "demo/assets/prefabs/{}.prefab",
-            entity_name.replace(" ", "_")
-        );
+        // In the workspace's `prefabs` folder — `demo/assets/prefabs` by default, as before — not in
+        // `demo/assets/prefabs` relative to wherever the studio runs, whatever project it has open.
+        let path = std::path::Path::new(&state.assets.workspace_root)
+            .join("prefabs")
+            .join(crate::asset_browser::prefab_file_name(entity_name))
+            .to_string_lossy()
+            .into_owned();
         state.prefab_save_request = Some((entity, path));
         ui.close();
     }

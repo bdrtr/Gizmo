@@ -9,6 +9,17 @@ use web_time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
+/// The file name of a prefab saved as `stem` — an entity's name, say. Spaces become `_`, and so does
+/// every character a file system refuses: Windows' `<>:"/\|?*` and control characters. A slash would
+/// have put the file in a folder of its own, and a colon, on NTFS, in an alternate data stream.
+pub(crate) fn prefab_file_name(stem: &str) -> String {
+    let clean: String = stem
+        .chars()
+        .map(|c| if c == ' ' || "<>:\"/\\|?*".contains(c) || c.is_control() { '_' } else { c })
+        .collect();
+    format!("{clean}.prefab")
+}
+
 /// Draws the asset browser tab.
 pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
 let mut finished = false;
@@ -116,8 +127,10 @@ let mut finished = false;
     ui.horizontal(|ui| {
         if ui.small_button("📦 Sahneden Prefab Oluştur").clicked() {
             if let Some(&selected) = state.selection.entities.iter().next() {
-                let path =
-                    Path::new(&state.assets.root).join(format!("prefab_{}.prefab", selected));
+                // From the entity's numbers: its `Display` (`Entity(3:0)`) holds a colon, which NTFS
+                // takes for an alternate data stream.
+                let stem = format!("prefab_{}v{}", selected.id(), selected.generation());
+                let path = Path::new(&state.assets.root).join(prefab_file_name(&stem));
                 state.prefab_save_request = Some((selected, path.to_string_lossy().to_string()));
             } else {
                 state.log_warning("Önce bir entity seçin.");
@@ -699,6 +712,17 @@ fn format_size(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A prefab's file name keeps what a name is made of and nothing a file system refuses: an
+    /// entity's `Display` (`Entity(3:0)`) once went in, and on NTFS its colon opened a data stream.
+    #[test]
+    fn a_prefab_file_name_is_valid_everywhere() {
+        use super::prefab_file_name;
+        assert_eq!(prefab_file_name("Directional Light"), "Directional_Light.prefab");
+        assert_eq!(prefab_file_name("Entity(3:0)"), "Entity(3_0).prefab");
+        assert_eq!(prefab_file_name("a/b\\c?*"), "a_b_c__.prefab");
+        assert_eq!(prefab_file_name("Kale Kapısı"), "Kale_Kapısı.prefab");
+    }
+
     #[test]
     fn sidecars_are_a_kind_and_never_listed() {
         assert_eq!(asset_kind("grass.jpg.meta"), AssetKind::Meta);
