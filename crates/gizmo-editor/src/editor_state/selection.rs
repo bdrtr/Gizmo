@@ -19,6 +19,17 @@ impl EditorState {
             .or_else(|| self.selection.entities.iter().copied().min_by_key(|e| e.id()))
     }
 
+    /// The animation panels are drawing `entity`'s keyframes: a selected or dragged keyframe of
+    /// another entity, and a drag's snapshot, are let go of. Called by both timelines before they
+    /// read `anim_edit`.
+    pub(crate) fn keyframes_of(&mut self, entity: gizmo_core::entity::Entity) {
+        if self.anim_edit.owner != Some(entity) {
+            self.anim_edit = AnimationEditState { owner: Some(entity), ..Default::default() };
+            self.anim_drag_original = None;
+            self.transform_drag_original = None;
+        }
+    }
+
     /// Is this entity in the selection?
     pub fn is_selected(&self, id: gizmo_core::entity::Entity) -> bool {
         self.selection.entities.contains(&id)

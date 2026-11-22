@@ -199,6 +199,11 @@ pub struct AnimationEditState {
     pub dragging: Option<KeyframeRef>,
     /// The last keyframe clicked, so Delete has something to act on.
     pub selected: Option<KeyframeRef>,
+    /// The entity whose keyframes `dragging` and `selected` name. A `KeyframeRef` is indices
+    /// only, so without it a key selected on one entity's timeline named the key at the same place
+    /// on the next entity's, and Delete there removed a key nobody had selected
+    /// (`EditorState::keyframes_of`).
+    pub owner: Option<gizmo_core::entity::Entity>,
 }
 
 // --- The nested state structs ---

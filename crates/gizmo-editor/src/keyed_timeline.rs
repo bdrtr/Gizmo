@@ -45,6 +45,7 @@ pub(crate) fn ui_keyed_animation(ui: &mut egui::Ui, world: &World, state: &mut E
     let Some(mut player) = players.get_mut(entity) else {
         return false;
     };
+    state.keyframes_of(entity);
     let clip = player.clip.clone();
     // A clip with no keys yet still gets a second of lane to scrub and key along.
     let duration = clip.as_ref().map_or(0.0, |c| c.duration()).max(1.0);

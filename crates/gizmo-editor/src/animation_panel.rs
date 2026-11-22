@@ -81,6 +81,7 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         empty(ui, "Bir varlık seç — animasyon oynatıcısı olan bir varlık.");
         return;
     };
+    state.keyframes_of(entity);
 
     // SAFETY: the editor UI runs single-threaded inside the egui draw; no concurrent World access.
     let mut players =
@@ -740,6 +741,38 @@ mod tests {
         state.timeline_hovered = false;
         frame(&mut state, egui::pos2(300.0, 190.0));
         assert!(!state.timeline_hovered, "the pointer is below it");
+    }
+
+    /// A keyframe selected on one entity's timeline is not a keyframe of the next one's. The
+    /// selection was indices only and outlived the entity: select A's first key, select B, press
+    /// Delete over B's timeline, and B lost its first key.
+    #[test]
+    fn a_key_selected_on_one_entity_is_not_deleted_on_another() {
+        let mut world = gizmo_core::World::new();
+        let a = world.spawn();
+        world.add_component(a, player(2.0, &[0.0, 1.0, 2.0]));
+        let b = world.spawn();
+        world.add_component(b, player(2.0, &[0.0, 1.0, 2.0]));
+        let mut state = crate::EditorState::default();
+        let ctx = egui::Context::default();
+        let frame = |state: &mut crate::EditorState, events: Vec<egui::Event>| {
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                let mut panel = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 200.0))));
+                super::ui_animation(&mut panel, &world, state);
+            })
+            .drop_without_applying_deltas();
+        };
+        state.select_exclusive(a);
+        frame(&mut state, vec![]);
+        state.anim_edit.selected = Some(crate::editor_state::KeyframeRef { channel: TrackChannel::Translation, track: 0, keyframe: 0 });
+
+        state.select_exclusive(b);
+        let delete = egui::Event::Key { key: egui::Key::Delete, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
+        frame(&mut state, vec![egui::Event::PointerMoved(egui::pos2(300.0, 50.0)), delete]);
+        let keys = world.query::<&AnimationPlayer>().get(b).map(|p| p.animations[0].translations[0].keyframes.len());
+        assert_eq!(keys, Some(3), "B lost a key that was selected on A");
+        assert_eq!(state.anim_edit.selected, None);
+        assert_eq!(state.anim_edit.owner, Some(b));
     }
 
     /// The panel's whole editing contract in one test: the key moves, the list stays sorted, the
