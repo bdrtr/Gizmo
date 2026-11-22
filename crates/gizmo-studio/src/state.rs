@@ -96,6 +96,7 @@ impl StudioGame {
 
 /// GPU resources used to render editor debug gizmos (primitive meshes and a
 /// default white texture bind group), and the meshes the `➕ Add` menu spawns.
+#[derive(Clone)]
 pub struct DebugAssets {
     /// The cube mesh the `➕ Add` menu spawns.
     pub cube: gizmo::renderer::components::Mesh,

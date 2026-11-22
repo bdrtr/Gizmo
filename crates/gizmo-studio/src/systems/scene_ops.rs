@@ -4,8 +4,10 @@ use gizmo::editor::EditorState;
 use gizmo::physics::components::Transform;
 use gizmo::prelude::*;
 
-/// Carries out the scene operations the UI raised this frame: spawning a primitive, deleting or
-/// duplicating a selection, saving and loading.
+/// Carries out the scene operations the editor's panels asked for this frame: the inspector's edits
+/// and component additions and removals, the shader graph's, a navigation mesh rebuild, deletions,
+/// a spawn from the ➕ menu, the hierarchy's visibility toggles and re-parenting. One function per
+/// kind of request below, in the order they are applied.
 pub fn handle_scene_operations(
     world: &mut World,
     editor_state: &mut EditorState,
@@ -17,573 +19,572 @@ pub fn handle_scene_operations(
     // The shader graph tab's "Apply", "Edit selected" and live edits.
     gizmo::editor::shader_graph_panel::apply_to_world(world, editor_state);
 
-    // --- DİNAMİK COMPONENT EKLEME İŞLEMİ ---
     if let Some((ent_id, comp_name)) = editor_state.add_component_request.take() {
-        if let Some(ent) = world.live(ent_id) {
-            match comp_name.as_str() {
-                "Transform" => world.add_component(ent, Transform::new(Vec3::ZERO)),
-                "Velocity" => world.add_component(ent, gizmo::physics::Velocity::new(Vec3::ZERO)),
-                "RigidBody" => {
-                    world.add_component(ent, gizmo::physics::RigidBody::new(1.0, true))
-                }
-                "Collider" => world.add_component(
-                    ent,
-                    gizmo::physics::Collider::box_collider(gizmo::math::Vec3::new(1.0, 1.0, 1.0)),
-                ),
-                "Camera" => world.add_component(
-                    ent,
-                    gizmo::renderer::components::Camera::new(
-                        60.0_f32.to_radians(),
-                        0.1,
-                        1000.0,
-                        false),
-                ),
-                "PointLight" => world.add_component(
-                    ent,
-                    gizmo::renderer::components::PointLight::new(Vec3::new(1., 1., 1.), 1.0, 10.0),
-                ),
-                // `LightRole::Sun` because a directional light a user asks for IS the scene's sun:
-                // the alternative role exists for fill lights an author places deliberately, and
-                // choosing it here would give a light that lights nothing shadow-wise and looks
-                // broken. A scene with two suns is authorable now — it already was, via Ctrl+D —
-                // and `shared.rs` picks one; that is a lighting question, not an add-menu one.
-                "DirectionalLight" => world.add_component(
-                    ent,
-                    gizmo::renderer::components::DirectionalLight::new(
-                        Vec3::new(1.0, 0.95, 0.9),
-                        3.0,
-                        gizmo::renderer::components::LightRole::Sun,
-                    ),
-                ),
-                // `new()` and not a tuned look: the default is deliberately the engine's
-                // no-component behaviour, so adding one changes nothing until a slider moves.
-                // The environment panel's "🎨 Bu kameraya look ekle" button raises this same
-                // request, so an arm missing here would make that button log "Bilinmeyen
-                // component" at the user — the exact failure this sweep keeps finding.
-                "PostProcess" => world.add_component(
-                    ent,
-                    gizmo::renderer::components::PostProcess::new(),
-                ),
-                // 25°/35° half-angles: a readable cone rather than a pinprick or a hemisphere.
-                // The constructor clamps inner to outer, which is also what the inspector's two
-                // sliders enforce — an inner cone wider than its outer one inverts the falloff.
-                "SpotLight" => world.add_component(
-                    ent,
-                    gizmo::renderer::components::SpotLight::new(
-                        Vec3::new(1.0, 1.0, 1.0),
-                        5.0,
-                        20.0,
-                        25.0_f32.to_radians(),
-                        35.0_f32.to_radians(),
-                    ),
-                ),
-                // A 1 m × 0.5 m panel: a softbox, big enough that its reflection reads as a panel.
-                "RectLight" => world.add_component(
-                    ent,
-                    gizmo::renderer::components::RectLight::new(Vec3::new(1.0, 1.0, 1.0), 5.0, 20.0, 1.0, 0.5),
-                ),
-                "Material" => {
-                    let white_tex = world
-                        .get_resource::<DebugAssets>()
-                        .map(|a| a.white_tex.clone());
-                    if let Some(tex) = white_tex {
-                        world.add_component(ent, gizmo::prelude::Material::new(tex));
-                    }
-                }
-                "Script" => world
-                    .add_component(ent, gizmo::scripting::Script::new("scripts/new_script.lua")),
-                "ParticleEmitter" => {
-                    world.add_component(ent, gizmo::renderer::components::ParticleEmitter::new())
-                }
-                "AudioSource" => world.add_component(
-                    ent,
-                    // `AudioSource::new("")` already yields these exact defaults
-                    // (is_3d=true, max_distance=100.0, volume=1.0, pitch=1.0,
-                    // loop_sound=false, _internal_sink_id=None); switched from an
-                    // exhaustive struct literal because AudioSource is now
-                    // #[non_exhaustive] and can no longer be built cross-crate.
-                    gizmo::prelude::AudioSource::new(""),
-                ),
-                "Terrain" => {
-                    world.add_component(
-                        ent,
-                        gizmo::renderer::components::Terrain::new(
-                            "demo/assets/textures/heightmap.png".to_string(),
-                            100.0,
-                            100.0,
-                            20.0,
-                        ),
-                    );
-                    // Request rendering mesh creation
-                    editor_state.generate_terrain_requests.push(ent_id);
-                }
-
-                // A metre-wide square of the engine's own white, tinted by its colour, until an image
-                // is dropped on it: something to see and to save, with no file behind it.
-                "Sprite" => {
-                    let mut sprite = gizmo::renderer::components::Sprite::world(
-                        gizmo::renderer::sprite::SpriteImageId::UNRESOLVED,
-                        Vec2::ONE,
-                    );
-                    sprite.image_name = Some(gizmo::renderer::sprite::ImageName::new(
-                        gizmo::renderer::asset::AssetManager::WHITE_TEXTURE,
-                        gizmo::renderer::sprite::SpriteFilter::Linear,
-                    ));
-                    world.add_component(ent, sprite);
-                }
-                // A world label in the engine's default face (`text_sync` finds it by that name).
-                "Text" => {
-                    let mut text = gizmo::renderer::components::Text::world(
-                        "Text",
-                        gizmo::renderer::text::FontId::UNRESOLVED,
-                        32.0,
-                        64.0,
-                    );
-                    text.font_name = Some(gizmo::renderer::Renderer::DEFAULT_FONT.to_string());
-                    world.add_component(ent, text);
-                }
-                "Hitbox" => world.add_component(ent, gizmo::physics::components::Hitbox::default()),
-                "Hurtbox" => world.add_component(ent, gizmo::physics::components::Hurtbox::default()),
-                "BoneAttachment" => world.add_component(ent, gizmo::renderer::components::BoneAttachment::default()),
-                // Not `default()`: that is always player 1, so adding two fighters gave two
-                // player 1s — and the studio's own fight HUD needs a p1 AND a p2 before it draws
-                // anything (`simulation.rs`, `fight_hud.active`). Authoring a versus scene the
-                // obvious way therefore produced a HUD that never appeared. The slot is the
-                // lowest positive number no fighter in the scene is using.
-                "FighterController" => world.add_component(
-                    ent,
-                    gizmo::physics::components::fighter::FighterController::new(
-                        next_free_player_slot(world),
-                    ),
-                ),
-
-                // The inspector has drawn an "AI NavAgent" section since the component existed,
-                // and there was no way to put one on an entity: not in the ➕ menu, not here, and
-                // not in the scene format either. `NavAgent::default()` is the human-scale walker
-                // (5 m/s, 10 m/s², 0.5 m) — tuning is what the inspector is for.
-                "NavAgent" => world.add_component(ent, gizmo::ai::components::NavAgent::default()),
-                // An empty tree: its section offers the root, and every node after it.
-                "BehaviorTree" => world.add_component(ent, gizmo::ai::BehaviorTree::default()),
-
-                // Not a built-in: a type registered with `register_editable` — a game's own
-                // component — can still be added, by the registry's own default-insert.
-                other => {
-                    if !gizmo::editor::component_requests::add_registered_component(world, ent, other) {
-                        editor_state.log_warning(&format!("Bilinmeyen component: {}", comp_name));
-                    }
-                }
-            }
-        }
+        add_requested_component(world, editor_state, ent_id, comp_name);
     }
-
     if let Some((ent_id, comp_name)) = editor_state.remove_component_request.take() {
-        if let Some(ent) = world.live(ent_id) {
-            match comp_name.as_str() {
-                "Hitbox" => { world.remove_component::<gizmo::physics::components::Hitbox>(ent); }
-                "Hurtbox" => { world.remove_component::<gizmo::physics::components::Hurtbox>(ent); }
-                "BoneAttachment" => { world.remove_component::<gizmo::renderer::components::BoneAttachment>(ent); }
-                // Four inspector sections draw a 🗑 button; this arm was the one missing, so that
-                // button logged "Component turu silinemiyor" at the user and left the component
-                // in place. `every_delete_button_in_the_inspector_removes_its_component` below
-                // now pins all four together rather than each on its own.
-                "FighterController" => { world.remove_component::<gizmo::physics::components::fighter::FighterController>(ent); }
-                "NavAgent" => { world.remove_component::<gizmo::ai::components::NavAgent>(ent); }
-                "BehaviorTree" => { world.remove_component::<gizmo::ai::BehaviorTree>(ent); }
-                other => {
-                    if !gizmo::editor::component_requests::remove_registered_component(world, ent, other) {
-                        editor_state.log_warning(&format!("Component turu silinemiyor: {}", comp_name));
-                    }
-                }
-            }
-        }
+        remove_requested_component(world, editor_state, ent_id, comp_name);
     }
-
     if editor_state.scene.rebuild_navmesh_request {
-        editor_state.scene.rebuild_navmesh_request = false;
-
-        // Tetiklendiğinde gizmo-ai içindeki grid'in needs_rebuild bayrağını true yaparız.
-        //
-        // Izgara yoksa ARTIK KURULUYOR: eskiden bu dal yalnız "NavGrid bulunamadı! AI aktif mi?"
-        // diye uyarıyordu ve doğru cevap "hayır, hiçbir yerde" idi — motorda bir NavGrid'i
-        // kuran tek bir satır yoktu. Sahnede ajan olmadan da kurulur; düğmeye basmak niyetin
-        // kendisi, `ensure_nav_grid`'in ajan koşulu ise otomatik yol için.
-        let existing = world
-            .get_resource_mut::<gizmo::ai::pathfinding::NavGrid>()
-            .map(|mut grid| {
-                grid.needs_rebuild = true;
-            })
-            .is_some();
-        if existing {
-            editor_state.log_info("🤖 NavMesh yeniden oluşturulması talep edildi...");
-        } else {
-            let grid = match world.get_resource::<gizmo::physics::world::PhysicsWorld>() {
-                Some(physics) => gizmo::ai::pathfinding::NavGrid::fitted_to(
-                    gizmo::ai::pathfinding::NavGrid::DEFAULT_CELL_SIZE,
-                    &physics,
-                ),
-                None => gizmo::ai::pathfinding::NavGrid::centred_on(
-                    gizmo::ai::pathfinding::NavGrid::DEFAULT_CELL_SIZE,
-                    gizmo::ai::pathfinding::NavGrid::FALLBACK_CELLS,
-                    gizmo::ai::pathfinding::NavGrid::FALLBACK_CELLS,
-                    gizmo::math::Vec3::ZERO,
-                ),
-            };
-            editor_state.log_info(&format!(
-                "🤖 NavGrid yoktu — statik geometriye göre kuruldu ({}×{} hücre, {} m)",
-                grid.width, grid.height, grid.cell_size
-            ));
-            world.insert_resource(grid);
-        }
+        rebuild_navmesh(world, editor_state);
     }
-
     if !editor_state.despawn_requests.is_empty() {
-        let mut soft_deleted_entities = Vec::new();
-        let despawn_reqs: Vec<gizmo::prelude::Entity> =
-            std::mem::take(&mut editor_state.despawn_requests);
-        for ent_id in despawn_reqs {
-            editor_state.selection.entities.remove(&ent_id);
+        despawn_requested(world, editor_state);
+    }
+    if let Some(kind) = editor_state.spawn_request.take() {
+        spawn_requested(world, editor_state, kind);
+    }
+    toggle_requested_visibility(world, editor_state);
+    if let Some((child_id, new_parent_id)) = editor_state.reparent_request.take() {
+        reparent_requested(world, editor_state, child_id, new_parent_id);
+    }
+    if let Some(child_id) = editor_state.unparent_request.take() {
+        unparent_requested(world, editor_state, child_id);
+    }
+}
 
-            // Korumalı objelerin (Editor Kamera, Grid, Işık) silinmesini engelle
-            // Krom kararı ortak; "Directional Light" ise krom DEĞİL — sahnenin güneşi, ama
-            // varsayılan sahnenin silinmesini istemediğimiz bir parçası. İkisi ayrı gerekçe,
-            // o yüzden ayrı satırda duruyorlar.
-            let is_protected = {
-                let names = world.query::<&gizmo::core::component::EntityName>();
-                let markers = world.query::<&gizmo::core::component::EditorOnly>();
-                let name = names.get(ent_id).map(|n| n.0.clone());
-                gizmo::core::component::is_editor_only(
-                    markers.get(ent_id).is_some(),
-                    name.as_deref(),
-                ) || name.as_deref() == Some("Directional Light")
-            };
-
-            if is_protected {
-                editor_state.log_warning(&format!("Entity {} korumalı bir objedir ve silinemez.", ent_id.id()));
-                continue;
+/// The ➕ menu's component, added to `ent_id` (`EditorState::add_component_request`).
+fn add_requested_component(world: &mut World, editor_state: &mut EditorState, ent_id: Entity, comp_name: String) {
+    if let Some(ent) = world.live(ent_id) {
+        match comp_name.as_str() {
+            "Transform" => world.add_component(ent, Transform::new(Vec3::ZERO)),
+            "Velocity" => world.add_component(ent, gizmo::physics::Velocity::new(Vec3::ZERO)),
+            "RigidBody" => {
+                world.add_component(ent, gizmo::physics::RigidBody::new(1.0, true))
             }
-
-            // 1. Tüm çocuklarını topla (kendisi dahil) — cycle-safe ve tekrarsız.
-            //
-            // This was a hand-rolled breadth-first walk with no visited set until 2026-08-30.
-            // A `Children` cycle grew `ids_to_delete` without bound — on a Delete keypress, so
-            // the editor hung and then died — and a diamond counted the shared child twice in
-            // the message below. `descendants_inclusive` owns the guard now.
-            let ids_to_delete = world.descendants_inclusive(ent_id);
-
-            // 2. Etiketleri ekle (Soft Delete)
-            for &id in &ids_to_delete {
-                if let Some(ent) = world.live(id) {
-                    world.add_component(ent, gizmo::core::component::IsDeleted);
-                    world.add_component(ent, gizmo::core::component::IsHidden);
-                    soft_deleted_entities.push(ent);
+            "Collider" => world.add_component(
+                ent,
+                gizmo::physics::Collider::box_collider(gizmo::math::Vec3::new(1.0, 1.0, 1.0)),
+            ),
+            "Camera" => world.add_component(
+                ent,
+                gizmo::renderer::components::Camera::new(
+                    60.0_f32.to_radians(),
+                    0.1,
+                    1000.0,
+                    false),
+            ),
+            "PointLight" => world.add_component(
+                ent,
+                gizmo::renderer::components::PointLight::new(Vec3::new(1., 1., 1.), 1.0, 10.0),
+            ),
+            // `LightRole::Sun` because a directional light a user asks for IS the scene's sun:
+            // the alternative role exists for fill lights an author places deliberately, and
+            // choosing it here would give a light that lights nothing shadow-wise and looks
+            // broken. A scene with two suns is authorable now — it already was, via Ctrl+D —
+            // and `shared.rs` picks one; that is a lighting question, not an add-menu one.
+            "DirectionalLight" => world.add_component(
+                ent,
+                gizmo::renderer::components::DirectionalLight::new(
+                    Vec3::new(1.0, 0.95, 0.9),
+                    3.0,
+                    gizmo::renderer::components::LightRole::Sun,
+                ),
+            ),
+            // `new()` and not a tuned look: the default is deliberately the engine's
+            // no-component behaviour, so adding one changes nothing until a slider moves.
+            // The environment panel's "🎨 Bu kameraya look ekle" button raises this same
+            // request, so an arm missing here would make that button log "Bilinmeyen
+            // component" at the user — the exact failure this sweep keeps finding.
+            "PostProcess" => world.add_component(
+                ent,
+                gizmo::renderer::components::PostProcess::new(),
+            ),
+            // 25°/35° half-angles: a readable cone rather than a pinprick or a hemisphere.
+            // The constructor clamps inner to outer, which is also what the inspector's two
+            // sliders enforce — an inner cone wider than its outer one inverts the falloff.
+            "SpotLight" => world.add_component(
+                ent,
+                gizmo::renderer::components::SpotLight::new(
+                    Vec3::new(1.0, 1.0, 1.0),
+                    5.0,
+                    20.0,
+                    25.0_f32.to_radians(),
+                    35.0_f32.to_radians(),
+                ),
+            ),
+            // A 1 m × 0.5 m panel: a softbox, big enough that its reflection reads as a panel.
+            "RectLight" => world.add_component(
+                ent,
+                gizmo::renderer::components::RectLight::new(Vec3::new(1.0, 1.0, 1.0), 5.0, 20.0, 1.0, 0.5),
+            ),
+            "Material" => {
+                let white_tex = world
+                    .get_resource::<DebugAssets>()
+                    .map(|a| a.white_tex.clone());
+                if let Some(tex) = white_tex {
+                    world.add_component(ent, gizmo::prelude::Material::new(tex));
                 }
             }
-            editor_state.log_info(&format!(
-                "Entity {} ve {} çocuğu silindi (Soft Delete).",
-                ent_id,
-                ids_to_delete.len() - 1
-            ));
-        }
+            "Script" => world
+                .add_component(ent, gizmo::scripting::Script::new("scripts/new_script.lua")),
+            "ParticleEmitter" => {
+                world.add_component(ent, gizmo::renderer::components::ParticleEmitter::new())
+            }
+            "AudioSource" => world.add_component(
+                ent,
+                // `AudioSource::new("")` already yields these exact defaults
+                // (is_3d=true, max_distance=100.0, volume=1.0, pitch=1.0,
+                // loop_sound=false, _internal_sink_id=None); switched from an
+                // exhaustive struct literal because AudioSource is now
+                // #[non_exhaustive] and can no longer be built cross-crate.
+                gizmo::prelude::AudioSource::new(""),
+            ),
+            "Terrain" => {
+                world.add_component(
+                    ent,
+                    gizmo::renderer::components::Terrain::new(
+                        "demo/assets/textures/heightmap.png".to_string(),
+                        100.0,
+                        100.0,
+                        20.0,
+                    ),
+                );
+                // Request rendering mesh creation
+                editor_state.generate_terrain_requests.push(ent_id);
+            }
 
-        if !soft_deleted_entities.is_empty() {
-            editor_state
-                .history
-                .push(gizmo::editor::history::EditorAction::EntityDespawned {
-                    entity_ids: soft_deleted_entities,
-                });
+            // A metre-wide square of the engine's own white, tinted by its colour, until an image
+            // is dropped on it: something to see and to save, with no file behind it.
+            "Sprite" => {
+                let mut sprite = gizmo::renderer::components::Sprite::world(
+                    gizmo::renderer::sprite::SpriteImageId::UNRESOLVED,
+                    Vec2::ONE,
+                );
+                sprite.image_name = Some(gizmo::renderer::sprite::ImageName::new(
+                    gizmo::renderer::asset::AssetManager::WHITE_TEXTURE,
+                    gizmo::renderer::sprite::SpriteFilter::Linear,
+                ));
+                world.add_component(ent, sprite);
+            }
+            // A world label in the engine's default face (`text_sync` finds it by that name).
+            "Text" => {
+                let mut text = gizmo::renderer::components::Text::world(
+                    "Text",
+                    gizmo::renderer::text::FontId::UNRESOLVED,
+                    32.0,
+                    64.0,
+                );
+                text.font_name = Some(gizmo::renderer::Renderer::DEFAULT_FONT.to_string());
+                world.add_component(ent, text);
+            }
+            "Hitbox" => world.add_component(ent, gizmo::physics::components::Hitbox::default()),
+            "Hurtbox" => world.add_component(ent, gizmo::physics::components::Hurtbox::default()),
+            "BoneAttachment" => world.add_component(ent, gizmo::renderer::components::BoneAttachment::default()),
+            // Not `default()`: that is always player 1, so adding two fighters gave two
+            // player 1s — and the studio's own fight HUD needs a p1 AND a p2 before it draws
+            // anything (`simulation.rs`, `fight_hud.active`). Authoring a versus scene the
+            // obvious way therefore produced a HUD that never appeared. The slot is the
+            // lowest positive number no fighter in the scene is using.
+            "FighterController" => world.add_component(
+                ent,
+                gizmo::physics::components::fighter::FighterController::new(
+                    next_free_player_slot(world),
+                ),
+            ),
+
+            // The inspector has drawn an "AI NavAgent" section since the component existed,
+            // and there was no way to put one on an entity: not in the ➕ menu, not here, and
+            // not in the scene format either. `NavAgent::default()` is the human-scale walker
+            // (5 m/s, 10 m/s², 0.5 m) — tuning is what the inspector is for.
+            "NavAgent" => world.add_component(ent, gizmo::ai::components::NavAgent::default()),
+            // An empty tree: its section offers the root, and every node after it.
+            "BehaviorTree" => world.add_component(ent, gizmo::ai::BehaviorTree::default()),
+
+            // Not a built-in: a type registered with `register_editable` — a game's own
+            // component — can still be added, by the registry's own default-insert.
+            other => {
+                if !gizmo::editor::component_requests::add_registered_component(world, ent, other) {
+                    editor_state.log_warning(&format!("Bilinmeyen component: {}", comp_name));
+                }
+            }
         }
     }
+}
 
-    // --- YENİ ENTITY OLUŞTURMA (Küp / Küre / Boş) ---
-    if let Some(kind) = editor_state.spawn_request.take() {
-        // What the `➕` menu offers and what this understood had drifted a long way apart. The menu
-        // has nine entries; this match had two arms and a catch-all, so `Group`, `Plane`,
-        // `Cylinder`, `Capsule`, `PointLight`, `Camera` and `ParticleEmitter` all fell through and
-        // produced an entity called "Boş Entity" carrying a `MeshRenderer` and no mesh — seven menu
-        // items promising seven different things and making the same wrong one.
-        //
-        // The channel is a `SpawnKind` now rather than a `String`, and this match is **exhaustive**
-        // on it: a variant nobody teaches this about does not compile. See the type's own note for
-        // why it is deliberately not `#[non_exhaustive]`.
-        let e = world.spawn();
-        world.add_component(e, Transform::new(Vec3::ZERO));
-        world.add_component(e, gizmo::physics::components::GlobalTransform::default());
-
-        // Meshes come from `DebugAssets`, which needs a GPU. The kinds that do NOT draw — an empty,
-        // a group, a light, a camera, an emitter — must not be gated behind it: the whole spawn
-        // block used to sit inside `if let Some(assets)`, so with no renderer resource every menu
-        // entry did nothing at all, silently.
-        let meshes = world.get_resource::<DebugAssets>().map(|a| {
-            (
-                a.cube.clone(),
-                a.sphere.clone(),
-                a.plane.clone(),
-                a.cylinder.clone(),
-                a.capsule.clone(),
-                a.white_tex.clone(),
-            )
-        });
-
-        use crate::state::PrimitiveSize as PS;
-        use gizmo::editor::SpawnKind;
-
-        // `Some(())` = built. `None` = a drawing kind asked for before the GPU assets exist.
-        let built: Option<()> = match kind {
-            SpawnKind::Cube => meshes.clone().map(|(cube, _, _, _, _, tex)| {
-                world.add_component(e, cube);
-                world.add_component(
-                    e,
-                    gizmo::prelude::Material::new(tex).with_pbr(
-                        gizmo::math::Vec4::new(0.8, 0.8, 0.8, 1.0),
-                        0.5,
-                        0.0,
-                    ),
-                );
-                world.add_component(
-                    e,
-                    gizmo::physics::Collider::box_collider(gizmo::math::Vec3::splat(PS::CUBE_HALF)),
-                );
-            }),
-            SpawnKind::Sphere => meshes.clone().map(|(_, sphere, _, _, _, tex)| {
-                world.add_component(e, sphere);
-                world.add_component(
-                    e,
-                    gizmo::prelude::Material::new(tex).with_pbr(
-                        gizmo::math::Vec4::new(0.4, 0.6, 1.0, 1.0),
-                        0.2,
-                        0.0,
-                    ),
-                );
-                // Was `sphere(1.0)` against a mesh of radius 0.5: the collision shape was twice
-                // the size of the thing you could see, so a dropped sphere came to rest half a
-                // radius above the floor. Both numbers are `PS::SPHERE_RADIUS` now.
-                world.add_component(e, gizmo::physics::Collider::sphere(PS::SPHERE_RADIUS));
-            }),
-            SpawnKind::Plane => meshes.clone().map(|(_, _, plane, _, _, tex)| {
-                world.add_component(e, plane);
-                world.add_component(
-                    e,
-                    gizmo::prelude::Material::new(tex).with_pbr(
-                        gizmo::math::Vec4::new(0.7, 0.7, 0.7, 1.0),
-                        0.8,
-                        0.0,
-                    ),
-                );
-                // Pushed down by its own half-thickness, so the collider's TOP face is exactly the
-                // visible quad instead of hovering above it.
-                world.add_component(
-                    e,
-                    gizmo::physics::Collider::offset_box(
-                        PS::plane_collider_offset(),
-                        PS::plane_collider_half_extents(),
-                    ),
-                );
-            }),
-            SpawnKind::Cylinder => meshes.clone().map(|(_, _, _, cylinder, _, tex)| {
-                world.add_component(e, cylinder);
-                world.add_component(
-                    e,
-                    gizmo::prelude::Material::new(tex).with_pbr(
-                        gizmo::math::Vec4::new(0.9, 0.7, 0.3, 1.0),
-                        0.4,
-                        0.0,
-                    ),
-                );
-                // The real cylinder shape, since 2026-08-17. Until then this was the convex hull
-                // of the mesh's own ring points — a 24-sided prism standing in for a circle,
-                // because a capsule would have rounded the ends off and a box would have squared
-                // them. The hull was faithful to the mesh's silhouette and still wrong in two
-                // ways the shape fixes: its inertia came from an AABB rather than from
-                // `½·m·r²`, and every contact resolved against a facet, so a cylinder on its
-                // side settled into whichever flat it happened to land on.
-                world.add_component(
-                    e,
-                    gizmo::physics::Collider::cylinder(
-                        PS::CYLINDER_RADIUS,
-                        PS::cylinder_collider_half_height(),
-                    ),
-                );
-            }),
-            SpawnKind::Capsule => meshes.clone().map(|(_, _, _, _, capsule, tex)| {
-                world.add_component(e, capsule);
-                world.add_component(
-                    e,
-                    gizmo::prelude::Material::new(tex).with_pbr(
-                        gizmo::math::Vec4::new(0.5, 0.9, 0.6, 1.0),
-                        0.3,
-                        0.0,
-                    ),
-                );
-                // The mesh takes the cylindrical section's WHOLE length; the collider takes half
-                // of it. That conversion is the one place these two disagree by construction.
-                world.add_component(
-                    e,
-                    gizmo::physics::Collider::capsule(
-                        PS::CAPSULE_RADIUS,
-                        PS::capsule_collider_half_height(),
-                    ),
-                );
-            }),
-
-            // --- The kinds that draw nothing: no mesh, no material, no `MeshRenderer`. ---
-            SpawnKind::PointLight => {
-                world.add_component(
-                    e,
-                    gizmo::renderer::components::PointLight::new(
-                        gizmo::math::Vec3::new(1.0, 0.95, 0.85),
-                        20.0,
-                        10.0,
-                    ),
-                );
-                Some(())
+/// The inspector's ✕ on a component (`EditorState::remove_component_request`).
+fn remove_requested_component(world: &mut World, editor_state: &mut EditorState, ent_id: Entity, comp_name: String) {
+    if let Some(ent) = world.live(ent_id) {
+        match comp_name.as_str() {
+            "Hitbox" => { world.remove_component::<gizmo::physics::components::Hitbox>(ent); }
+            "Hurtbox" => { world.remove_component::<gizmo::physics::components::Hurtbox>(ent); }
+            "BoneAttachment" => { world.remove_component::<gizmo::renderer::components::BoneAttachment>(ent); }
+            // Four inspector sections draw a 🗑 button; this arm was the one missing, so that
+            // button logged "Component turu silinemiyor" at the user and left the component
+            // in place. `every_delete_button_in_the_inspector_removes_its_component` below
+            // now pins all four together rather than each on its own.
+            "FighterController" => { world.remove_component::<gizmo::physics::components::fighter::FighterController>(ent); }
+            "NavAgent" => { world.remove_component::<gizmo::ai::components::NavAgent>(ent); }
+            "BehaviorTree" => { world.remove_component::<gizmo::ai::BehaviorTree>(ent); }
+            other => {
+                if !gizmo::editor::component_requests::remove_registered_component(world, ent, other) {
+                    editor_state.log_warning(&format!("Component turu silinemiyor: {}", comp_name));
+                }
             }
-            SpawnKind::Camera => {
-                world.add_component(
-                    e,
-                    gizmo::renderer::components::Camera::new(
-                        60.0_f32.to_radians(),
-                        0.1,
-                        500.0,
-                        // NOT primary: adding a camera to a scene must not hijack the view.
-                        false),
-                );
-                Some(())
-            }
-            SpawnKind::ParticleEmitter => {
-                world.add_component(e, gizmo::renderer::components::ParticleEmitter::new());
-                Some(())
-            }
-            // A group is an empty entity with a different name, and that is the honest whole of
-            // it — `Parent`/`Children` already carry what "folder" means.
-            SpawnKind::Group | SpawnKind::Empty => Some(()),
+        }
+    }
+}
+
+/// The navigation mesh, built again from the scene (`SceneSettings::rebuild_navmesh_request`).
+fn rebuild_navmesh(world: &mut World, editor_state: &mut EditorState) {
+    editor_state.scene.rebuild_navmesh_request = false;
+
+    // Tetiklendiğinde gizmo-ai içindeki grid'in needs_rebuild bayrağını true yaparız.
+    //
+    // Izgara yoksa ARTIK KURULUYOR: eskiden bu dal yalnız "NavGrid bulunamadı! AI aktif mi?"
+    // diye uyarıyordu ve doğru cevap "hayır, hiçbir yerde" idi — motorda bir NavGrid'i
+    // kuran tek bir satır yoktu. Sahnede ajan olmadan da kurulur; düğmeye basmak niyetin
+    // kendisi, `ensure_nav_grid`'in ajan koşulu ise otomatik yol için.
+    let existing = world
+        .get_resource_mut::<gizmo::ai::pathfinding::NavGrid>()
+        .map(|mut grid| {
+            grid.needs_rebuild = true;
+        })
+        .is_some();
+    if existing {
+        editor_state.log_info("🤖 NavMesh yeniden oluşturulması talep edildi...");
+    } else {
+        let grid = match world.get_resource::<gizmo::physics::world::PhysicsWorld>() {
+            Some(physics) => gizmo::ai::pathfinding::NavGrid::fitted_to(
+                gizmo::ai::pathfinding::NavGrid::DEFAULT_CELL_SIZE,
+                &physics,
+            ),
+            None => gizmo::ai::pathfinding::NavGrid::centred_on(
+                gizmo::ai::pathfinding::NavGrid::DEFAULT_CELL_SIZE,
+                gizmo::ai::pathfinding::NavGrid::FALLBACK_CELLS,
+                gizmo::ai::pathfinding::NavGrid::FALLBACK_CELLS,
+                gizmo::math::Vec3::ZERO,
+            ),
+        };
+        editor_state.log_info(&format!(
+            "🤖 NavGrid yoktu — statik geometriye göre kuruldu ({}×{} hücre, {} m)",
+            grid.width, grid.height, grid.cell_size
+        ));
+        world.insert_resource(grid);
+    }
+}
+
+/// The entities the hierarchy and the viewport asked to delete (`EditorState::despawn_requests`).
+fn despawn_requested(world: &mut World, editor_state: &mut EditorState) {
+    let mut soft_deleted_entities = Vec::new();
+    let despawn_reqs: Vec<gizmo::prelude::Entity> =
+        std::mem::take(&mut editor_state.despawn_requests);
+    for ent_id in despawn_reqs {
+        editor_state.selection.entities.remove(&ent_id);
+
+        // Korumalı objelerin (Editor Kamera, Grid, Işık) silinmesini engelle
+        // Krom kararı ortak; "Directional Light" ise krom DEĞİL — sahnenin güneşi, ama
+        // varsayılan sahnenin silinmesini istemediğimiz bir parçası. İkisi ayrı gerekçe,
+        // o yüzden ayrı satırda duruyorlar.
+        let is_protected = {
+            let names = world.query::<&gizmo::core::component::EntityName>();
+            let markers = world.query::<&gizmo::core::component::EditorOnly>();
+            let name = names.get(ent_id).map(|n| n.0.clone());
+            gizmo::core::component::is_editor_only(
+                markers.get(ent_id).is_some(),
+                name.as_deref(),
+            ) || name.as_deref() == Some("Directional Light")
         };
 
-        if built.is_none() {
-            // A drawing kind was asked for before the GPU assets existed. Leave nothing behind: a
-            // half-built entity in the scene is worse than none, and keeping it is exactly what
-            // the old catch-all did.
-            editor_state.log_error(&format!(
-                "'{}' oluşturulamadı: mesh varlıkları henüz hazır değil.",
-                kind.entity_name()
-            ));
-            world.despawn(e);
-            editor_state.pending_child_parent = None;
-            editor_state.pending_group_members.clear();
-            editor_state.pending_child_components.clear();
+        if is_protected {
+            editor_state.log_warning(&format!("Entity {} korumalı bir objedir ve silinemez.", ent_id.id()));
+            continue;
         }
 
-        if built.is_some() {
-            let name = kind.entity_name();
-            if kind.draws() {
-                world.add_component(e, gizmo::renderer::components::MeshRenderer::new());
-            }
-            world.add_component(e, gizmo::core::component::EntityName(name.to_string()));
-            editor_state.log_info(&format!("{name} oluşturuldu."));
+        // 1. Tüm çocuklarını topla (kendisi dahil) — cycle-safe ve tekrarsız.
+        //
+        // This was a hand-rolled breadth-first walk with no visited set until 2026-08-30.
+        // A `Children` cycle grew `ids_to_delete` without bound — on a Delete keypress, so
+        // the editor hung and then died — and a diamond counted the shared child twice in
+        // the message below. `descendants_inclusive` owns the guard now.
+        let ids_to_delete = world.descendants_inclusive(ent_id);
 
-            editor_state.select_exclusive(e);
-            editor_state
-                .history
-                .push(gizmo::editor::history::EditorAction::EntitySpawned {
-                    entity_ids: vec![e],
-                });
-
-            // === Çocuk Entity olarak bağla (pending_child_parent) ===
-            if let Some(parent_entity) = editor_state.pending_child_parent.take() {
-                // Parent → Children listesine ekle
-                {
-                    let mut children_comp = world.query_mut::<&mut gizmo::core::component::Children>();
-                    if let Some(mut ch) = children_comp.get_mut(parent_entity) {
-                        if !ch.0.contains(&e) {
-                            ch.0.push(e);
-                        }
-                    } else {
-                        drop(children_comp);
-                        world.add_component(
-                            parent_entity,
-                            gizmo::core::component::Children(vec![e]),
-                        );
-                    }
-                }
-                // Child → Parent bileşenini ayarla
-                world.add_component(e, gizmo::core::component::Parent(parent_entity));
-
-                // İsmi parent'a göre güncelle
-                let parent_name = world
-                    .query::<&gizmo::core::component::EntityName>()
-                    .get(parent_entity)
-                    .map(|n| n.0.clone())
-                    .unwrap_or_default();
-
-                editor_state.log_info(&format!(
-                    "Entity, '{}' altına çocuk olarak eklendi.",
-                    parent_name
-                ));
-            }
-
-            // === Otomatik bileşen ekleme (pending_child_components) ===
-            let pending_components: Vec<String> =
-                std::mem::take(&mut editor_state.pending_child_components);
-            for comp_name in &pending_components {
-                match comp_name.as_str() {
-                    "Hitbox" => {
-                        world.add_component(e, gizmo::physics::components::Hitbox::default());
-                        // İsmi güncelle
-                        if let Some(ent) = world.live(e) {
-                            world.add_component(
-                                ent,
-                                gizmo::core::component::EntityName("Hitbox".to_string()),
-                            );
-                        }
-                        editor_state.log_info("🥊 Hitbox bileşeni eklendi.");
-                    }
-                    "Hurtbox" => {
-                        world.add_component(e, gizmo::physics::components::Hurtbox::default());
-                        if let Some(ent) = world.live(e) {
-                            world.add_component(
-                                ent,
-                                gizmo::core::component::EntityName("Hurtbox".to_string()),
-                            );
-                        }
-                        editor_state.log_info("🛡 Hurtbox bileşeni eklendi.");
-                    }
-                    _ => {
-                        editor_state.add_component_request = Some((e, comp_name.clone()));
-                    }
-                }
-            }
-
-            // === Seçilenleri bu yeni entity'nin altına al (pending_group_members) ===
-            //
-            // "📂 Seçilileri Grupla" asked for a `Group` and stopped there — it created a stray
-            // empty entity and left the selection exactly where it was. Its own comment said
-            // "sonra seçili objeleri ona bağla"; nothing ever did. This is that second half.
-            //
-            // `add_child` is the core call the drag-reparent already goes through, so grouping
-            // gets the same cycle refusal and the same both-sides bookkeeping. It cannot cycle
-            // here anyway — the parent was spawned a few lines ago and can be nobody's ancestor —
-            // but going through a second implementation is how the first cycle bug happened.
-            let members: Vec<_> = std::mem::take(&mut editor_state.pending_group_members);
-            let mut grouped = 0usize;
-            for member in members {
-                if member.id() == e.id() {
-                    continue;
-                }
-                if let (Some(child), Some(parent)) =
-                    (world.live(member), world.live(e))
-                {
-                    world.add_child(parent, child);
-                    grouped += 1;
-                }
-            }
-            if grouped > 0 {
-                editor_state.log_info(&format!("{grouped} nesne '{name}' altına alındı."));
-                // The group is the thing you now want to move, so it is what stays selected.
-                editor_state.select_exclusive(e);
+        // 2. Etiketleri ekle (Soft Delete)
+        for &id in &ids_to_delete {
+            if let Some(ent) = world.live(id) {
+                world.add_component(ent, gizmo::core::component::IsDeleted);
+                world.add_component(ent, gizmo::core::component::IsHidden);
+                soft_deleted_entities.push(ent);
             }
         }
+        editor_state.log_info(&format!(
+            "Entity {} ve {} çocuğu silindi (Soft Delete).",
+            ent_id,
+            ids_to_delete.len() - 1
+        ));
     }
 
-    // --- GÖRÜNÜRLÜK AÇMA / KAPATMA ---
+    if !soft_deleted_entities.is_empty() {
+        editor_state
+            .history
+            .push(gizmo::editor::history::EditorAction::EntityDespawned {
+                entity_ids: soft_deleted_entities,
+            });
+    }
+}
+
+/// A new entity of `kind`, from the ➕ menu (`EditorState::spawn_request`).
+fn spawn_requested(world: &mut World, editor_state: &mut EditorState, kind: gizmo::editor::SpawnKind) {
+    // What the `➕` menu offers and what this understood had drifted a long way apart. The menu
+    // has nine entries; this match had two arms and a catch-all, so `Group`, `Plane`,
+    // `Cylinder`, `Capsule`, `PointLight`, `Camera` and `ParticleEmitter` all fell through and
+    // produced an entity called "Boş Entity" carrying a `MeshRenderer` and no mesh — seven menu
+    // items promising seven different things and making the same wrong one.
+    //
+    // The channel is a `SpawnKind` now rather than a `String`, and this match is **exhaustive**
+    // on it: a variant nobody teaches this about does not compile. See the type's own note for
+    // why it is deliberately not `#[non_exhaustive]`.
+    let e = world.spawn();
+    world.add_component(e, Transform::new(Vec3::ZERO));
+    world.add_component(e, gizmo::physics::components::GlobalTransform::default());
+
+    if build_spawned(world, e, kind).is_none() {
+        // A drawing kind was asked for before the GPU assets existed. Leave nothing behind: a
+        // half-built entity in the scene is worse than none, and keeping it is exactly what
+        // the old catch-all did.
+        editor_state.log_error(&format!(
+            "'{}' oluşturulamadı: mesh varlıkları henüz hazır değil.",
+            kind.entity_name()
+        ));
+        world.despawn(e);
+        editor_state.pending_child_parent = None;
+        editor_state.pending_group_members.clear();
+        editor_state.pending_child_components.clear();
+        return;
+    }
+    finish_spawn(world, editor_state, e, kind);
+}
+
+/// What `kind` is made of, put on the new entity `e`: its mesh, material and collider, its light,
+/// camera or emitter. `None` when `kind` draws and the GPU meshes do not exist yet.
+fn build_spawned(world: &mut World, e: Entity, kind: gizmo::editor::SpawnKind) -> Option<()> {
+    // Meshes come from `DebugAssets`, which needs a GPU. The kinds that do NOT draw — an empty,
+    // a group, a light, a camera, an emitter — must not be gated behind it: the whole spawn
+    // block used to sit inside `if let Some(assets)`, so with no renderer resource every menu
+    // entry did nothing at all, silently.
+    // A copy, so the world can be written while it is read: meshes and bind groups are handles.
+    let assets: Option<DebugAssets> = world.get_resource::<DebugAssets>().map(|a| (*a).clone());
+
+    use crate::state::PrimitiveSize as PS;
+    use gizmo::editor::SpawnKind;
+
+    // `Some(())` = built. `None` = a drawing kind asked for before the GPU assets exist.
+    match kind {
+        SpawnKind::Cube => assets.as_ref().map(|a| {
+            let (cube, tex) = (a.cube.clone(), a.white_tex.clone());
+            world.add_component(e, cube);
+            world.add_component(
+                e,
+                gizmo::prelude::Material::new(tex).with_pbr(
+                    gizmo::math::Vec4::new(0.8, 0.8, 0.8, 1.0),
+                    0.5,
+                    0.0,
+                ),
+            );
+            world.add_component(
+                e,
+                gizmo::physics::Collider::box_collider(gizmo::math::Vec3::splat(PS::CUBE_HALF)),
+            );
+        }),
+        SpawnKind::Sphere => assets.as_ref().map(|a| {
+            let (sphere, tex) = (a.sphere.clone(), a.white_tex.clone());
+            world.add_component(e, sphere);
+            world.add_component(
+                e,
+                gizmo::prelude::Material::new(tex).with_pbr(
+                    gizmo::math::Vec4::new(0.4, 0.6, 1.0, 1.0),
+                    0.2,
+                    0.0,
+                ),
+            );
+            // Was `sphere(1.0)` against a mesh of radius 0.5: the collision shape was twice
+            // the size of the thing you could see, so a dropped sphere came to rest half a
+            // radius above the floor. Both numbers are `PS::SPHERE_RADIUS` now.
+            world.add_component(e, gizmo::physics::Collider::sphere(PS::SPHERE_RADIUS));
+        }),
+        SpawnKind::Plane => assets.as_ref().map(|a| {
+            let (plane, tex) = (a.plane.clone(), a.white_tex.clone());
+            world.add_component(e, plane);
+            world.add_component(
+                e,
+                gizmo::prelude::Material::new(tex).with_pbr(
+                    gizmo::math::Vec4::new(0.7, 0.7, 0.7, 1.0),
+                    0.8,
+                    0.0,
+                ),
+            );
+            // Pushed down by its own half-thickness, so the collider's TOP face is exactly the
+            // visible quad instead of hovering above it.
+            world.add_component(
+                e,
+                gizmo::physics::Collider::offset_box(
+                    PS::plane_collider_offset(),
+                    PS::plane_collider_half_extents(),
+                ),
+            );
+        }),
+        SpawnKind::Cylinder => assets.as_ref().map(|a| {
+            let (cylinder, tex) = (a.cylinder.clone(), a.white_tex.clone());
+            world.add_component(e, cylinder);
+            world.add_component(
+                e,
+                gizmo::prelude::Material::new(tex).with_pbr(
+                    gizmo::math::Vec4::new(0.9, 0.7, 0.3, 1.0),
+                    0.4,
+                    0.0,
+                ),
+            );
+            // The real cylinder shape, since 2026-08-17. Until then this was the convex hull
+            // of the mesh's own ring points — a 24-sided prism standing in for a circle,
+            // because a capsule would have rounded the ends off and a box would have squared
+            // them. The hull was faithful to the mesh's silhouette and still wrong in two
+            // ways the shape fixes: its inertia came from an AABB rather than from
+            // `½·m·r²`, and every contact resolved against a facet, so a cylinder on its
+            // side settled into whichever flat it happened to land on.
+            world.add_component(
+                e,
+                gizmo::physics::Collider::cylinder(
+                    PS::CYLINDER_RADIUS,
+                    PS::cylinder_collider_half_height(),
+                ),
+            );
+        }),
+        SpawnKind::Capsule => assets.as_ref().map(|a| {
+            let (capsule, tex) = (a.capsule.clone(), a.white_tex.clone());
+            world.add_component(e, capsule);
+            world.add_component(
+                e,
+                gizmo::prelude::Material::new(tex).with_pbr(
+                    gizmo::math::Vec4::new(0.5, 0.9, 0.6, 1.0),
+                    0.3,
+                    0.0,
+                ),
+            );
+            // The mesh takes the cylindrical section's WHOLE length; the collider takes half
+            // of it. That conversion is the one place these two disagree by construction.
+            world.add_component(
+                e,
+                gizmo::physics::Collider::capsule(
+                    PS::CAPSULE_RADIUS,
+                    PS::capsule_collider_half_height(),
+                ),
+            );
+        }),
+
+        // --- The kinds that draw nothing: no mesh, no material, no `MeshRenderer`. ---
+        SpawnKind::PointLight => {
+            world.add_component(
+                e,
+                gizmo::renderer::components::PointLight::new(
+                    gizmo::math::Vec3::new(1.0, 0.95, 0.85),
+                    20.0,
+                    10.0,
+                ),
+            );
+            Some(())
+        }
+        SpawnKind::Camera => {
+            world.add_component(
+                e,
+                gizmo::renderer::components::Camera::new(
+                    60.0_f32.to_radians(),
+                    0.1,
+                    500.0,
+                    // NOT primary: adding a camera to a scene must not hijack the view.
+                    false),
+            );
+            Some(())
+        }
+        SpawnKind::ParticleEmitter => {
+            world.add_component(e, gizmo::renderer::components::ParticleEmitter::new());
+            Some(())
+        }
+        // A group is an empty entity with a different name, and that is the honest whole of
+        // it — `Parent`/`Children` already carry what "folder" means.
+        SpawnKind::Group | SpawnKind::Empty => Some(()),
+    }
+}
+
+/// The rest of a spawn that was built: its renderer and name, the selection and the undo history,
+/// and what the menu asked for with it: a parent, a child's component, the selection to group under it.
+fn finish_spawn(world: &mut World, editor_state: &mut EditorState, e: Entity, kind: gizmo::editor::SpawnKind) {
+    let name = kind.entity_name();
+    if kind.draws() {
+        world.add_component(e, gizmo::renderer::components::MeshRenderer::new());
+    }
+    world.add_component(e, gizmo::core::component::EntityName(name.to_string()));
+    editor_state.log_info(&format!("{name} oluşturuldu."));
+
+    editor_state.select_exclusive(e);
+    editor_state
+        .history
+        .push(gizmo::editor::history::EditorAction::EntitySpawned {
+            entity_ids: vec![e],
+        });
+
+    // === Çocuk Entity olarak bağla (pending_child_parent) ===
+    // Through `HierarchyExt::add_child`, as re-parenting and grouping are: both sides of the
+    // link, or neither. This was a second implementation of it, written out by hand.
+    if let Some(parent_entity) = editor_state.pending_child_parent.take() {
+        world.add_child(parent_entity, e);
+
+        // İsmi parent'a göre güncelle
+        let parent_name = world
+            .query::<&gizmo::core::component::EntityName>()
+            .get(parent_entity)
+            .map(|n| n.0.clone())
+            .unwrap_or_default();
+
+        editor_state.log_info(&format!(
+            "Entity, '{}' altına çocuk olarak eklendi.",
+            parent_name
+        ));
+    }
+
+    // === Otomatik bileşen ekleme (pending_child_components) ===
+    //
+    // The component a child is made for (the hierarchy's "Hitbox" and "Hurtbox" children), added
+    // at once through the ➕ menu's own path, and the child named after it. It had arms of its
+    // own for those two and deferred anything else to the next frame's request.
+    let pending_components: Vec<String> = std::mem::take(&mut editor_state.pending_child_components);
+    for comp_name in pending_components {
+        world.add_component(e, gizmo::core::component::EntityName(comp_name.clone()));
+        editor_state.log_info(&format!("{comp_name} bileşeni eklendi."));
+        add_requested_component(world, editor_state, e, comp_name);
+    }
+
+    // === Seçilenleri bu yeni entity'nin altına al (pending_group_members) ===
+    //
+    // "📂 Seçilileri Grupla" asked for a `Group` and stopped there — it created a stray
+    // empty entity and left the selection exactly where it was. Its own comment said
+    // "sonra seçili objeleri ona bağla"; nothing ever did. This is that second half.
+    //
+    // `add_child` is the core call the drag-reparent already goes through, so grouping
+    // gets the same cycle refusal and the same both-sides bookkeeping. It cannot cycle
+    // here anyway — the parent was spawned a few lines ago and can be nobody's ancestor —
+    // but going through a second implementation is how the first cycle bug happened.
+    let members: Vec<_> = std::mem::take(&mut editor_state.pending_group_members);
+    let mut grouped = 0usize;
+    for member in members {
+        if member.id() == e.id() {
+            continue;
+        }
+        if let (Some(child), Some(parent)) =
+            (world.live(member), world.live(e))
+        {
+            world.add_child(parent, child);
+            grouped += 1;
+        }
+    }
+    if grouped > 0 {
+        editor_state.log_info(&format!("{grouped} nesne '{name}' altına alındı."));
+        // The group is the thing you now want to move, so it is what stays selected.
+        editor_state.select_exclusive(e);
+    }
+}
+
+/// Hides or shows the entities the hierarchy's 👁 asked about (`EditorState::toggle_visibility_requests`).
+fn toggle_requested_visibility(world: &mut World, editor_state: &mut EditorState) {
     let toggle_requests: Vec<_> = std::mem::take(&mut editor_state.toggle_visibility_requests);
     for ent_id in toggle_requests {
         if let Some(ent) = world.live(ent_id) {
@@ -599,56 +600,53 @@ pub fn handle_scene_operations(
             }
         }
     }
+}
 
-    // --- PARENT DEĞİŞTİRME (Reparent) ---
-    //
-    // The link itself is `HierarchyExt::add_child`, not a copy of it. This block used to
-    // re-implement the whole thing — the same cycle rejection, the same removal from the old
-    // parent's `Children`, the same create-the-list-if-missing — forty lines beside a core method
-    // that already did it and has tests for the cycle case. Two implementations of "make B a child
-    // of A", one of which has a hang in its history (a `Children` cycle wedges transform
-    // propagation, `despawn_recursive` and scene save), is exactly the shape worth removing.
-    //
-    // What stays here is what the editor adds: telling the user WHY a drag was refused. `add_child`
-    // returns silently, so the condition is tested here for the message and then the core call
-    // does the work.
-    if let Some((child_id, new_parent_id)) = editor_state.reparent_request.take() {
-        let would_cycle = new_parent_id == child_id || world.is_ancestor(child_id, new_parent_id);
-        if would_cycle {
-            editor_state.log_info(&format!(
-                "Reparent reddedildi: {child_id} → {new_parent_id} bir hiyerarşi döngüsü oluştururdu."
-            ));
-        } else if let (Some(child), Some(parent)) = (
-            world.live(child_id),
-            world.live(new_parent_id),
-        ) {
-            world.add_child(parent, child);
-            editor_state.log_info(&format!(
-                "Entity {} parent {} olarak ayarlandı.",
-                child_id, new_parent_id
-            ));
-        }
+/// The link itself is `HierarchyExt::add_child`, not a copy of it. This block used to
+/// re-implement the whole thing — the same cycle rejection, the same removal from the old
+/// parent's `Children`, the same create-the-list-if-missing — forty lines beside a core method
+/// that already did it and has tests for the cycle case. Two implementations of "make B a child
+/// of A", one of which has a hang in its history (a `Children` cycle wedges transform
+/// propagation, `despawn_recursive` and scene save), is exactly the shape worth removing.
+///
+/// What stays here is what the editor adds: telling the user WHY a drag was refused. `add_child`
+/// returns silently, so the condition is tested here for the message and then the core call
+/// does the work.
+fn reparent_requested(world: &mut World, editor_state: &mut EditorState, child_id: Entity, new_parent_id: Entity) {
+    let would_cycle = new_parent_id == child_id || world.is_ancestor(child_id, new_parent_id);
+    if would_cycle {
+        editor_state.log_info(&format!(
+            "Reparent reddedildi: {child_id} → {new_parent_id} bir hiyerarşi döngüsü oluştururdu."
+        ));
+    } else if let (Some(child), Some(parent)) = (
+        world.live(child_id),
+        world.live(new_parent_id),
+    ) {
+        world.add_child(parent, child);
+        editor_state.log_info(&format!(
+            "Entity {} parent {} olarak ayarlandı.",
+            child_id, new_parent_id
+        ));
     }
+}
 
-    // --- PARENT KALDIR (Root Yap) ---
-    //
-    // Likewise `HierarchyExt::remove_child`, which drops the `Parent` component and takes the id
-    // out of the old parent's `Children` — the two halves that have to happen together or the
-    // hierarchy is left describing itself two different ways.
-    if let Some(child_id) = editor_state.unparent_request.take() {
-        let old_parent_id = world
-            .query::<&gizmo::core::component::Parent>()
-            .get(child_id)
-            .map(|c| c.0);
+/// Likewise `HierarchyExt::remove_child`, which drops the `Parent` component and takes the id
+/// out of the old parent's `Children` — the two halves that have to happen together or the
+/// hierarchy is left describing itself two different ways.
+fn unparent_requested(world: &mut World, editor_state: &mut EditorState, child_id: Entity) {
+    let old_parent_id = world
+        .query::<&gizmo::core::component::Parent>()
+        .get(child_id)
+        .map(|c| c.0);
 
-        if let (Some(old_pid), Some(child)) = (old_parent_id, world.live(child_id)) {
-            if world.is_alive(old_pid) {
-                world.remove_child(old_pid, child);
-                editor_state.log_info(&format!("Entity {} kök (root) yapıldı.", child_id));
-            }
+    if let (Some(old_pid), Some(child)) = (old_parent_id, world.live(child_id)) {
+        if world.is_alive(old_pid) {
+            world.remove_child(old_pid, child);
+            editor_state.log_info(&format!("Entity {} kök (root) yapıldı.", child_id));
         }
     }
 }
+
 
 /// The lowest player slot (`1`, then `2`, …) no `FighterController` in the world is holding.
 ///
@@ -993,6 +991,33 @@ mod tests {
         let e = world.spawn();
         world.add_component(e, Transform::default());
         e
+    }
+
+    /// **The hierarchy's "🥊 Hitbox Ekle (Çocuk)" makes a child under the entity, carrying a
+    /// `Hitbox` and named after it** — linked both ways, in the same frame. The link went through a
+    /// hand-written copy of `add_child`, and the component through arms of its own for `Hitbox` and
+    /// `Hurtbox` beside the ➕ menu's (2026-11-22: `add_child`, and the menu's own path).
+    #[test]
+    fn a_hitbox_child_is_made_under_its_entity_in_one_frame() {
+        let mut world = World::new();
+        let fighter = spawn(&mut world);
+        let mut ed = EditorState::default();
+        // What the hierarchy's menu item asks for.
+        ed.spawn_request = Some(SpawnKind::Empty);
+        ed.pending_child_parent = Some(fighter);
+        ed.pending_child_components.push("Hitbox".to_string());
+
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+
+        let child = world
+            .iter_alive_entities()
+            .into_iter()
+            .find(|e| world.query::<&Parent>().get(*e).map(|p| p.0) == Some(fighter))
+            .expect("a child under the entity");
+        assert!(world.query::<&gizmo::physics::components::Hitbox>().get(child).is_some(), "the child has no Hitbox");
+        assert_eq!(name_of(&world, child).as_deref(), Some("Hitbox"));
+        assert_eq!(children_of(&world, fighter), vec![child.id()], "the entity must list its new child");
+        assert!(ed.pending_child_components.is_empty() && ed.add_component_request.is_none(), "nothing is left for a later frame");
     }
 
     fn children_of(world: &World, parent: Entity) -> Vec<u32> {
