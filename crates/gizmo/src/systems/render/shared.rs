@@ -169,19 +169,11 @@ pub fn collect_scene_lights(
     view_proj: gizmo_math::Mat4,
     cookies: &crate::renderer::cookies::CookieTable,
 ) -> SceneLights {
-    let frustum = gizmo_math::Frustum::from_matrix(&view_proj);
-    let globals = world.query::<&GlobalTransform>();
-    let locals = world.query::<&Transform>();
-
-    // (position, rotation) in world space, GlobalTransform-preferred, Transform-fallback.
-    let world_tf = |e| {
-        globals
-            .get(e)
-            .map(|g| {
-                let (_, rot, pos) = g.matrix.to_scale_rotation_translation();
-                (pos, rot)
-            })
-            .or_else(|| locals.get(e).map(|t| (t.position, t.rotation)))
+    let view = LightView {
+        frustum: gizmo_math::Frustum::from_matrix(&view_proj),
+        cam_pos,
+        globals: world.query::<&GlobalTransform>(),
+        locals: world.query::<&Transform>(),
     };
 
     // Every light in the scene, not just the first MAX_LIGHTS: the cap is applied by the ranking
@@ -189,165 +181,215 @@ pub fn collect_scene_lights(
     // frame for the whole light set — if a scene ever makes that measurable, the shape to reach
     // for is a fixed top-N insertion, not a smaller cap.
     let mut candidates: Vec<Candidate> = Vec::new();
+    point_lights(world, &view, &mut candidates);
+    spot_lights(world, &view, cookies, &mut candidates);
+    rect_lights(world, &view, &mut candidates);
+    fill_lights(world, &view, &mut candidates);
 
-    // Distance from the camera to a light's sphere of influence, and how far the light throws.
-    // Non-finite input (a NaN transform, a deserialized garbage intensity) must not be allowed to
-    // win a slot, so it sorts last instead of poisoning the comparison.
-    // `None` → this light cannot affect the frame and is not a candidate at all.
-    let score = |pos: Vec3, intensity: f32, radius: f32| -> Option<(f32, f32)> {
+    let packed = pack(rank(candidates));
+    let sun = find_sun(world, &view);
+
+    SceneLights {
+        lights: packed.lights,
+        num_lights: packed.num_lights,
+        unbaked_lights: packed.unbaked_lights,
+        sun_dir: sun.dir,
+        sun_col: sun.col,
+        has_sun: sun.present,
+        sun_angular_radius: sun.angular_radius,
+        sun_contact_shadow_length: sun.contact_shadow_length,
+        shadow_casters: packed.shadow_casters,
+        contact_shadows: packed.contact_shadows,
+    }
+}
+
+/// What the light collection reads of the frame: the camera's frustum and position, and every
+/// entity's transform.
+struct LightView<'w> {
+    frustum: gizmo_math::Frustum,
+    cam_pos: Vec3,
+    globals: gizmo_core::Query<'w, &'w GlobalTransform>,
+    locals: gizmo_core::Query<'w, &'w Transform>,
+}
+
+impl LightView<'_> {
+    /// (position, rotation) in world space, GlobalTransform-preferred, Transform-fallback.
+    fn world_tf(&self, e: Entity) -> Option<(Vec3, gizmo_math::Quat)> {
+        self.globals
+            .get(e)
+            .map(|g| {
+                let (_, rot, pos) = g.matrix.to_scale_rotation_translation();
+                (pos, rot)
+            })
+            .or_else(|| self.locals.get(e).map(|t| (t.position, t.rotation)))
+    }
+
+    /// Distance from the camera to a light's sphere of influence, and how far the light throws.
+    /// Non-finite input (a NaN transform, a deserialized garbage intensity) must not be allowed to
+    /// win a slot, so it sorts last instead of poisoning the comparison.
+    /// `None` → this light cannot affect the frame and is not a candidate at all.
+    fn score(&self, pos: Vec3, intensity: f32, radius: f32) -> Option<(f32, f32)> {
         if !pos.is_finite() || !intensity.is_finite() || !radius.is_finite() {
             // Sorts last rather than being dropped: a NaN light is a scene bug, and silently
             // losing it hides that, while letting it win a slot would poison the frame.
             return Some((f32::MAX, 0.0));
         }
-        if !frustum.intersects_sphere(pos, radius.max(0.0)) {
+        if !self.frustum.intersects_sphere(pos, radius.max(0.0)) {
             return None;
         }
-        Some(((cam_pos.distance(pos) - radius).max(0.0), intensity * radius))
-    };
-
-    {
-        let q = world.query::<(Entity, &PointLight)>();
-        for (e, light) in q.iter() {
-            let Some((pos, rot)) = world_tf(e) else { continue };
-            let Some((surface_dist, reach)) = score(pos, light.intensity, light.radius) else {
-                continue;
-            };
-            // A tube light's axis is the entity's local X; a point light had no use for
-            // `direction`, so it carries the axis (only read when params.w > 0).
-            let axis = rot.mul_vec3(Vec3::X).normalize_or_zero();
-            candidates.push(Candidate {
-                data: LightData {
-                    position: [pos.x, pos.y, pos.z, light.intensity],
-                    color: [light.color.x, light.color.y, light.color.z, light.radius],
-                    direction: if light.source_length > 0.0 { [axis.x, axis.y, axis.z, 0.0] } else { [0.0, -1.0, 0.0, 0.0] },
-                    // params.y = 0 → PointLight; params.z = source radius, params.w = tube length
-                    // (both 0 = a point).
-                    params: [0.0, 0.0, light.source_radius.max(0.0), light.source_length.max(0.0)],
-                },
-                shadow: light.casts_shadows.then_some(LocalShadowCaster::Omni { position: pos, radius: light.radius }),
-                contact: light.contact_shadow_length,
-                surface_dist,
-                reach,
-                entity_id: e.id(),
-                in_bake: light.in_bake,
-            });
-        }
+        Some(((self.cam_pos.distance(pos) - radius).max(0.0), intensity * radius))
     }
+}
 
-    {
-        let q = world.query::<(Entity, &SpotLight)>();
-        for (e, light) in q.iter() {
-            let Some((pos, rot)) = world_tf(e) else { continue };
-            let dir = rot.mul_vec3(Vec3::new(0.0, 0.0, -1.0)).normalize();
-            // The shaders compare the cone against `dot(-L, spot_dir)` (a cosine), so the
-            // cutoffs must be COSINES of the cone angles — every lighting shader documents
-            // `w = inner_cutoff_cos`, `params.x = outer_cutoff_cos`. `SpotLight` stores the
-            // angles in radians (its ctor clamps inner ≤ outer), so convert here. Passing the
-            // raw radians made the cone a hard cut at the wrong angle with no falloff; the
-            // studio path used to `.cos()` these itself, the game path never did (its spots
-            // were broken) — single-sourcing the fix corrects both.
-            // Scored and culled by what its cone reaches (`spot_bounds`), not by its whole sphere.
-            let (centre, bound) = spot_bounds(pos, dir, light.radius, light.outer_angle);
-            let Some((surface_dist, _)) = score(centre, light.intensity, bound) else {
-                continue;
-            };
-            let reach = light.intensity * light.radius;
-            candidates.push(Candidate {
-                data: LightData {
-                    position: [pos.x, pos.y, pos.z, light.intensity],
-                    color: [light.color.x, light.color.y, light.color.z, light.radius],
-                    direction: [dir.x, dir.y, dir.z, light.inner_angle.cos()],
-                    // params.y = 1 → SpotLight; params.z = source radius (0 = a point);
-                    // params.w = cookie layer + 1 (0 = none, or a cookie not resident yet).
-                    params: [
-                        light.outer_angle.cos(),
-                        1.0,
-                        light.source_radius.max(0.0),
-                        light.cookie.as_deref().and_then(|c| cookies.layer(c)).map_or(0.0, |l| l as f32 + 1.0),
-                    ],
-                },
-                shadow: light.casts_shadows.then_some(LocalShadowCaster::Spot {
-                    position: pos,
-                    direction: dir,
-                    outer_angle: light.outer_angle,
-                    radius: light.radius,
-                }),
-                contact: light.contact_shadow_length,
-                surface_dist,
-                reach,
-                entity_id: e.id(),
-                in_bake: light.in_bake,
-            });
-        }
+/// The point lights that reach the frame, into `out`.
+fn point_lights(world: &World, view: &LightView, out: &mut Vec<Candidate>) {
+
+    let q = world.query::<(Entity, &PointLight)>();
+    for (e, light) in q.iter() {
+        let Some((pos, rot)) = view.world_tf(e) else { continue };
+        let Some((surface_dist, reach)) = view.score(pos, light.intensity, light.radius) else {
+            continue;
+        };
+        // A tube light's axis is the entity's local X; a point light had no use for
+        // `direction`, so it carries the axis (only read when params.w > 0).
+        let axis = rot.mul_vec3(Vec3::X).normalize_or_zero();
+        out.push(Candidate {
+            data: LightData {
+                position: [pos.x, pos.y, pos.z, light.intensity],
+                color: [light.color.x, light.color.y, light.color.z, light.radius],
+                direction: if light.source_length > 0.0 { [axis.x, axis.y, axis.z, 0.0] } else { [0.0, -1.0, 0.0, 0.0] },
+                // params.y = 0 → PointLight; params.z = source radius, params.w = tube length
+                // (both 0 = a point).
+                params: [0.0, 0.0, light.source_radius.max(0.0), light.source_length.max(0.0)],
+            },
+            shadow: light.casts_shadows.then_some(LocalShadowCaster::Omni { position: pos, radius: light.radius }),
+            contact: light.contact_shadow_length,
+            surface_dist,
+            reach,
+            entity_id: e.id(),
+            in_bake: light.in_bake,
+        });
     }
+}
 
-    {
-        let q = world.query::<(Entity, &RectLight)>();
-        for (e, light) in q.iter() {
-            let Some((pos, rot)) = world_tf(e) else { continue };
-            let Some((surface_dist, reach)) = score(pos, light.intensity, light.radius) else {
-                continue;
-            };
-            let rot = rot.normalize();
-            candidates.push(Candidate {
-                data: LightData {
-                    position: [pos.x, pos.y, pos.z, light.intensity],
-                    color: [light.color.x, light.color.y, light.color.z, light.radius],
-                    // The orientation as a quaternion: the shader rebuilds the rectangle's two
-                    // axes from it, which one vec4 could not carry as vectors.
-                    direction: [rot.x, rot.y, rot.z, rot.w],
-                    // params.y = 3 → RectLight; params.zw = half width, half height.
-                    params: [0.0, 3.0, light.width.max(0.0) * 0.5, light.height.max(0.0) * 0.5],
-                },
-                // From its centre, every way: the cube's faces behind the panel are drawn and never
-                // looked up, as nothing behind it is lit.
-                shadow: light.casts_shadows.then_some(LocalShadowCaster::Omni { position: pos, radius: light.radius }),
-                contact: light.contact_shadow_length,
-                surface_dist,
-                reach,
-                entity_id: e.id(),
-                in_bake: light.in_bake,
-            });
-        }
+/// The spot lights whose cone reaches the frame, into `out`.
+fn spot_lights(world: &World, view: &LightView, cookies: &crate::renderer::cookies::CookieTable, out: &mut Vec<Candidate>) {
+    let q = world.query::<(Entity, &SpotLight)>();
+    for (e, light) in q.iter() {
+        let Some((pos, rot)) = view.world_tf(e) else { continue };
+        let dir = rot.mul_vec3(Vec3::new(0.0, 0.0, -1.0)).normalize();
+        // The shaders compare the cone against `dot(-L, spot_dir)` (a cosine), so the
+        // cutoffs must be COSINES of the cone angles — every lighting shader documents
+        // `w = inner_cutoff_cos`, `params.x = outer_cutoff_cos`. `SpotLight` stores the
+        // angles in radians (its ctor clamps inner ≤ outer), so convert here. Passing the
+        // raw radians made the cone a hard cut at the wrong angle with no falloff; the
+        // studio path used to `.cos()` these itself, the game path never did (its spots
+        // were broken) — single-sourcing the fix corrects both.
+        // Scored and culled by what its cone reaches (`spot_bounds`), not by its whole sphere.
+        let (centre, bound) = spot_bounds(pos, dir, light.radius, light.outer_angle);
+        let Some((surface_dist, _)) = view.score(centre, light.intensity, bound) else {
+            continue;
+        };
+        let reach = light.intensity * light.radius;
+        out.push(Candidate {
+            data: LightData {
+                position: [pos.x, pos.y, pos.z, light.intensity],
+                color: [light.color.x, light.color.y, light.color.z, light.radius],
+                direction: [dir.x, dir.y, dir.z, light.inner_angle.cos()],
+                // params.y = 1 → SpotLight; params.z = source radius (0 = a point);
+                // params.w = cookie layer + 1 (0 = none, or a cookie not resident yet).
+                params: [
+                    light.outer_angle.cos(),
+                    1.0,
+                    light.source_radius.max(0.0),
+                    light.cookie.as_deref().and_then(|c| cookies.layer(c)).map_or(0.0, |l| l as f32 + 1.0),
+                ],
+            },
+            shadow: light.casts_shadows.then_some(LocalShadowCaster::Spot {
+                position: pos,
+                direction: dir,
+                outer_angle: light.outer_angle,
+                radius: light.radius,
+            }),
+            contact: light.contact_shadow_length,
+            surface_dist,
+            reach,
+            entity_id: e.id(),
+            in_bake: light.in_bake,
+        });
     }
+}
 
-    {
-        // Every directional light but the scene's sun — a fill, a rim, a second sun — lights as the sun
-        // does, without its shadow: type 2 in the array, in every cluster (an infinite radius), ranked
-        // ahead of everything, since it reaches every pixel. Only the sun was ever read here, so until
-        // 2026-11-11 a fill or rim light lit nothing at all. The sun is the first `Sun` in query order,
-        // as below.
-        let q = world.query::<(Entity, &DirectionalLight)>();
-        let mut sun_seen = false;
-        for (e, light) in q.iter() {
-            if light.role == LightRole::Sun && !sun_seen {
-                sun_seen = true;
-                continue;
-            }
-            let Some((_, rot)) = world_tf(e) else { continue };
-            let dir = rot.mul_vec3(Vec3::new(0.0, 0.0, -1.0)).normalize_or_zero();
-            if dir == Vec3::ZERO || !light.intensity.is_finite() {
-                continue;
-            }
-            candidates.push(Candidate {
-                data: LightData {
-                    position: [0.0, 0.0, 0.0, light.intensity],
-                    color: [light.color.x, light.color.y, light.color.z, f32::INFINITY],
-                    direction: [dir.x, dir.y, dir.z, 0.0],
-                    // params.y = 2 → directional.
-                    params: [0.0, 2.0, 0.0, 0.0],
-                },
-                shadow: None,
-                contact: light.contact_shadow_length,
-                surface_dist: 0.0,
-                reach: f32::MAX,
-                entity_id: e.id(),
-                in_bake: light.in_bake,
-            });
-        }
+/// The rect lights that reach the frame, into `out`.
+fn rect_lights(world: &World, view: &LightView, out: &mut Vec<Candidate>) {
+    let q = world.query::<(Entity, &RectLight)>();
+    for (e, light) in q.iter() {
+        let Some((pos, rot)) = view.world_tf(e) else { continue };
+        let Some((surface_dist, reach)) = view.score(pos, light.intensity, light.radius) else {
+            continue;
+        };
+        let rot = rot.normalize();
+        out.push(Candidate {
+            data: LightData {
+                position: [pos.x, pos.y, pos.z, light.intensity],
+                color: [light.color.x, light.color.y, light.color.z, light.radius],
+                // The orientation as a quaternion: the shader rebuilds the rectangle's two
+                // axes from it, which one vec4 could not carry as vectors.
+                direction: [rot.x, rot.y, rot.z, rot.w],
+                // params.y = 3 → RectLight; params.zw = half width, half height.
+                params: [0.0, 3.0, light.width.max(0.0) * 0.5, light.height.max(0.0) * 0.5],
+            },
+            // From its centre, every way: the cube's faces behind the panel are drawn and never
+            // looked up, as nothing behind it is lit.
+            shadow: light.casts_shadows.then_some(LocalShadowCaster::Omni { position: pos, radius: light.radius }),
+            contact: light.contact_shadow_length,
+            surface_dist,
+            reach,
+            entity_id: e.id(),
+            in_bake: light.in_bake,
+        });
     }
+}
 
+/// Every directional light but the sun, into `out`.
+fn fill_lights(world: &World, view: &LightView, out: &mut Vec<Candidate>) {
+    // Every directional light but the scene's sun — a fill, a rim, a second sun — lights as the sun
+    // does, without its shadow: type 2 in the array, in every cluster (an infinite radius), ranked
+    // ahead of everything, since it reaches every pixel. Only the sun was ever read here, so until
+    // 2026-11-11 a fill or rim light lit nothing at all. The sun is the first `Sun` in query order,
+    // as below.
+    let q = world.query::<(Entity, &DirectionalLight)>();
+    let mut sun_seen = false;
+    for (e, light) in q.iter() {
+        if light.role == LightRole::Sun && !sun_seen {
+            sun_seen = true;
+            continue;
+        }
+        let Some((_, rot)) = view.world_tf(e) else { continue };
+        let dir = rot.mul_vec3(Vec3::new(0.0, 0.0, -1.0)).normalize_or_zero();
+        if dir == Vec3::ZERO || !light.intensity.is_finite() {
+            continue;
+        }
+        out.push(Candidate {
+            data: LightData {
+                position: [0.0, 0.0, 0.0, light.intensity],
+                color: [light.color.x, light.color.y, light.color.z, f32::INFINITY],
+                direction: [dir.x, dir.y, dir.z, 0.0],
+                // params.y = 2 → directional.
+                params: [0.0, 2.0, 0.0, 0.0],
+            },
+            shadow: None,
+            contact: light.contact_shadow_length,
+            surface_dist: 0.0,
+            reach: f32::MAX,
+            entity_id: e.id(),
+            in_bake: light.in_bake,
+        });
+    }
+}
+
+/// The candidates in rank order.
+fn rank(mut candidates: Vec<Candidate>) -> Vec<Candidate> {
     // Nearest influence first, then the light that throws furthest, then entity id. `total_cmp`
     // rather than `partial_cmp().unwrap()`: the scores are sanitized above, and a total order is
     // what makes this a sort at all.
@@ -357,7 +399,20 @@ pub fn collect_scene_lights(
             .then(b.reach.total_cmp(&a.reach))
             .then(a.entity_id.cmp(&b.entity_id))
     });
+    candidates
+}
 
+/// The light array the frame uploads, and the shadows the lights in it cast.
+struct Packed {
+    lights: [LightData; MAX_LIGHTS],
+    num_lights: u32,
+    unbaked_lights: u32,
+    shadow_casters: Vec<(usize, LocalShadowCaster)>,
+    contact_shadows: Vec<(usize, f32)>,
+}
+
+/// The first `MAX_LIGHTS` of the ranked candidates, into the array the frame uploads.
+fn pack(candidates: Vec<Candidate>) -> Packed {
     // The ones that made the cut, those a baked-lit surface takes light from first (`in_bake` false
     // sorts before true, and the sort is stable, so each half keeps its rank).
     let mut chosen: Vec<&Candidate> = candidates.iter().take(MAX_LIGHTS).collect();
@@ -380,40 +435,45 @@ pub fn collect_scene_lights(
         lights[num_lights] = c.data;
         num_lights += 1;
     }
+    Packed { lights, num_lights: num_lights as u32, unbaked_lights, shadow_casters, contact_shadows }
+}
 
+/// The scene's sun, as the frame reads it.
+struct Sun {
+    dir: Vec3,
+    col: Vec4,
+    present: bool,
+    angular_radius: f32,
+    contact_shadow_length: f32,
+}
+
+/// The first `LightRole::Sun`; a downward default with no colour when there is none.
+fn find_sun(world: &World, view: &LightView) -> Sun {
     let mut sun_dir = Vec3::new(0.0, -1.0, 0.0);
     let mut sun_col = Vec4::new(0.0, 0.0, 0.0, 0.0); // w = 0 → no sun
     let mut has_sun = false;
     let mut sun_angular_radius = 0.0;
     let mut sun_contact_shadow_length = 0.0;
-    {
-        let q = world.query::<(Entity, &DirectionalLight)>();
-        for (e, light) in q.iter() {
-            if light.role == LightRole::Sun {
-                if let Some((_, rot)) = world_tf(e) {
-                    // Light convention: points along its local -Z.
-                    sun_dir = rot.mul_vec3(Vec3::new(0.0, 0.0, -1.0)).normalize();
-                    sun_col = Vec4::new(light.color.x, light.color.y, light.color.z, light.intensity);
-                    has_sun = true;
-                    sun_angular_radius = light.angular_radius;
-                    sun_contact_shadow_length = light.contact_shadow_length;
-                }
-                break; // first sun wins
+    let q = world.query::<(Entity, &DirectionalLight)>();
+    for (e, light) in q.iter() {
+        if light.role == LightRole::Sun {
+            if let Some((_, rot)) = view.world_tf(e) {
+                // Light convention: points along its local -Z.
+                sun_dir = rot.mul_vec3(Vec3::new(0.0, 0.0, -1.0)).normalize();
+                sun_col = Vec4::new(light.color.x, light.color.y, light.color.z, light.intensity);
+                has_sun = true;
+                sun_angular_radius = light.angular_radius;
+                sun_contact_shadow_length = light.contact_shadow_length;
             }
+            break; // first sun wins
         }
     }
-
-    SceneLights {
-        lights,
-        num_lights: num_lights as u32,
-        unbaked_lights,
-        sun_dir,
-        sun_col,
-        has_sun,
-        sun_angular_radius,
-        sun_contact_shadow_length,
-        shadow_casters,
-        contact_shadows,
+    Sun {
+        dir: sun_dir,
+        col: sun_col,
+        present: has_sun,
+        angular_radius: sun_angular_radius,
+        contact_shadow_length: sun_contact_shadow_length,
     }
 }
 
