@@ -41,6 +41,57 @@ pub fn handle_simulation(
     dt: f32,
     input: &Input,
 ) {
+    hot_reload(world, editor_state, state);
+
+    // --- OYUN / SİMÜLASYON DÖNGÜSÜ ---
+    // A game hooked into the studio runs its own frame — the one its binary runs — once its setup
+    // has run on the play world (`crate::pie::GameSetupPending`, the render hook's).
+    if editor_state.is_playing() && step_hooked_game(world, state, dt, input) {
+        return;
+    }
+    if editor_state.is_playing() {
+    // The frame of a running game is the ENGINE's, not the editor's: `PlayLoop::step` is the
+    // same call an exported game makes (`demo/src/bin/gizmo_runtime.rs`). That is what lets
+    // Build/Export promise the shipped game behaves like the one you just pressed ▶ on — a
+    // promise that was prose here and a second implementation over there, until the two were
+    // merged. What stays on this side is the console.
+    //
+    // The default `ActionMap` below is the one thing the editor adds and the runtime does
+    // not. It was written for the fighter system deleted in `592bd6f`, which read these
+    // eight names straight out of it and both filled the input buffer and picked the move.
+    // The clock has since come back (`fighter_frame_system`, on `PlayLoop`'s fixed step) but
+    // deliberately without those two halves: which button is a jab is the game's, and so is
+    // which action names its combos are spelled in. So this stays scaffolding — bindings a
+    // game actually needs belong in the scene, and then both paths get them.
+        insert_default_action_map(world);
+
+        // `editor_state` and `state` are separate bindings, so the console can be written
+        // from inside the callback: the step borrows `state.play`, the reporter borrows the
+        // editor, and neither is the other.
+        state
+            .play
+            .step(world, dt, input, &mut |r| log_play_report(editor_state, r));
+    } else {
+        // Time does not pass in a stopped game; carrying the debt into the next ▶ would spend it
+        // all in one frame.
+        state.play.reset();
+    }
+
+    // ⏸ has to reach the device too. `PlayLoop::step` is what drives audio, and a paused editor
+    // does not call it — so the level's ambience kept playing over a frozen frame. Called every
+    // frame rather than on the transition: the manager pushes only a CHANGE to the sinks, which
+    // is also what keeps a game's own `pause(id)` from being undone every frame.
+    if let Some(mut audio) = world.get_resource_mut::<gizmo::audio::AudioManager>() {
+        audio.set_all_paused(editor_state.is_paused());
+    }
+    // …and the clock: see `hold_clock`.
+    hold_clock(world, editor_state);
+
+    sync_fight_hud(world, editor_state, dt);
+}
+
+/// Reloads the scripts and shaders the asset watcher saw change.
+fn hot_reload(world: &mut World, editor_state: &mut EditorState, state: &mut StudioState) {
     // --- HOT RELOAD POLLING SİSTEMİ ---
     if let Some(watcher) = &mut state.asset_watcher {
         let changes = watcher.poll_changes();
@@ -77,94 +128,72 @@ pub fn handle_simulation(
             }
         }
     }
+}
 
-    // --- OYUN / SİMÜLASYON DÖNGÜSÜ ---
-    // A game hooked into the studio runs its own frame — the one its binary runs — once its setup
-    // has run on the play world (`crate::pie::GameSetupPending`, the render hook's).
-    if editor_state.is_playing() {
-        if let Some(game) = state.game.clone() {
-            if world.get_resource::<crate::pie::GameSetupPending>().is_none() {
-                (game.update)(world, dt, input);
-                // The Game view shows the game's own camera, whichever it is this frame.
-                if let Some(camera) = crate::pie::game_camera(world, state.editor_camera) {
-                    state.game_camera = camera;
-                }
-            }
-            return;
+/// A game hooked into the studio, one frame of its own; whether there is one. Its frame waits for
+/// its setup, which the render hook runs.
+fn step_hooked_game(world: &mut World, state: &mut StudioState, dt: f32, input: &Input) -> bool {
+    let Some(game) = state.game.clone() else {
+        return false;
+    };
+    if world.get_resource::<crate::pie::GameSetupPending>().is_none() {
+        (game.update)(world, dt, input);
+        // The Game view shows the game's own camera, whichever it is this frame.
+        if let Some(camera) = crate::pie::game_camera(world, state.editor_camera) {
+            state.game_camera = camera;
         }
     }
-    if editor_state.is_playing() {
-        // The frame of a running game is the ENGINE's, not the editor's: `PlayLoop::step` is the
-        // same call an exported game makes (`demo/src/bin/gizmo_runtime.rs`). That is what lets
-        // Build/Export promise the shipped game behaves like the one you just pressed ▶ on — a
-        // promise that was prose here and a second implementation over there, until the two were
-        // merged. What stays on this side is the console.
-        //
-        // The default `ActionMap` below is the one thing the editor adds and the runtime does
-        // not. It was written for the fighter system deleted in `592bd6f`, which read these
-        // eight names straight out of it and both filled the input buffer and picked the move.
-        // The clock has since come back (`fighter_frame_system`, on `PlayLoop`'s fixed step) but
-        // deliberately without those two halves: which button is a jab is the game's, and so is
-        // which action names its combos are spelled in. So this stays scaffolding — bindings a
-        // game actually needs belong in the scene, and then both paths get them.
-        {
-            let has_am = world
-                .try_get_resource::<gizmo::core::input::ActionMap>()
-                .is_ok();
-            if !has_am {
-                let mut am = gizmo::core::input::ActionMap::new();
-                use gizmo::prelude::KeyCode;
-                // Yön tuşları (Ok tuşları)
-                am.bind_key("Up", KeyCode::ArrowUp as u32);
-                am.bind_key("Down", KeyCode::ArrowDown as u32);
-                am.bind_key("Left", KeyCode::ArrowLeft as u32);
-                am.bind_key("Right", KeyCode::ArrowRight as u32);
-                // Alternatif yön: WASD
-                am.bind_key("Up", KeyCode::KeyW as u32);
-                am.bind_key("Down", KeyCode::KeyS as u32);
-                am.bind_key("Left", KeyCode::KeyA as u32);
-                am.bind_key("Right", KeyCode::KeyD as u32);
-                // Saldırı tuşları: J=LightPunch, K=HeavyPunch, L=LightKick, U=HeavyKick
-                am.bind_key("LightPunch", KeyCode::KeyJ as u32);
-                am.bind_key("HeavyPunch", KeyCode::KeyK as u32);
-                am.bind_key("LightKick", KeyCode::KeyL as u32);
-                am.bind_key("HeavyKick", KeyCode::KeyU as u32);
-                world.insert_resource(am);
-            }
-        }
+    true
+}
 
-        // `editor_state` and `state` are separate bindings, so the console can be written
-        // from inside the callback: the step borrows `state.play`, the reporter borrows the
-        // editor, and neither is the other.
-        state
-            .play
-            .step(world, dt, input, &mut |r| log_play_report(editor_state, r));
-    } else {
-        // Time does not pass in a stopped game; carrying the debt into the next ▶ would spend it
-        // all in one frame.
-        state.play.reset();
+/// The editor's default bindings, into a play world that has none: arrows and WASD, and J K L U.
+fn insert_default_action_map(world: &mut World) {
+    let has_am = world
+        .try_get_resource::<gizmo::core::input::ActionMap>()
+        .is_ok();
+    if !has_am {
+        let mut am = gizmo::core::input::ActionMap::new();
+        use gizmo::prelude::KeyCode;
+        // Yön tuşları (Ok tuşları)
+        am.bind_key("Up", KeyCode::ArrowUp as u32);
+        am.bind_key("Down", KeyCode::ArrowDown as u32);
+        am.bind_key("Left", KeyCode::ArrowLeft as u32);
+        am.bind_key("Right", KeyCode::ArrowRight as u32);
+        // Alternatif yön: WASD
+        am.bind_key("Up", KeyCode::KeyW as u32);
+        am.bind_key("Down", KeyCode::KeyS as u32);
+        am.bind_key("Left", KeyCode::KeyA as u32);
+        am.bind_key("Right", KeyCode::KeyD as u32);
+        // Saldırı tuşları: J=LightPunch, K=HeavyPunch, L=LightKick, U=HeavyKick
+        am.bind_key("LightPunch", KeyCode::KeyJ as u32);
+        am.bind_key("HeavyPunch", KeyCode::KeyK as u32);
+        am.bind_key("LightKick", KeyCode::KeyL as u32);
+        am.bind_key("HeavyKick", KeyCode::KeyU as u32);
+        world.insert_resource(am);
     }
+}
 
-    // ⏸ has to reach the device too. `PlayLoop::step` is what drives audio, and a paused editor
-    // does not call it — so the level's ambience kept playing over a frozen frame. Called every
-    // frame rather than on the transition: the manager pushes only a CHANGE to the sinks, which
-    // is also what keeps a game's own `pause(id)` from being undone every frame.
-    if let Some(mut audio) = world.get_resource_mut::<gizmo::audio::AudioManager>() {
-        audio.set_all_paused(editor_state.is_paused());
-    }
-    // …and the clock: see `hold_clock`.
-    hold_clock(world, editor_state);
-
+/// The fight HUD's numbers from the fighters, while a play session lasts; reset when it ends.
+///
+///
+/// The condition is `is_in_play_session`, not `is_playing`: ⏸ leaves the mode at `Paused`, so
+/// the old `is_playing()` sent every paused frame into the `else` below and **reset the HUD** —
+/// the health bars vanished and the round timer jumped back to 99 the moment you paused, while
+/// the pause overlay was still being drawn over the top of them. A paused fight is still a
+/// fight; only the *countdown* below stops, because that is the part that spends time.
+///
+/// It moved the editor's camera too, every frame, to frame the two fighters: the Scene panel's
+/// camera, since the Game panel draws through the game's own. The fight was never framed in the
+/// game, and the Scene panel could not be looked around while one lasted.
+fn sync_fight_hud(world: &World, editor_state: &mut EditorState, dt: f32) {
     // --- FIGHT HUD SYNC: FighterController → EditorState.fight_hud ---
-    //
-    // The condition is `is_in_play_session`, not `is_playing`: ⏸ leaves the mode at `Paused`, so
-    // the old `is_playing()` sent every paused frame into the `else` below and **reset the HUD** —
-    // the health bars vanished and the round timer jumped back to 99 the moment you paused, while
-    // the pause overlay was still being drawn over the top of them. A paused fight is still a
-    // fight; only the *countdown* below stops, because that is the part that spends time.
     if editor_state.is_in_play_session() {
         let names = world.query::<&gizmo::core::component::EntityName>();
         let mut found_any = false;
+        // Found again every frame: a fighter that is gone left its slot filled, and the HUD went on
+        // showing its last health over a fight it was no longer in.
+        editor_state.fight_hud.p1_entity = None;
+        editor_state.fight_hud.p2_entity = None;
 
         for (entity, fighter) in world.query::<(Entity, &gizmo::physics::components::FighterController)>().iter() {
             found_any = true;
@@ -193,75 +222,6 @@ pub fn handle_simulation(
             && editor_state.fight_hud.timer_seconds > 0.0
         {
             editor_state.fight_hud.timer_seconds = (editor_state.fight_hud.timer_seconds - dt).max(0.0);
-        }
-
-        // --- MISSING-3: DÖVÜŞ KAMERASI ---
-        // İki dövüşçü varsa kamerayı otomatik olarak aralarına konumlandır
-        if editor_state.fight_hud.active {
-            if let (Some(p1_id), Some(p2_id)) = (editor_state.fight_hud.p1_entity, editor_state.fight_hud.p2_entity) {
-                let p1_pos;
-                let p2_pos;
-                {
-                    let transforms = world.query::<&gizmo::prelude::Transform>();
-                    p1_pos = transforms.get(p1_id).map(|t| t.position);
-                    p2_pos = transforms.get(p2_id).map(|t| t.position);
-                }
-
-                if let (Some(p1), Some(p2)) = (p1_pos, p2_pos) {
-                    let midpoint = (p1 + p2) * 0.5;
-                    let separation = (p2 - p1).length().max(2.0);
-
-                    let camera_height = 1.8_f32;
-                    let min_dist = 4.0_f32;
-                    let camera_distance = (separation * 1.2).max(min_dist);
-
-                    let target_pos = gizmo::math::Vec3::new(
-                        midpoint.x,
-                        midpoint.y + camera_height,
-                        midpoint.z + camera_distance,
-                    );
-
-                    let look_target = gizmo::math::Vec3::new(
-                        midpoint.x,
-                        midpoint.y + camera_height * 0.5,
-                        midpoint.z,
-                    );
-
-                    // Editör kamera entity'sinin Transform ve Camera bileşenlerini güncelle
-                    let cam_entity_id = state.editor_camera;
-                    {
-                        // SAFETY: exclusive `&mut World`; Transform and Camera are distinct component types.
-                        let mut transforms = unsafe { world.query_unchecked::<&mut gizmo::prelude::Transform>() };
-                        // SAFETY: as above — Camera is a distinct component type from Transform.
-                        let mut cameras = unsafe { world.query_unchecked::<&mut gizmo::renderer::components::Camera>() };
-
-                        if let Some(mut t) = transforms.get_mut(cam_entity_id) {
-                            // Yumuşak geçiş (lerp)
-                            let lerp_speed = (5.0 * dt).min(1.0);
-                            t.position = gizmo::math::Vec3::new(
-                                t.position.x + (target_pos.x - t.position.x) * lerp_speed,
-                                t.position.y + (target_pos.y - t.position.y) * lerp_speed,
-                                t.position.z + (target_pos.z - t.position.z) * lerp_speed,
-                            );
-
-                            // Look-at: Yaw/Pitch hesapla
-                            if cameras.get_mut(cam_entity_id).is_some() {
-                                // Kamera hedefin tam üstündeyse/üstündeyken yön dikey, kamera
-                                // hedefin ÜSTÜNDEYSE de sıfır olur; ikisinde de eski kod kameraya
-                                // 0 ya da NaN yaw yazıyordu. Şimdi mevcut açı korunuyor.
-                                use gizmo::renderer::components::Camera;
-                                let dir = look_target - t.position;
-                                let (current_yaw, _) = Camera::yaw_pitch_of(t.rotation);
-                                if let Some((yaw, pitch)) = Camera::yaw_pitch_from_forward(dir, current_yaw) {
-                                    t.rotation = Camera::rotation_from(yaw, pitch);
-                                }
-                            }
-
-                            t.update_local_matrix();
-                        }
-                    }
-                }
-            }
         }
     } else {
         // The play SESSION is over (⏹, not ⏸) — the snapshot is gone and so is the round.
@@ -333,6 +293,7 @@ struct ShaderRebuild;
 
 #[cfg(test)]
 mod tests {
+
     use gizmo::math::Vec3;
 
     /// **The play frame is the engine's, and this file must not grow another one.**
@@ -401,38 +362,6 @@ mod tests {
         }
     }
 
-    // Mirror of the auto-fight-camera framing math in `handle_simulation`:
-    // separation is floored at 2.0, and the camera pull-back distance is floored at
-    // 4.0 (min_dist) after a 1.2x zoom-out. Guards the two boundary clamps.
-    fn fight_camera_distance(p1: Vec3, p2: Vec3) -> f32 {
-        let separation = (p2 - p1).length().max(2.0);
-        let min_dist = 4.0_f32;
-        (separation * 1.2).max(min_dist)
-    }
-
-    #[test]
-    fn fight_camera_distance_respects_min_floor() {
-        // Fighters almost on top of each other → separation floored to 2.0, then
-        // 2.0*1.2 = 2.4 < 4.0 → distance floored to the 4.0 minimum.
-        let d = fight_camera_distance(Vec3::ZERO, Vec3::new(0.2, 0.0, 0.0));
-        assert!((d - 4.0).abs() < 1e-4, "close fighters must clamp to min_dist: {d}");
-    }
-
-    #[test]
-    fn fight_camera_distance_scales_when_far_apart() {
-        // Ten units apart → 10*1.2 = 12 wins over the 4.0 floor.
-        let d = fight_camera_distance(Vec3::new(-5.0, 0.0, 0.0), Vec3::new(5.0, 0.0, 0.0));
-        assert!((d - 12.0).abs() < 1e-4, "far fighters should zoom out: {d}");
-    }
-
-    #[test]
-    fn fight_camera_midpoint_is_average() {
-        let p1 = Vec3::new(-3.0, 1.0, 2.0);
-        let p2 = Vec3::new(7.0, 3.0, -4.0);
-        let midpoint = (p1 + p2) * 0.5;
-        assert!((midpoint - Vec3::new(2.0, 2.0, -1.0)).length() < 1e-5);
-    }
-
     // ── The fight HUD across ▶ / ⏸ / ⏹ ──────────────────────────────────────────────────────
     //
     // These drive the real `handle_simulation`, because what was wrong was its *condition*, not
@@ -460,6 +389,40 @@ mod tests {
             session: None,
             game: None,
         }
+    }
+
+    /// While a fight is on, the HUD follows the fighters in the world, and nothing moves the editor's
+    /// camera: the fight camera this replaced framed the fighters through the Scene panel's camera,
+    /// which the game is not drawn through, and held the panel while the fight lasted. A fighter
+    /// that is gone takes the HUD down with it.
+    #[test]
+    fn a_fight_keeps_the_hud_and_leaves_the_editor_camera_alone() {
+        use gizmo::physics::components::{FighterController, Transform};
+        let mut world = World::new();
+        let camera = world.spawn();
+        let at = gizmo::math::Vec3::new(0.0, 8.0, 18.0);
+        world.add_component(camera, Transform::new(at));
+        world.add_component(camera, gizmo::renderer::components::Camera::new(1.0, 0.1, 100.0, true));
+        let mut fighters = Vec::new();
+        for (id, x) in [(1u8, -2.0f32), (2, 2.0)] {
+            let f = world.spawn();
+            world.add_component(f, Transform::new(gizmo::math::Vec3::new(x, 0.0, 0.0)));
+            world.add_component(f, FighterController::new(id));
+            fighters.push(f);
+        }
+        let mut ed = EditorState::default();
+        ed.mode = gizmo::editor::EditorMode::Play;
+        let mut state = studio_state();
+        state.editor_camera = camera;
+        for _ in 0..30 {
+            handle_simulation(&mut world, &mut ed, &mut state, 1.0 / 60.0, &Input::default());
+        }
+        assert!(ed.fight_hud.active, "two fighters make a fight");
+        assert_eq!(world.query::<&Transform>().get(camera).unwrap().position, at, "the editor's camera was moved");
+
+        world.despawn(fighters[1]);
+        handle_simulation(&mut world, &mut ed, &mut state, 1.0 / 60.0, &Input::default());
+        assert!(!ed.fight_hud.active, "the HUD outlived its second fighter");
     }
 
     /// A world with a player-1 and a player-2 fighter — the pair the HUD needs before it draws.
