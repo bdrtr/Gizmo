@@ -43,24 +43,18 @@ pub fn handle_studio_input(
 // RAYCAST SEÇİMİ
 // ═══════════════════════════════════════════════════════════════
 
-/// Removes objects with editor names (grid, directional light, …) from the selection.
-const EDITOR_ENTITY_NAMES: &[&str] = &["Editor Grid", "Editor Guidelines", "Directional Light"];
-const EDITOR_ENTITY_PREFIXES: &[&str] = &["Editor Light Icon"];
-
-/// Is this entity an editor object (and therefore not selectable)?
+/// Does a hit on `id` belong to the editor's own furniture — the grid — rather than to the scene?
+///
+/// Decided on what a click selects, the entity's selection root (`find_selection_root`), by the
+/// engine's one rule for tooling (`gizmo::core::component::is_editor_only`). It was a list of names
+/// here: a scene's own entity called "Directional Light" could not be clicked, a renamed sun could,
+/// and a light's icon, which is furniture under a scene light, was refused rather than selecting
+/// the light it stands for. Now the icon selects its light, as a camera's handle selects its camera.
 fn is_editor_entity(world: &World, id: Entity) -> bool {
+    let root = find_selection_root(world, id);
+    let marked = world.query::<&gizmo::core::component::EditorOnly>().get(root).is_some();
     let names = world.query::<&gizmo::core::component::EntityName>();
-    if let Some(name) = names.get(id) {
-        if EDITOR_ENTITY_NAMES.contains(&name.0.as_str()) {
-            return true;
-        }
-        for prefix in EDITOR_ENTITY_PREFIXES {
-            if name.0.starts_with(prefix) {
-                return true;
-            }
-        }
-    }
-    false
+    gizmo::core::component::is_editor_only(marked, names.get(root).map(|n| n.0.as_str()))
 }
 
 /// Clicks the nearest object in the scene along the mouse ray.
@@ -455,30 +449,39 @@ mod tests {
         assert!(root == a || root == b);
     }
 
-    // ── is_editor_entity (unpickable-object whitelist) ──────────────────────
+    // ── is_editor_entity (what a click may not select) ─────────────────────
 
+    /// The grid — editor furniture at its root — is never clicked; a scene's light is, by its name
+    /// or by its icon, which is furniture under it.
     #[test]
-    fn is_editor_entity_matches_names_and_prefixes() {
+    fn furniture_is_not_clicked_and_a_lights_icon_selects_the_light() {
+        use gizmo::core::component::{EditorOnly, Parent};
         let mut world = World::new();
         let named = |world: &mut World, name: &str| {
             let e = world.spawn();
             world.add_component(e, EntityName(name.to_string()));
             e
         };
+        let guidelines = named(&mut world, "Editor Guidelines");
+        world.add_component(guidelines, EditorOnly);
+        let grid = named(&mut world, "Editor Grid");
+        world.add_component(grid, EditorOnly);
+        world.add_component(grid, Parent(guidelines));
+        assert!(is_editor_entity(&world, grid), "the grid, under the editor's guidelines");
+        // The legacy name rule still holds for scenes written before the marker.
+        let unmarked = named(&mut world, "Editor Grid");
+        assert!(is_editor_entity(&world, unmarked));
 
-        for exact in ["Editor Grid", "Editor Guidelines", "Directional Light"] {
-            let id = named(&mut world, exact);
-            assert!(is_editor_entity(&world, id), "'{exact}' should be an editor entity");
-        }
-        // Prefix rule: any "Editor Light Icon*".
-        let icon = named(&mut world, "Editor Light Icon 3");
-        assert!(is_editor_entity(&world, icon));
+        let sun = named(&mut world, "Directional Light");
+        assert!(!is_editor_entity(&world, sun), "a scene light is scene content, whatever it is called");
+        let icon = named(&mut world, "Editor Light Icon 1");
+        world.add_component(icon, EditorOnly);
+        world.add_component(icon, Parent(sun));
+        assert!(!is_editor_entity(&world, icon), "the icon is clicked, and selects its light");
+        assert_eq!(find_selection_root(&world, icon), sun);
 
-        // Regular user objects are selectable.
         let cube = named(&mut world, "Default Cube");
         assert!(!is_editor_entity(&world, cube));
-
-        // An entity with no name is never an editor entity.
         let anon = world.spawn();
         assert!(!is_editor_entity(&world, anon));
     }
