@@ -21,6 +21,12 @@
 //! [`collect_hidden`] is the answer, computed once per frame and shared, because two answers to
 //! "is this drawn" is exactly what the 2026-08-19 fix was about.
 //!
+//! # Lights
+//!
+//! A hidden light lights nothing (`collect_scene_lights` asks the same set). Until 2026-11-22 the
+//! lights were not asked at all: a hidden lamp went on lighting the room from nothing, and so did
+//! a deleted one, since the editor's delete hides what it deletes until the entity is collected.
+//!
 //! # Cost
 //!
 //! `O(hidden subtree)`, not `O(entities)`: it starts from the entities that carry the marker, so a

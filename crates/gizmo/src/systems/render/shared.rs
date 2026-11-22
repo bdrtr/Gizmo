@@ -174,6 +174,11 @@ pub fn collect_scene_lights(
         cam_pos,
         globals: world.query::<&GlobalTransform>(),
         locals: world.query::<&Transform>(),
+        // Hidden is a full hide for a light as for a mesh (`hidden::collect_hidden`, the same set
+        // both draw loops use, an ancestor's hide included). Lights were not asked: a hidden lamp
+        // went on lighting the room from nothing, and so did a deleted one — the editor's delete
+        // hides what it deletes and the entity lives on until the next collection.
+        hidden: super::hidden::collect_hidden(world, &world.query::<&gizmo_core::component::Children>()),
     };
 
     // Every light in the scene, not just the first MAX_LIGHTS: the cap is applied by the ranking
@@ -210,11 +215,17 @@ struct LightView<'w> {
     cam_pos: Vec3,
     globals: gizmo_core::Query<'w, &'w GlobalTransform>,
     locals: gizmo_core::Query<'w, &'w Transform>,
+    /// The entities not drawn this frame, which do not light it either.
+    hidden: std::collections::HashSet<Entity>,
 }
 
 impl LightView<'_> {
-    /// (position, rotation) in world space, GlobalTransform-preferred, Transform-fallback.
+    /// (position, rotation) in world space, GlobalTransform-preferred, Transform-fallback; `None`
+    /// for a light that is hidden, which lights nothing.
     fn world_tf(&self, e: Entity) -> Option<(Vec3, gizmo_math::Quat)> {
+        if self.hidden.contains(&e) {
+            return None;
+        }
         self.globals
             .get(e)
             .map(|g| {
@@ -361,6 +372,10 @@ fn fill_lights(world: &World, view: &LightView, out: &mut Vec<Candidate>) {
     let q = world.query::<(Entity, &DirectionalLight)>();
     let mut sun_seen = false;
     for (e, light) in q.iter() {
+        // A hidden one is not the sun either: the first SHOWN sun is, here and in `find_sun`.
+        if view.hidden.contains(&e) {
+            continue;
+        }
         if light.role == LightRole::Sun && !sun_seen {
             sun_seen = true;
             continue;
@@ -456,6 +471,9 @@ fn find_sun(world: &World, view: &LightView) -> Sun {
     let mut sun_contact_shadow_length = 0.0;
     let q = world.query::<(Entity, &DirectionalLight)>();
     for (e, light) in q.iter() {
+        if view.hidden.contains(&e) {
+            continue;
+        }
         if light.role == LightRole::Sun {
             if let Some((_, rot)) = view.world_tf(e) {
                 // Light convention: points along its local -Z.
@@ -681,6 +699,42 @@ mod tests {
     use crate::core::World;
     use crate::renderer::components::{PointLight, SpotLight};
     use gizmo_physics_core::components::GlobalTransform;
+
+    /// A hidden light lights nothing, as a hidden mesh draws nothing — whether it is hidden
+    /// itself, through an ancestor (a lamp hidden with its bulb's light under it), or deleted, which
+    /// hides. And a hidden sun is not the sun: the next shown one is.
+    #[test]
+    fn a_hidden_light_lights_nothing() {
+        use crate::renderer::components::{DirectionalLight, LightRole};
+        use gizmo_core::component::{Children, IsHidden, Parent};
+        let mut world = World::new();
+        let lamp = world.spawn();
+        world.add_component(lamp, Transform::new(Vec3::new(0.0, 0.0, 10.0)));
+        let bulb = world.spawn();
+        world.add_component(bulb, Transform::new(Vec3::new(0.0, 0.0, 10.0)));
+        world.add_component(bulb, PointLight::new(Vec3::ONE, 5.0, 4.0));
+        world.add_component(bulb, Parent(lamp));
+        world.add_component(lamp, Children(vec![bulb]));
+        let lit = |w: &World| collect_scene_lights(w, Vec3::ZERO, wide_view(), &Default::default()).num_lights;
+        assert_eq!(lit(&world), 1, "premise: the bulb lights");
+        world.add_component(lamp, IsHidden);
+        assert_eq!(lit(&world), 0, "the lamp is hidden, and its bulb went on lighting");
+        world.remove_component::<IsHidden>(lamp);
+        world.add_component(bulb, IsHidden);
+        assert_eq!(lit(&world), 0, "the bulb itself is hidden");
+
+        let first = world.spawn();
+        world.add_component(first, Transform::new(Vec3::ZERO));
+        world.add_component(first, DirectionalLight::new(Vec3::new(1.0, 0.0, 0.0), 1.0, LightRole::Sun));
+        let second = world.spawn();
+        world.add_component(second, Transform::new(Vec3::ZERO));
+        world.add_component(second, DirectionalLight::new(Vec3::new(0.0, 1.0, 0.0), 2.0, LightRole::Sun));
+        world.add_component(first, IsHidden);
+        let scene = collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default());
+        assert!(scene.has_sun);
+        assert_eq!(scene.sun_col, Vec4::new(0.0, 1.0, 0.0, 2.0), "the shown sun is the sun");
+        assert_eq!(scene.num_lights, 0, "and it is not also a fill light");
+    }
 
     /// A camera at the origin looking down **+Z**, wide and deep enough to contain every light
     /// these tests place. The frustum cull is real, so a test that wants to measure the *ranking*
