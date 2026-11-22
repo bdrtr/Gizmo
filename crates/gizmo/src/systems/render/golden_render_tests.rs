@@ -19768,6 +19768,43 @@ fn a_tooltip_draws_a_box_and_its_text_beside_the_pointer() {
     });
 }
 
+/// **A fight's HUD is drawn in the game's picture.** Two fighters, the engine's fight HUD laid out
+/// by the UI's own systems against a 128² window: the left bar's blue fill and the right bar's red
+/// one are in the band along the top. The HUD was the editor's Game panel's, painted with egui, so
+/// it was never in the game's own frame.
+#[test]
+#[ignore = "requires a GPU adapter"]
+#[cfg(all(feature = "ui", feature = "physics-dynamics"))]
+fn a_fight_hud_draws_its_bars_in_the_games_picture() {
+    use crate::physics::components::FighterController;
+    let _gpu = crate::test_gpu::gpu_lock();
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        renderer.taa = None;
+        let mut world = World::new();
+        let mut schedule = gizmo_core::system::Schedule::new();
+        crate::ui::register(&mut world, &mut schedule);
+        world.insert_resource(gizmo_core::input::Input::new());
+        *world.get_resource_mut::<gizmo_core::window::WindowInfo>().unwrap() = gizmo_core::window::WindowInfo::new(128.0, 128.0);
+        schedule.build();
+        world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+        for id in [1u8, 2] {
+            world.spawn_bundle((Transform::new(Vec3::ZERO), FighterController::new(id)));
+        }
+        crate::systems::fight_hud::fight_hud_system(&mut world, 1.0 / 60.0);
+        schedule.run(&mut world, 0.0);
+        let frame = render_world(&mut renderer, &mut world).await;
+        let at = |x: u32, y: u32| {
+            let i = ((y * 128 + x) * 4) as usize;
+            [frame[i], frame[i + 1], frame[i + 2]].map(i32::from)
+        };
+        // The bars run 16 px down, 20 px tall: sample their middle row, a quarter in from each side.
+        let (left, right) = (at(30, 26), at(98, 26));
+        assert!(left[2] > left[0] + 60, "the left bar's blue fill: {left:?}");
+        assert!(right[0] > right[2] + 60, "the right bar's red fill: {right:?}");
+    });
+}
+
 /// **A UI is drawn the same after a save and a reopen.** A panel on a layer, clipping a list
 /// scrolled part way down (its thumb drawn), a slider's fill, a switch's box, a progress bar and
 /// a faded, moved card — laid out by the UI's own systems on both sides, against a 128² window.

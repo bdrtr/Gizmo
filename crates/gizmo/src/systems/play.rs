@@ -578,6 +578,9 @@ impl PlayLoop {
         // device, resolves the sounds a scene names and starts its flat sources — no camera, no
         // transform, so an audio-only or headless build gets all of that. `systems::audio` is
         // gated on `audio+render+physics` because the listener reads a `Camera`.
+        // Before the UI pass, so the HUD's nodes are laid out on the frame they change.
+        #[cfg(all(feature = "physics-dynamics", feature = "ui", feature = "render"))]
+        crate::systems::fight_hud::fight_hud_system(world, dt);
         #[cfg(feature = "ui")]
         self.ui_pass(world, dt, input);
         #[cfg(feature = "audio")]

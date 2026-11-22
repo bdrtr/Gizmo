@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The fight HUD is the game's: `gizmo::systems::fight_hud`.** The two fighters' health bars and
+  names, the round, its clock and the K.O., as UI nodes, built and kept in step by
+  `fight_hud_system` while player 1 and player 2 are in the world and taken down when either is
+  gone; `PlayLoop` runs it, in the editor's ▶ and in the exported runtime. The round is a resource,
+  `FightRound` (round 1, 99 s, counting down while both stand), which a game that plays several
+  rounds advances. It was painted by the editor's Game panel with egui, so an exported fight had no
+  HUD. Covered by a unit test, a play-loop test of its layout, and a GPU test of its bars in the
+  game's picture.
+
 - **A component's `Entity` fields survive a scene** (`gizmo_core::entity::references`). The scene
   format spawns its entities again under new ids and remapped only `Parent`, `Children` and joint
   endpoints; a component holding an `Entity` — a target, a key, a squad — was written as a number
@@ -730,6 +739,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **Breaking: `EditorState::fight_hud` and `FightHudState`**, the editor's own copy of the fight's
+  state, and the Game panel's egui HUD they fed: the HUD is the game's now (see Added).
 - **Breaking: `gizmo_ai::navmesh` (`NavMesh`, `NavMeshConfig`, `NavMeshStats`, `NavPoly`).** A
   second navigation structure beside `NavGrid`, used by nothing in the engine, a game or a test. It
   was built from the same flat rasterisation of static colliders, with one Y per polygon,

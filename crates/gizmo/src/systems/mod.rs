@@ -14,6 +14,9 @@ pub mod chunk_system;
 pub mod fps_look;
 /// Entities that despawn themselves after a set time — particles, decals, debris.
 pub mod lifetime;
+// The fighting-game HUD — the fighters' bars, names, round and K.O. — in the game's own UI.
+#[cfg(all(feature = "physics-dynamics", feature = "ui", feature = "render"))]
+pub mod fight_hud;
 /// The bridge between the ECS and the physics world: stepping it, and drawing its debug view.
 #[cfg(feature = "physics")]
 pub mod physics;

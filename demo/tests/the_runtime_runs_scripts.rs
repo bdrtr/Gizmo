@@ -884,3 +884,31 @@ fn a_scene_ui_is_laid_out_and_clicked_in_play() {
     assert_eq!(node, (Vec2::new(100.0, 40.0), Vec2::new(10.0, 10.0)), "laid out");
     assert!(clicked, "and a press and release over it is a click");
 }
+
+/// A fight's HUD is the game's: with two fighters the play loop — the editor's ▶ and the exported
+/// runtime — builds it in the game's UI and lays it out to the window. It was painted by the
+/// editor's Game panel alone, so an exported fight had no health bars at all.
+#[test]
+fn a_fight_has_its_hud_in_play_laid_out_to_the_window() {
+    use gizmo::physics::components::FighterController;
+    use gizmo::ui::{Node, ProgressBar};
+    let mut world = World::new();
+    world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
+    world.insert_resource(gizmo::core::window::WindowInfo::new(1280.0, 720.0));
+    for (id, health) in [(1u8, 60.0f32), (2, 100.0)] {
+        let mut f = FighterController::new(id);
+        f.health = health;
+        world.spawn_bundle((Transform::new(Vec3::ZERO), f));
+    }
+    let mut play = PlayLoop::new();
+    for _ in 0..3 {
+        play.step(&mut world, 1.0 / 60.0, &Input::default(), &mut |_| {});
+    }
+    let nodes = world.query::<&Node>();
+    let bars: Vec<(f32, Vec2)> = world.query::<(Entity, &ProgressBar)>().iter().map(|(e, b)| (b.value, nodes.get(e).map(|n| n.size).unwrap_or_default())).collect();
+    assert_eq!(bars.len(), 2, "two bars");
+    for (value, size) in &bars {
+        assert!((size.x - 0.42 * 1280.0).abs() < 1.0 && size.y > 0.0, "laid out to the window: {size:?}");
+        assert!(*value == 0.6 || *value == 1.0, "showing the fighters' health: {value}");
+    }
+}

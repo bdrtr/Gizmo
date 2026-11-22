@@ -187,7 +187,12 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    `create_resource_world` (504). Mostly descriptors, but full of per-target `#[cfg]` arms, so
 >    each split needs the golden render tests, the forward-only GPU tests, the wasm lint and the
 >    feature powerset.
-> 3. **The fight HUD exists only in the editor.** The health bars and the round timer are drawn by
+> 3. ~~**The fight HUD exists only in the editor.**~~ **Closed 2026-11-23:** it is the engine's,
+>    `gizmo::systems::fight_hud` — the bars, names, round, clock and K.O. as UI nodes, built and
+>    kept by `fight_hud_system` when player 1 and player 2 are in the world, run by `PlayLoop` in
+>    the editor's ▶ and the exported runtime alike; the round is a `FightRound` resource. The
+>    editor's egui overlay, `FightHudState` and the studio's `sync_fight_hud` are gone. It needed the
+>    UI itself to run in ▶ and an export first, which it did not (closed the same day). *(Was:)* The health bars and the round timer are drawn by
 >    the editor's Game panel (`gizmo-editor::game_view::draw_fight_hud`, fed by `gizmo-studio`'s
 >    `sync_fight_hud`), so an exported fighting game has none — the export promise ("the shipped
 >    game behaves like the one you pressed ▶ on") does not hold for it. Its place is the engine:

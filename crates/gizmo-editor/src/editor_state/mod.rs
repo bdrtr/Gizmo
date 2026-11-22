@@ -225,9 +225,6 @@ pub struct EditorState {
         serde_json::Value,
     )>,
 
-    /// The fighting-game HUD's state: health bars, round counter and timer.
-    pub fight_hud: FightHudState,
-
     /// When the status bar last read this process's resident set size, and what it read.
     ///
     /// Cached because the reading is a file read and a parse; the bar samples it once a second
@@ -421,7 +418,6 @@ impl EditorState {
 
             pending_json_updates: Vec::new(),
 
-            fight_hud: FightHudState::default(),
 
             rss_sampled_at: None,
             rss_bytes: None,

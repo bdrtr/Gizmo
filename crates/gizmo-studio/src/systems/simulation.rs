@@ -106,8 +106,6 @@ pub fn handle_simulation(
     }
     // …and the clock: see `hold_clock`.
     hold_clock(world, editor_state);
-
-    sync_fight_hud(world, editor_state, dt);
 }
 
 /// Reloads the scripts and shaders the asset watcher saw change.
@@ -230,66 +228,6 @@ fn insert_default_action_map(world: &mut World) {
         am.bind_key("HeavyKick", KeyCode::KeyU as u32);
         world.insert_resource(am);
     }
-}
-
-/// The fight HUD's numbers from the fighters, while a play session lasts; reset when it ends.
-///
-///
-/// The condition is `is_in_play_session`, not `is_playing`: ⏸ leaves the mode at `Paused`, so
-/// the old `is_playing()` sent every paused frame into the `else` below and **reset the HUD** —
-/// the health bars vanished and the round timer jumped back to 99 the moment you paused, while
-/// the pause overlay was still being drawn over the top of them. A paused fight is still a
-/// fight; only the *countdown* below stops, because that is the part that spends time.
-///
-/// It moved the editor's camera too, every frame, to frame the two fighters: the Scene panel's
-/// camera, since the Game panel draws through the game's own. The fight was never framed in the
-/// game, and the Scene panel could not be looked around while one lasted.
-fn sync_fight_hud(world: &World, editor_state: &mut EditorState, dt: f32) {
-    // --- FIGHT HUD SYNC: FighterController → EditorState.fight_hud ---
-    if editor_state.is_in_play_session() {
-        let names = world.query::<&gizmo::core::component::EntityName>();
-        let mut found_any = false;
-        // Found again every frame: a fighter that is gone left its slot filled, and the HUD went on
-        // showing its last health over a fight it was no longer in.
-        editor_state.fight_hud.p1_entity = None;
-        editor_state.fight_hud.p2_entity = None;
-
-        for (entity, fighter) in world.query::<(Entity, &gizmo::physics::components::FighterController)>().iter() {
-            found_any = true;
-            if fighter.player_id == 1 {
-                editor_state.fight_hud.p1_entity = Some(entity);
-                editor_state.fight_hud.p1_health = fighter.health;
-                editor_state.fight_hud.p1_max_health = fighter.max_health;
-                if let Some(name) = names.get(entity) {
-                    editor_state.fight_hud.p1_name = name.0.clone();
-                }
-            } else if fighter.player_id == 2 {
-                editor_state.fight_hud.p2_entity = Some(entity);
-                editor_state.fight_hud.p2_health = fighter.health;
-                editor_state.fight_hud.p2_max_health = fighter.max_health;
-                if let Some(name) = names.get(entity) {
-                    editor_state.fight_hud.p2_name = name.0.clone();
-                }
-            }
-        }
-
-        editor_state.fight_hud.active = found_any && editor_state.fight_hud.p1_entity.is_some() && editor_state.fight_hud.p2_entity.is_some();
-
-        // Timer countdown — the one part of the HUD that must not run while paused.
-        if editor_state.is_playing()
-            && editor_state.fight_hud.active
-            && editor_state.fight_hud.timer_seconds > 0.0
-        {
-            editor_state.fight_hud.timer_seconds = (editor_state.fight_hud.timer_seconds - dt).max(0.0);
-        }
-    } else {
-        // The play SESSION is over (⏹, not ⏸) — the snapshot is gone and so is the round.
-        editor_state.fight_hud = gizmo::editor::editor_state::FightHudState::default();
-    }
-
-    // The navigation grid's obstacle cells are drawn by the render pipeline into the editor's own lines
-    // (`render_pipeline::furniture`), the Scene panel's alone. They were written into the game's
-    // `Gizmos` here, and showed in the Game panel and in play.
 }
 
 /// Should the **editor** step physics itself this frame?
@@ -501,14 +439,21 @@ mod tests {
         }
     }
 
-    /// While a fight is on, the HUD follows the fighters in the world, and nothing moves the editor's
-    /// camera: the fight camera this replaced framed the fighters through the Scene panel's camera,
-    /// which the game is not drawn through, and held the panel while the fight lasted. A fighter
-    /// that is gone takes the HUD down with it.
+    /// How many fight-HUD health bars the world holds: the engine's HUD (`systems::fight_hud`),
+    /// built by the play loop, is two `ProgressBar`s.
+    fn hud_bars(world: &World) -> usize {
+        world.query::<&gizmo::ui::ProgressBar>().iter().count()
+    }
+
+    /// While a fight is on, the engine's HUD follows the fighters in the world, and nothing moves
+    /// the editor's camera: the fight camera this replaced framed the fighters through the Scene
+    /// panel's camera, which the game is not drawn through, and held the panel while the fight
+    /// lasted. A fighter that is gone takes the HUD down with it.
     #[test]
     fn a_fight_keeps_the_hud_and_leaves_the_editor_camera_alone() {
         use gizmo::physics::components::{FighterController, Transform};
         let mut world = World::new();
+        world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
         let camera = world.spawn();
         let at = gizmo::math::Vec3::new(0.0, 8.0, 18.0);
         world.add_component(camera, Transform::new(at));
@@ -527,12 +472,12 @@ mod tests {
         for _ in 0..30 {
             handle_simulation(&mut world, &mut ed, &mut state, 1.0 / 60.0, &Input::default());
         }
-        assert!(ed.fight_hud.active, "two fighters make a fight");
+        assert_eq!(hud_bars(&world), 2, "two fighters make a fight, and its HUD");
         assert_eq!(world.query::<&Transform>().get(camera).unwrap().position, at, "the editor's camera was moved");
 
         world.despawn(fighters[1]);
         handle_simulation(&mut world, &mut ed, &mut state, 1.0 / 60.0, &Input::default());
-        assert!(!ed.fight_hud.active, "the HUD outlived its second fighter");
+        assert_eq!(hud_bars(&world), 0, "the HUD outlived its second fighter");
     }
 
     /// A world with a player-1 and a player-2 fighter — the pair the HUD needs before it draws.
@@ -550,38 +495,27 @@ mod tests {
         world
     }
 
-    /// **Pausing must not wipe the fight HUD.** ⏸ leaves the editor in `Paused`, which
-    /// `is_playing()` reports as false — so every paused frame reset `fight_hud` to its default:
-    /// the health bars disappeared and the round timer snapped back to 99, underneath a pause
-    /// overlay that was still being drawn. Stopping (⏹) is the transition that legitimately ends
-    /// the round, and it still does.
+    /// **Pausing keeps the fight HUD and holds its clock.** ⏸ does not step the game, so the HUD
+    /// stays as it was and the round clock does not run. (⏹ drops the play world, HUD and all —
+    /// `crate::pie` — so there is nothing here to clear.)
     #[test]
-    fn pausing_keeps_the_fight_hud_and_stopping_clears_it() {
+    fn pausing_keeps_the_fight_hud_and_holds_its_clock() {
         let mut world = versus_world();
         let mut ed = EditorState::default();
         let mut st = studio_state();
         let input = Input::new();
+        let clock = |world: &World| world.get_resource::<gizmo::systems::fight_hud::FightRound>().map(|r| r.seconds_left);
 
         ed.toggle_play();
         handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
-        assert!(ed.fight_hud.active, "two fighters, so the HUD must be up");
-        let timer_running = ed.fight_hud.timer_seconds;
-        assert!(timer_running < 99.0, "the round clock runs while playing");
+        assert_eq!(hud_bars(&world), 2, "two fighters, so the HUD must be up");
+        let running = clock(&world).expect("a round");
+        assert!(running < 99.0, "the round clock runs while playing");
 
         ed.toggle_pause();
         handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
-        assert!(
-            ed.fight_hud.active,
-            "the HUD must survive ⏸ — the round is paused, not over"
-        );
-        assert_eq!(
-            ed.fight_hud.timer_seconds, timer_running,
-            "but the round clock must not tick while paused"
-        );
-
-        ed.toggle_play(); // Paused → Edit (⏹)
-        handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
-        assert!(!ed.fight_hud.active, "stopping ends the round and clears the HUD");
+        assert_eq!(hud_bars(&world), 2, "the HUD survives ⏸ — the round is paused, not over");
+        assert_eq!(clock(&world), Some(running), "and its clock does not tick while paused");
     }
 
     /// **⏸ holds the engine's clock, and only the pause is the editor's.**

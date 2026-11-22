@@ -172,8 +172,8 @@ fn add_requested_component(world: &mut World, editor_state: &mut EditorState, en
             "Hurtbox" => world.add_component(ent, gizmo::physics::components::Hurtbox::default()),
             "BoneAttachment" => world.add_component(ent, gizmo::renderer::components::BoneAttachment::default()),
             // Not `default()`: that is always player 1, so adding two fighters gave two
-            // player 1s — and the studio's own fight HUD needs a p1 AND a p2 before it draws
-            // anything (`simulation.rs`, `fight_hud.active`). Authoring a versus scene the
+            // player 1s — and the fight HUD needs a p1 AND a p2 before it draws anything
+            // (`gizmo::systems::fight_hud`). Authoring a versus scene the
             // obvious way therefore produced a HUD that never appeared. The slot is the
             // lowest positive number no fighter in the scene is using.
             "FighterController" => world.add_component(
