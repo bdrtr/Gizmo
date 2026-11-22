@@ -329,22 +329,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
         }
     };
 
-    // A body is synced only with a Collider: a `RigidBody` without one is not simulated at all —
-    // no gravity, no velocity integration — and stands still without a word. A guard driven by
-    // its `NavAgent`'s velocity did exactly that (`gizli`). Say so once, when the count grows.
-    let orphans = world
-        .query_filtered::<&RigidBody, gizmo_core::query::Without<Collider>>()
-        .iter()
-        .count();
-    if orphans > physics_world.bodies_without_collider {
-        tracing::warn!(
-            orphans,
-            "[Physics] {orphans} RigidBody entit{} without a Collider — not simulated, so they will not move; \
-             add a Collider (one on a layer with mask 0 if it should touch nothing)",
-            if orphans == 1 { "y" } else { "ies" }
-        );
-    }
-    physics_world.bodies_without_collider = orphans;
+    note_bodies_without_collider(world, &mut physics_world);
 
     // 2. What to bring over.
     //
@@ -364,194 +349,26 @@ pub fn physics_step_system(world: &World, dt: f32) {
     let full = !sync.vouches_for(world, physics_world.body_revision);
     sync.begin(full);
     if !full {
-        use gizmo_core::query::{Changed, Or};
-        let written = world.query_since::<
-            Entity,
-            Or<
-                Changed<RigidBody>,
-                Or<
-                    Changed<Transform>,
-                    Or<
-                        Changed<Velocity>,
-                        Or<
-                            Changed<Collider>,
-                            Or<Changed<gizmo_physics_core::components::PhysicsMaterial>, Changed<gizmo_core::component::Children>>,
-                        >,
-                    >,
-                >,
-            >,
-        >(sync.since());
-        for e in written.iter() {
-            sync.mark_written(e.id());
-        }
+        mark_written_since(world, &mut sync);
     }
 
-    let children_query = world.query::<&gizmo_core::component::Children>();
-    let trans_query = world.query::<&Transform>();
-    let col_query = world.query::<&Collider>();
-
-    // 3. Bring the bodies over that need it.
-    let mut rigid_bodies = Vec::new();
-    // The handle of each entry above, for the write-back: a `BodyHandle` is the physics side's raw id.
-    let mut body_entities: Vec<Entity> = Vec::new();
-    // Kinematic bodies driven to a pose: their index in `rigid_bodies`, and the pose to put them
-    // on after the step.
-    let mut targets: Vec<(usize, crate::components::KinematicTarget)> = Vec::new();
-    let target_query = world.query::<&crate::components::KinematicTarget>();
-    {
-        let query = world.query_filtered::<(
-            Entity,
-            &RigidBody,
-            &Transform,
-            &Velocity,
-            &Collider,
-            Option<&gizmo_physics_core::components::PhysicsMaterial>,
-            Option<&gizmo_core::component::Children>,
-            // Forces that push on every step, not once a frame — see `ExternalForce`.
-            Option<&crate::components::ExternalForce>,
-            // And the engine's own, from the body's surroundings — see `EnvironmentForce`.
-            Option<&crate::components::EnvironmentForce>,
-        ), (gizmo_core::query::Without<gizmo_core::pool::Pooled>, gizmo_core::query::Without<gizmo_core::component::IsDeleted>)>();
-        for (id, rb, transform, vel, col, material, children, external, environment) in query.iter() {
-            let always = !(rb.is_static() || (rb.is_dynamic() && rb.is_sleeping)) || external.is_some() || environment.is_some();
-            if !sync.needs(id.id(), material.is_some(), children, always) {
-                if cfg!(debug_assertions) {
-                    let collider = body_collider(world, id, col, transform, material, children, &children_query, &trans_query, &col_query);
-                    assert_clean(&physics_world, id, rb, transform, vel, &collider);
-                }
-                continue;
-            }
-            let final_collider = body_collider(world, id, col, transform, material, children, &children_query, &trans_query, &col_query);
-            // A moving body whose inertia was never set gets its collider's.
-            //
-            // `RigidBody::new` cannot know the shape, so it stores a 1×1×1-box placeholder,
-            // and the rule was "call `update_inertia_from_collider` yourself" — which 28 of
-            // the 36 `RigidBody::new` calls in `demo/` did not. Measured in `lobut`: a 20 cm
-            // ball, I = 0.4·m·r² = 0.096, spun as if I were ~1 — ten times too hard to turn,
-            // so it never stopped sliding and lost 80 % of its speed to friction in 1.5 s
-            // instead of settling into a roll at 5/7 of it. The derived value is written back
-            // with the body, so this runs once; an inertia set by hand is anything but the
-            // placeholder and is left alone.
-            let mut rb = *rb;
-            if !rb.is_static() && rb.local_inertia == RigidBody::UNSET_INERTIA {
-                rb.update_inertia_from_collider(&final_collider);
-            }
-            if let Some(push) = external {
-                if rb.is_dynamic() {
-                    rb.force_accumulator += push.force;
-                    rb.torque_accumulator += push.torque;
-                }
-            }
-            if let Some(push) = environment {
-                if rb.is_dynamic() {
-                    rb.force_accumulator += push.force;
-                    rb.torque_accumulator += push.torque;
-                }
-            }
-            // A kinematic body with a target moves by whatever velocity reaches it this step.
-            let mut vel = *vel;
-            let mut start = *transform;
-            if let Some(target) = rb
-                .is_kinematic()
-                .then(|| target_query.get(id).copied())
-                .flatten()
-            {
-                let com = transform.rotation * rb.center_of_mass;
-                let (linear, angular) = target.velocity_from(transform.position, transform.rotation, com, dt);
-                vel.linear = linear;
-                vel.angular = angular;
-                targets.push((rigid_bodies.len(), target));
-            } else if rb.is_kinematic() {
-                // **A kinematic body moved outside the step** — its `Transform` written by an
-                // animation, a script, the game — is carried there from where the last step left
-                // it, as if its new pose were a `KinematicTarget`: so it has the velocity of that
-                // move, and what stands on it goes with it (`platform_carry` reads it). It used to
-                // jump there with no velocity at all, and a platform keyed in the timeline slid out
-                // from under the player. Once it has arrived and is not moved again, it stops.
-                let moved = physics_world
-                    .last_pose(id.id(), id.generation())
-                    .filter(|last| last.position != transform.position || last.rotation != transform.rotation);
-                if let Some(last) = moved {
-                    let target = crate::components::KinematicTarget::new(transform.position, transform.rotation);
-                    start.position = last.position;
-                    start.rotation = last.rotation;
-                    let com = start.rotation * rb.center_of_mass;
-                    let (linear, angular) = target.velocity_from(start.position, start.rotation, com, dt);
-                    vel.linear = linear;
-                    vel.angular = angular;
-                    rb.pose_driven = true;
-                    targets.push((rigid_bodies.len(), target));
-                } else if rb.pose_driven {
-                    vel.linear = gizmo_math::Vec3::ZERO;
-                    vel.angular = gizmo_math::Vec3::ZERO;
-                    rb.pose_driven = false;
-                }
-            }
-            // Bridge: ECS entity id -> opaque physics BodyHandle (generation is
-            // unused by physics; bodies are keyed by id only).
-            rigid_bodies.push((BodyHandle::from_id(id.id()), rb, start, vel, final_collider));
-            body_entities.push(id);
-        }
-    }
-
-    // 3b. Bodies without a `Velocity`.
-    //
-    // The query above needs one, and a body without it used to be left out of the simulation
-    // **silently**: a static floor written as `RigidBody::new_static()` + a collider — no
-    // velocity, because a floor does not move — was not there, and everything above it fell
-    // through (`lobut`, 2026-11-02, measured: ten pins and a ball in free fall from frame one).
-    // A static body's velocity is zero by definition, so it joins this step with one. A body
-    // that moves needs a velocity that persists between steps, which only the component can
-    // hold, so it is given one through the command queue and simulated from the next frame on.
-    // Scenes whose bodies all carry a `Velocity` — every one written before this — take neither
-    // branch, so their bodies, their order and their hashes are unchanged.
-    {
-        let query = world.query_filtered::<(
-            Entity,
-            &RigidBody,
-            &Transform,
-            Option<&Collider>,
-            Option<&gizmo_physics_core::components::PhysicsMaterial>,
-            Option<&gizmo_core::component::Children>,
-        ), (gizmo_core::query::Without<Velocity>, gizmo_core::query::Without<gizmo_core::pool::Pooled>, gizmo_core::query::Without<gizmo_core::component::IsDeleted>)>();
-        for (id, rb, transform, col, material, children) in query.iter() {
-            if rb.is_static() {
-                if let Some(col) = col {
-                    if !sync.needs(id.id(), material.is_some(), children, false) {
-                        if cfg!(debug_assertions) {
-                            let collider = body_collider(world, id, col, transform, material, children, &children_query, &trans_query, &col_query);
-                            assert_clean(&physics_world, id, rb, transform, &Velocity::default(), &collider);
-                        }
-                        continue;
-                    }
-                    let final_collider = body_collider(world, id, col, transform, material, children, &children_query, &trans_query, &col_query);
-                    rigid_bodies.push((BodyHandle::from_id(id.id()), *rb, *transform, Velocity::default(), final_collider));
-                    body_entities.push(id);
-                }
-            } else if let Ok(queue) = world.try_get_resource::<gizmo_core::commands::CommandQueue>() {
-                tracing::debug!(entity = %id, "[Physics] a moving RigidBody has no Velocity — adding one; it is simulated from the next frame");
-                queue.push(move |w: &mut World| {
-                    if w.is_alive(id) && w.query::<&Velocity>().get(id).is_none() {
-                        w.add_component(id, Velocity::default());
-                    }
-                });
-            } else {
-                tracing::warn!(entity = %id, "[Physics] a moving RigidBody has no Velocity and there is no CommandQueue to add one — it is not simulated");
-            }
-        }
-    }
+    // 3. Bring the bodies over that need it (`gather_bodies`), and the still ones that have no
+    // `Velocity` (`gather_still_bodies`).
+    let mut brought = BroughtOver::default();
+    gather_bodies(world, &physics_world, &mut sync, dt, &mut brought);
+    gather_still_bodies(world, &physics_world, &mut sync, &mut brought);
 
     // 4. Step Simulation
     // An id whose entity was despawned and handed to a new one since the last step is a new
     // body: drop the old row (and its joints) so the sync adds it fresh. Measured before this: a
     // body spawned 15 m away on a dead body's id was pulled 5 m by the dead body's rope in a
     // second (`tests/joint_recycled_id.rs`).
-    for (handle, ..) in &rigid_bodies {
+    for (handle, ..) in &brought.bodies {
         if let Some(entity) = world.entity(handle.id()) {
             physics_world.note_ecs_generation(handle.id(), entity.generation());
         }
     }
-    physics_world.update_bodies(rigid_bodies.iter());
+    physics_world.update_bodies(brought.bodies.iter());
     // A body that left the set — despawned, lost its collider, pooled — leaves the world.
     physics_world.retain_bodies(|id| sync.present(id));
 
@@ -578,8 +395,239 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     let write_all = physics_world.body_revision != revision_before_step;
 
+    read_back(&mut physics_world, &mut brought);
+    write_back_to_ecs(world, &physics_world, &mut sync, brought, write_all);
+    sync.finish(world, physics_world.body_revision);
+    physics_world.ecs_sync = sync;
+
+    dispatch_events(world, &physics_world);
+
+    if physics_world.step_once {
+        physics_world.step_once = false;
+    }
+
+    // Close profiler scope
+    drop(physics_world); // PhysicsWorld lock'unu bırak
+    if let Ok(mut profiler) = world.try_get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+        profiler.end_scope("physics_total");
+    }
+}
+
+/// The bodies a step brings over from the ECS, in the order the physics world is handed them.
+#[derive(Default)]
+struct BroughtOver {
+    /// Each body's handle, rows and collider.
+    bodies: Vec<(BodyHandle, RigidBody, Transform, Velocity, Collider)>,
+    /// The entity of each entry above, for the write-back: a `BodyHandle` is the physics side's raw id.
+    entities: Vec<Entity>,
+    /// Kinematic bodies driven to a pose: their index in `bodies`, and the pose to put them on after
+    /// the step.
+    targets: Vec<(usize, crate::components::KinematicTarget)>,
+}
+
+/// Counts the `RigidBody`s without a `Collider`, which are not simulated, and warns when the count
+/// grows.
+fn note_bodies_without_collider(world: &World, physics_world: &mut PhysicsWorld) {
+    // A body is synced only with a Collider: a `RigidBody` without one is not simulated at all —
+    // no gravity, no velocity integration — and stands still without a word. A guard driven by
+    // its `NavAgent`'s velocity did exactly that (`gizli`). Say so once, when the count grows.
+    let orphans = world
+        .query_filtered::<&RigidBody, gizmo_core::query::Without<Collider>>()
+        .iter()
+        .count();
+    if orphans > physics_world.bodies_without_collider {
+        tracing::warn!(
+            orphans,
+            "[Physics] {orphans} RigidBody entit{} without a Collider — not simulated, so they will not move; \
+             add a Collider (one on a layer with mask 0 if it should touch nothing)",
+            if orphans == 1 { "y" } else { "ies" }
+        );
+    }
+    physics_world.bodies_without_collider = orphans;
+}
+
+/// Marks every body the ECS wrote since the last step (`World::query_since`).
+fn mark_written_since(world: &World, sync: &mut EcsSync) {
+    use gizmo_core::query::{Changed, Or};
+    let written = world.query_since::<
+        Entity,
+        Or<
+            Changed<RigidBody>,
+            Or<
+                Changed<Transform>,
+                Or<
+                    Changed<Velocity>,
+                    Or<
+                        Changed<Collider>,
+                        Or<Changed<gizmo_physics_core::components::PhysicsMaterial>, Changed<gizmo_core::component::Children>>,
+                    >,
+                >,
+            >,
+        >,
+    >(sync.since());
+    for e in written.iter() {
+        sync.mark_written(e.id());
+    }
+}
+
+/// Step 3: the bodies with a `Velocity` that need bringing over (`EcsSync::needs`), with their
+/// compound collider, their inertia when it was never set, this step's forces, and a kinematic
+/// body's velocity toward its target or its pose.
+fn gather_bodies(world: &World, physics_world: &PhysicsWorld, sync: &mut EcsSync, dt: f32, brought: &mut BroughtOver) {
+    let children_query = world.query::<&gizmo_core::component::Children>();
+    let trans_query = world.query::<&Transform>();
+    let col_query = world.query::<&Collider>();
+    let target_query = world.query::<&crate::components::KinematicTarget>();
+    let query = world.query_filtered::<(
+        Entity,
+        &RigidBody,
+        &Transform,
+        &Velocity,
+        &Collider,
+        Option<&gizmo_physics_core::components::PhysicsMaterial>,
+        Option<&gizmo_core::component::Children>,
+        // Forces that push on every step, not once a frame — see `ExternalForce`.
+        Option<&crate::components::ExternalForce>,
+        // And the engine's own, from the body's surroundings — see `EnvironmentForce`.
+        Option<&crate::components::EnvironmentForce>,
+    ), (gizmo_core::query::Without<gizmo_core::pool::Pooled>, gizmo_core::query::Without<gizmo_core::component::IsDeleted>)>();
+    for (id, rb, transform, vel, col, material, children, external, environment) in query.iter() {
+        let always = !(rb.is_static() || (rb.is_dynamic() && rb.is_sleeping)) || external.is_some() || environment.is_some();
+        if !sync.needs(id.id(), material.is_some(), children, always) {
+            if cfg!(debug_assertions) {
+                let collider = body_collider(world, id, col, transform, material, children, &children_query, &trans_query, &col_query);
+                assert_clean(physics_world, id, rb, transform, vel, &collider);
+            }
+            continue;
+        }
+        let final_collider = body_collider(world, id, col, transform, material, children, &children_query, &trans_query, &col_query);
+        // A moving body whose inertia was never set gets its collider's.
+        //
+        // `RigidBody::new` cannot know the shape, so it stores a 1×1×1-box placeholder,
+        // and the rule was "call `update_inertia_from_collider` yourself" — which 28 of
+        // the 36 `RigidBody::new` calls in `demo/` did not. Measured in `lobut`: a 20 cm
+        // ball, I = 0.4·m·r² = 0.096, spun as if I were ~1 — ten times too hard to turn,
+        // so it never stopped sliding and lost 80 % of its speed to friction in 1.5 s
+        // instead of settling into a roll at 5/7 of it. The derived value is written back
+        // with the body, so this runs once; an inertia set by hand is anything but the
+        // placeholder and is left alone.
+        let mut rb = *rb;
+        if !rb.is_static() && rb.local_inertia == RigidBody::UNSET_INERTIA {
+            rb.update_inertia_from_collider(&final_collider);
+        }
+        if let Some(push) = external {
+            if rb.is_dynamic() {
+                rb.force_accumulator += push.force;
+                rb.torque_accumulator += push.torque;
+            }
+        }
+        if let Some(push) = environment {
+            if rb.is_dynamic() {
+                rb.force_accumulator += push.force;
+                rb.torque_accumulator += push.torque;
+            }
+        }
+        // A kinematic body with a target moves by whatever velocity reaches it this step.
+        let mut vel = *vel;
+        let mut start = *transform;
+        if let Some(target) = rb
+            .is_kinematic()
+            .then(|| target_query.get(id).copied())
+            .flatten()
+        {
+            let com = transform.rotation * rb.center_of_mass;
+            let (linear, angular) = target.velocity_from(transform.position, transform.rotation, com, dt);
+            vel.linear = linear;
+            vel.angular = angular;
+            brought.targets.push((brought.bodies.len(), target));
+        } else if rb.is_kinematic() {
+            // **A kinematic body moved outside the step** — its `Transform` written by an
+            // animation, a script, the game — is carried there from where the last step left
+            // it, as if its new pose were a `KinematicTarget`: so it has the velocity of that
+            // move, and what stands on it goes with it (`platform_carry` reads it). It used to
+            // jump there with no velocity at all, and a platform keyed in the timeline slid out
+            // from under the player. Once it has arrived and is not moved again, it stops.
+            let moved = physics_world
+                .last_pose(id.id(), id.generation())
+                .filter(|last| last.position != transform.position || last.rotation != transform.rotation);
+            if let Some(last) = moved {
+                let target = crate::components::KinematicTarget::new(transform.position, transform.rotation);
+                start.position = last.position;
+                start.rotation = last.rotation;
+                let com = start.rotation * rb.center_of_mass;
+                let (linear, angular) = target.velocity_from(start.position, start.rotation, com, dt);
+                vel.linear = linear;
+                vel.angular = angular;
+                rb.pose_driven = true;
+                brought.targets.push((brought.bodies.len(), target));
+            } else if rb.pose_driven {
+                vel.linear = gizmo_math::Vec3::ZERO;
+                vel.angular = gizmo_math::Vec3::ZERO;
+                rb.pose_driven = false;
+            }
+        }
+        // Bridge: ECS entity id -> opaque physics BodyHandle (generation is
+        // unused by physics; bodies are keyed by id only).
+        brought.bodies.push((BodyHandle::from_id(id.id()), rb, start, vel, final_collider));
+        brought.entities.push(id);
+    }
+}
+
+/// 3b. Bodies without a `Velocity`.
+///
+/// The query above needs one, and a body without it used to be left out of the simulation
+/// **silently**: a static floor written as `RigidBody::new_static()` + a collider — no
+/// velocity, because a floor does not move — was not there, and everything above it fell
+/// through (`lobut`, 2026-11-02, measured: ten pins and a ball in free fall from frame one).
+/// A static body's velocity is zero by definition, so it joins this step with one. A body
+/// that moves needs a velocity that persists between steps, which only the component can
+/// hold, so it is given one through the command queue and simulated from the next frame on.
+/// Scenes whose bodies all carry a `Velocity` — every one written before this — take neither
+/// branch, so their bodies, their order and their hashes are unchanged.
+fn gather_still_bodies(world: &World, physics_world: &PhysicsWorld, sync: &mut EcsSync, brought: &mut BroughtOver) {
+    let children_query = world.query::<&gizmo_core::component::Children>();
+    let trans_query = world.query::<&Transform>();
+    let col_query = world.query::<&Collider>();
+    let query = world.query_filtered::<(
+        Entity,
+        &RigidBody,
+        &Transform,
+        Option<&Collider>,
+        Option<&gizmo_physics_core::components::PhysicsMaterial>,
+        Option<&gizmo_core::component::Children>,
+    ), (gizmo_core::query::Without<Velocity>, gizmo_core::query::Without<gizmo_core::pool::Pooled>, gizmo_core::query::Without<gizmo_core::component::IsDeleted>)>();
+    for (id, rb, transform, col, material, children) in query.iter() {
+        if rb.is_static() {
+            if let Some(col) = col {
+                if !sync.needs(id.id(), material.is_some(), children, false) {
+                    if cfg!(debug_assertions) {
+                        let collider = body_collider(world, id, col, transform, material, children, &children_query, &trans_query, &col_query);
+                        assert_clean(physics_world, id, rb, transform, &Velocity::default(), &collider);
+                    }
+                    continue;
+                }
+                let final_collider = body_collider(world, id, col, transform, material, children, &children_query, &trans_query, &col_query);
+                brought.bodies.push((BodyHandle::from_id(id.id()), *rb, *transform, Velocity::default(), final_collider));
+                brought.entities.push(id);
+            }
+        } else if let Ok(queue) = world.try_get_resource::<gizmo_core::commands::CommandQueue>() {
+            tracing::debug!(entity = %id, "[Physics] a moving RigidBody has no Velocity — adding one; it is simulated from the next frame");
+            queue.push(move |w: &mut World| {
+                if w.is_alive(id) && w.query::<&Velocity>().get(id).is_none() {
+                    w.add_component(id, Velocity::default());
+                }
+            });
+        } else {
+            tracing::warn!(entity = %id, "[Physics] a moving RigidBody has no Velocity and there is no CommandQueue to add one — it is not simulated");
+        }
+    }
+}
+
+/// The stepped rows of the bodies brought over, for the write-back; a driven body lands on its
+/// target exactly.
+fn read_back(physics_world: &mut PhysicsWorld, brought: &mut BroughtOver) {
     // Sync back to the bodies brought over, for the write-back below.
-    for (handle, rb, trans, vel, _) in &mut rigid_bodies {
+    for (handle, rb, trans, vel, _) in &mut brought.bodies {
         if let Some(&i) = physics_world.entity_index_map.get(&handle.id()) {
             *rb = physics_world.rigid_bodies[i];
             *trans = physics_world.transforms[i];
@@ -590,8 +638,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
     // would otherwise leave them a little off, and a little off every step is drift.
     // On both sides: the world's own copy too, or the next step would read the integrator's
     // near-miss as the body having been moved again.
-    for (idx, target) in targets {
-        let (handle, _, trans, _, _) = &mut rigid_bodies[idx];
+    for (idx, target) in std::mem::take(&mut brought.targets) {
+        let (handle, _, trans, _, _) = &mut brought.bodies[idx];
         trans.position = target.position;
         trans.rotation = target.rotation;
         if let Some(&row) = physics_world.entity_index_map.get(&handle.id()) {
@@ -599,60 +647,62 @@ pub fn physics_step_system(world: &World, dt: f32) {
             physics_world.transforms[row].rotation = target.rotation;
         }
     }
+}
 
-    // 5. Write back to ECS (Rigid Bodies)
-    {
-        // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
-        let mut query = unsafe {
-            world.query_filtered_unchecked::<(&mut RigidBody, &mut Transform, &mut Velocity), gizmo_core::query::Without<gizmo_core::pool::Pooled>>()
-        };
-        for ((_, rb, transform, vel, _collider), entity) in rigid_bodies.into_iter().zip(body_entities) {
-            // Marked changed only where the step changed something. Every body was written
-            // back through `DerefMut` every step, a resting or static one included, which
-            // stamped each `Transform`, `Velocity` and `RigidBody` as changed every frame: a
-            // `Changed<Transform>` filter on a static city of 14 600 cells matched all of
-            // them, always, and a pass that reads only what changed could skip nothing a
-            // physics body touched — the render world's extractor above all, which copies a
-            // `Transform` when it is `Changed` and so cloned every body's, every frame.
-            if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel)) = query.get_mut(entity) {
-                write_back(&mut ecs_rb, rb);
-                write_back(&mut ecs_trans, transform);
-                write_back(&mut ecs_vel, vel);
-            }
-        }
-        // And the bodies the step changed without their having been brought over: a sleeping
-        // body woken by a contact, one moved while it stayed asleep (`moved_asleep`), or all of
-        // them after a rewind. A static body, and one asleep before and after and not moved, is
-        // what the step leaves alone.
-        for &id in &physics_world.moved_asleep {
-            sync.mark_moved(id);
-        }
-        for i in 0..physics_world.entities.len() {
-            let id = physics_world.entities[i].id();
-            let rb = physics_world.rigid_bodies[i];
-            let untouched = !write_all && !sync.moved(id) && (sync.synced(id) || rb.is_static() || rb.is_sleeping);
-            if untouched && (sync.synced(id) || !cfg!(debug_assertions)) {
-                continue;
-            }
-            let Some(entity) = world.entity(id) else { continue };
-            let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel)) = query.get_mut(entity) else { continue };
-            if untouched {
-                // Debug builds only: what leaving it out relies on.
-                assert!(
-                    *ecs_rb == rb && *ecs_trans == physics_world.transforms[i] && *ecs_vel == physics_world.velocities[i],
-                    "body {entity:?} was neither brought over nor written back, and the step changed it"
-                );
-                continue;
-            }
+/// Step 5: the step's results into the ECS — the bodies brought over, then those the step changed
+/// without their having been (woken, moved asleep, or every body after a rewind). Each component is
+/// marked changed only where the step changed it.
+fn write_back_to_ecs(world: &World, physics_world: &PhysicsWorld, sync: &mut EcsSync, brought: BroughtOver, write_all: bool) {
+    // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
+    let mut query = unsafe {
+        world.query_filtered_unchecked::<(&mut RigidBody, &mut Transform, &mut Velocity), gizmo_core::query::Without<gizmo_core::pool::Pooled>>()
+    };
+    for ((_, rb, transform, vel, _collider), entity) in brought.bodies.into_iter().zip(brought.entities) {
+        // Marked changed only where the step changed something. Every body was written
+        // back through `DerefMut` every step, a resting or static one included, which
+        // stamped each `Transform`, `Velocity` and `RigidBody` as changed every frame: a
+        // `Changed<Transform>` filter on a static city of 14 600 cells matched all of
+        // them, always, and a pass that reads only what changed could skip nothing a
+        // physics body touched — the render world's extractor above all, which copies a
+        // `Transform` when it is `Changed` and so cloned every body's, every frame.
+        if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel)) = query.get_mut(entity) {
             write_back(&mut ecs_rb, rb);
-            write_back(&mut ecs_trans, physics_world.transforms[i]);
-            write_back(&mut ecs_vel, physics_world.velocities[i]);
+            write_back(&mut ecs_trans, transform);
+            write_back(&mut ecs_vel, vel);
         }
     }
-    sync.finish(world, physics_world.body_revision);
-    physics_world.ecs_sync = sync;
+    // And the bodies the step changed without their having been brought over: a sleeping
+    // body woken by a contact, one moved while it stayed asleep (`moved_asleep`), or all of
+    // them after a rewind. A static body, and one asleep before and after and not moved, is
+    // what the step leaves alone.
+    for &id in &physics_world.moved_asleep {
+        sync.mark_moved(id);
+    }
+    for i in 0..physics_world.entities.len() {
+        let id = physics_world.entities[i].id();
+        let rb = physics_world.rigid_bodies[i];
+        let untouched = !write_all && !sync.moved(id) && (sync.synced(id) || rb.is_static() || rb.is_sleeping);
+        if untouched && (sync.synced(id) || !cfg!(debug_assertions)) {
+            continue;
+        }
+        let Some(entity) = world.entity(id) else { continue };
+        let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel)) = query.get_mut(entity) else { continue };
+        if untouched {
+            // Debug builds only: what leaving it out relies on.
+            assert!(
+                *ecs_rb == rb && *ecs_trans == physics_world.transforms[i] && *ecs_vel == physics_world.velocities[i],
+                "body {entity:?} was neither brought over nor written back, and the step changed it"
+            );
+            continue;
+        }
+        write_back(&mut ecs_rb, rb);
+        write_back(&mut ecs_trans, physics_world.transforms[i]);
+        write_back(&mut ecs_vel, physics_world.velocities[i]);
+    }
+}
 
-    // 7. Dispatch Events
+/// Step 7: the step's trigger and collision events, into the ECS's event queues.
+fn dispatch_events(world: &World, physics_world: &PhysicsWorld) {
     if let Ok(mut trigger_queue) =
         world.try_get_resource_mut::<gizmo_core::event::Events<gizmo_physics_core::TriggerEvent>>()
     {
@@ -667,16 +717,6 @@ pub fn physics_step_system(world: &World, dt: f32) {
         for event in &physics_world.collision_events {
             collision_queue.send(event.clone());
         }
-    }
-
-    if physics_world.step_once {
-        physics_world.step_once = false;
-    }
-
-    // Close profiler scope
-    drop(physics_world); // PhysicsWorld lock'unu bırak
-    if let Ok(mut profiler) = world.try_get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
-        profiler.end_scope("physics_total");
     }
 }
 
