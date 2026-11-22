@@ -149,7 +149,9 @@ pub fn convert(node: BtNode, kind: NodeKind) -> BtNode {
     if NodeKind::of(&node) == kind {
         return node;
     }
-    // What the old node holds, in the shapes the new one can take it in.
+    // What the old node holds, in the shapes the new one can take it in. A composite turned into
+    // the other composite stays reactive or with memory, as it was.
+    let reactive = node.is_reactive();
     let (children, name): (Vec<BtNode>, Option<String>) = match node {
         BtNode::Sequence { children, .. } | BtNode::Selector { children, .. } => (children, None),
         BtNode::Inverter(child) | BtNode::Succeeder(child) | BtNode::Repeat { child, .. } => (vec![*child], None),
@@ -166,6 +168,8 @@ pub fn convert(node: BtNode, kind: NodeKind) -> BtNode {
         }
     };
     match kind {
+        NodeKind::Sequence if reactive => BtNode::reactive_sequence(children),
+        NodeKind::Selector if reactive => BtNode::reactive_selector(children),
         NodeKind::Sequence => BtNode::sequence(children),
         NodeKind::Selector => BtNode::selector(children),
         NodeKind::Inverter => BtNode::inverter(one(children)),
@@ -283,7 +287,11 @@ fn draw_node(ui: &mut egui::Ui, node: &mut BtNode, path: &mut Vec<usize>, siblin
         }
 
         match node {
-            BtNode::Sequence { children, current } | BtNode::Selector { children, current } => {
+            BtNode::Sequence { children, current, reactive } | BtNode::Selector { children, current, reactive } => {
+                ui.checkbox(reactive, "tepkili").on_hover_text(
+                    "Her karede ilk çocuktan yeniden sorar: öncelikli bir dal başlayınca çalışan alt dal \
+                     kesilir (seçici), öndeki koşullar her karede yeniden denetlenir (sıra).",
+                );
                 if *current > 0 {
                     ui.label(format!("adım {}/{}", *current + 1, children.len()));
                 }
@@ -481,6 +489,9 @@ mod tests {
         assert_eq!(node, BtNode::inverter(BtNode::sequence([BtNode::action("a"), BtNode::action("b")])));
         node = convert(node, NodeKind::Selector);
         assert_eq!(node, BtNode::selector([BtNode::sequence([BtNode::action("a"), BtNode::action("b")])]));
+        // A reactive composite turned into the other composite stays reactive.
+        let node = convert(BtNode::reactive_selector([BtNode::action("a")]), NodeKind::Sequence);
+        assert_eq!(node, BtNode::reactive_sequence([BtNode::action("a")]));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Behaviour trees, as data.
 //!
 //! A [`BehaviorTree`] is a tree of [`BtNode`]s — composites ([`BtNode::Sequence`],
-//! [`BtNode::Selector`]), decorators ([`BtNode::Inverter`], [`BtNode::Succeeder`],
+//! [`BtNode::Selector`], each either with memory or reactive), decorators ([`BtNode::Inverter`], [`BtNode::Succeeder`],
 //! [`BtNode::Repeat`]), a timer ([`BtNode::Wait`]) and leaves that **name** what they do
 //! ([`BtNode::Action`], [`BtNode::Condition`]). The game registers what each name means once, in
 //! a [`BtLibrary`] resource; the tree only holds the names.
@@ -71,26 +71,42 @@ pub enum BtNode {
     /// Logical AND: ticks its children in order until one fails or is still running. Succeeds
     /// once every child has (an empty one at once). A failure rewinds it to the first child.
     ///
-    /// A *memory* sequence: a running child is resumed next tick, the ones before it are not
-    /// ticked again.
+    /// With memory (the default, [`BtNode::sequence`]), a running child is resumed next tick and
+    /// the ones before it are not ticked again. **Reactive** ([`BtNode::reactive_sequence`]), every
+    /// tick starts again from the first child, so the conditions before a running step are checked
+    /// each tick, and a step that fails aborts the running one (reset). A step that succeeded is
+    /// ticked again too: a [`BtNode::Wait`] before the running step waits again, so put
+    /// conditions there.
     Sequence {
         /// The steps, in order.
         children: Vec<BtNode>,
-        /// The child it is on.
+        /// The child it is on (with memory) or the child that was running (reactive).
         #[serde(default)]
         current: usize,
+        /// Start from the first child every tick (see above). A file that leaves it out reads
+        /// it as `false`, the memory sequence every tree had before 2026-11-22.
+        #[serde(default)]
+        reactive: bool,
     },
     /// Logical OR, a fallback: ticks its children in order until one succeeds or is still
     /// running. Fails once every child has (an empty one at once).
     ///
-    /// Like the sequence it resumes a running child, so it is **not** reactive: while a later
-    /// child runs, the earlier, higher-priority ones are not looked at again.
+    /// With memory (the default, [`BtNode::selector`]), a running child is resumed, so while it
+    /// runs the earlier, higher-priority ones are not looked at again. **Reactive**
+    /// ([`BtNode::reactive_selector`]), every tick asks the children again from the highest
+    /// priority down, and one that succeeds or runs **aborts** a lower one that was running
+    /// (reset) — "gather nectar, but flee when the hornet comes", which a memory selector cannot
+    /// say: the gathering never ends to let the flight be asked for.
     Selector {
         /// The alternatives, highest priority first.
         children: Vec<BtNode>,
-        /// The child it is on.
+        /// The child it is on (with memory) or the child that was running (reactive).
         #[serde(default)]
         current: usize,
+        /// Ask every child again each tick (see above). A file that leaves it out reads it as
+        /// `false`, the memory selector every tree had before 2026-11-22.
+        #[serde(default)]
+        reactive: bool,
     },
     /// Swaps success and failure; running passes through.
     Inverter(Box<BtNode>),
@@ -124,14 +140,31 @@ pub enum BtNode {
 }
 
 impl BtNode {
-    /// A [`BtNode::Sequence`] over `children`.
+    /// A [`BtNode::Sequence`] over `children`, with memory.
     pub fn sequence(children: impl IntoIterator<Item = BtNode>) -> Self {
-        Self::Sequence { children: children.into_iter().collect(), current: 0 }
+        Self::Sequence { children: children.into_iter().collect(), current: 0, reactive: false }
     }
 
-    /// A [`BtNode::Selector`] over `children`, highest priority first.
+    /// A [`BtNode::Selector`] over `children`, highest priority first, with memory.
     pub fn selector(children: impl IntoIterator<Item = BtNode>) -> Self {
-        Self::Selector { children: children.into_iter().collect(), current: 0 }
+        Self::Selector { children: children.into_iter().collect(), current: 0, reactive: false }
+    }
+
+    /// A reactive [`BtNode::Sequence`] over `children`: the steps before the running one are
+    /// checked again every tick.
+    pub fn reactive_sequence(children: impl IntoIterator<Item = BtNode>) -> Self {
+        Self::Sequence { children: children.into_iter().collect(), current: 0, reactive: true }
+    }
+
+    /// A reactive [`BtNode::Selector`] over `children`, highest priority first: asked again every
+    /// tick, a higher child that succeeds or runs aborts a lower running one.
+    pub fn reactive_selector(children: impl IntoIterator<Item = BtNode>) -> Self {
+        Self::Selector { children: children.into_iter().collect(), current: 0, reactive: true }
+    }
+
+    /// Whether this is a reactive composite; `false` for every other node.
+    pub fn is_reactive(&self) -> bool {
+        matches!(self, Self::Sequence { reactive: true, .. } | Self::Selector { reactive: true, .. })
     }
 
     /// A [`BtNode::Inverter`] over `child`.
@@ -172,7 +205,37 @@ impl BtNode {
     /// Ticks this node once for `entity`, its leaves looked up in `library`.
     pub fn tick(&mut self, entity: Entity, world: &mut World, dt: f32, library: &BtLibrary) -> BtStatus {
         match self {
-            Self::Sequence { children, current } => {
+            Self::Sequence { children, current, reactive: true } => {
+                for i in 0..children.len() {
+                    match children[i].tick(entity, world, dt, library) {
+                        BtStatus::Success => {}
+                        status => {
+                            abort_below(children, current, i);
+                            if status == BtStatus::Running {
+                                *current = i;
+                            }
+                            return status;
+                        }
+                    }
+                }
+                *current = 0;
+                BtStatus::Success
+            }
+            Self::Selector { children, current, reactive: true } => {
+                for i in 0..children.len() {
+                    match children[i].tick(entity, world, dt, library) {
+                        BtStatus::Failure => {}
+                        status => {
+                            abort_below(children, current, i);
+                            *current = if status == BtStatus::Running { i } else { 0 };
+                            return status;
+                        }
+                    }
+                }
+                *current = 0;
+                BtStatus::Failure
+            }
+            Self::Sequence { children, current, .. } => {
                 while *current < children.len() {
                     match children[*current].tick(entity, world, dt, library) {
                         BtStatus::Success => *current += 1,
@@ -186,7 +249,7 @@ impl BtNode {
                 *current = 0;
                 BtStatus::Success
             }
-            Self::Selector { children, current } => {
+            Self::Selector { children, current, .. } => {
                 while *current < children.len() {
                     match children[*current].tick(entity, world, dt, library) {
                         BtStatus::Success => {
@@ -263,7 +326,7 @@ impl BtNode {
     /// child it meant.
     pub fn reset(&mut self) {
         match self {
-            Self::Sequence { children, current } | Self::Selector { children, current } => {
+            Self::Sequence { children, current, .. } | Self::Selector { children, current, .. } => {
                 *current = 0;
                 children.iter_mut().for_each(BtNode::reset);
             }
@@ -290,6 +353,16 @@ impl BtNode {
             Self::Wait { .. } | Self::Action(_) | Self::Condition(_) => {}
         }
     }
+}
+
+/// A reactive composite's step: child `at` has just decided the tick, so the child that was
+/// running last tick, if it is a later one, is aborted — reset, so it starts afresh when it is
+/// reached again — and the composite forgets it.
+fn abort_below(children: &mut [BtNode], current: &mut usize, at: usize) {
+    if *current > at {
+        children[*current].reset();
+    }
+    *current = 0;
 }
 
 /// An action: what a [`BtNode::Action`] of its name does, for the entity whose tree is ticking.
@@ -548,6 +621,92 @@ mod tests {
 
     fn a(name: &str) -> BtNode {
         BtNode::action(name)
+    }
+
+    /// A library whose `danger` condition and `gather` action read and count through a shared
+    /// cell, so a test can switch the danger on and see who ran.
+    fn hornet(danger: Arc<std::sync::atomic::AtomicBool>, gathered: Arc<AtomicUsize>, fled: Arc<AtomicUsize>) -> BtLibrary {
+        BtLibrary::new()
+            .with_condition("danger", move |_, _| danger.load(Ordering::SeqCst))
+            .with_action("gather", move |_, _, _| {
+                gathered.fetch_add(1, Ordering::SeqCst);
+                BtStatus::Running
+            })
+            .with_action("flee", move |_, _, _| {
+                fled.fetch_add(1, Ordering::SeqCst);
+                BtStatus::Running
+            })
+    }
+
+    /// "Gather, but flee when the hornet comes": the reactive selector asks the flight again every
+    /// tick and aborts the gathering — the wait inside it starts over when it is reached again. A
+    /// memory selector, given the same tree, gathers on and never looks at the danger.
+    #[test]
+    fn a_reactive_selector_aborts_a_lower_branch_when_a_higher_one_starts() {
+        use std::sync::atomic::AtomicBool;
+        let tree = |reactive: bool| {
+            let children = [
+                BtNode::sequence([BtNode::condition("danger"), a("flee")]),
+                BtNode::sequence([BtNode::wait(1.0), a("gather")]),
+            ];
+            if reactive { BtNode::reactive_selector(children) } else { BtNode::selector(children) }
+        };
+        for reactive in [true, false] {
+            let (danger, gathered, fled) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+            let lib = hornet(danger.clone(), gathered.clone(), fled.clone());
+            let mut node = tree(reactive);
+            let mut world = World::new();
+            for _ in 0..3 {
+                node.tick(e0(), &mut world, 0.5, &lib);
+            }
+            assert_eq!(gathered.load(Ordering::SeqCst), 2, "waited a second, then gathering");
+            danger.store(true, Ordering::SeqCst);
+            node.tick(e0(), &mut world, 0.5, &lib);
+            if !reactive {
+                assert_eq!((fled.load(Ordering::SeqCst), gathered.load(Ordering::SeqCst)), (0, 3), "memory: the gathering goes on");
+                continue;
+            }
+            assert_eq!((fled.load(Ordering::SeqCst), gathered.load(Ordering::SeqCst)), (1, 2), "reactive: fleeing, gathering stopped");
+            let BtNode::Selector { children, current, .. } = &node else { unreachable!() };
+            assert_eq!(*current, 0, "the flight is the running child");
+            assert_eq!(children[1], BtNode::sequence([BtNode::wait(1.0), a("gather")]), "the aborted branch is fresh: its wait starts over");
+        }
+    }
+
+    /// A reactive sequence checks the condition before its running step every tick, and a failing
+    /// condition aborts the step; a memory sequence runs the step on with the condition false.
+    #[test]
+    fn a_reactive_sequence_checks_its_conditions_every_tick() {
+        use std::sync::atomic::AtomicBool;
+        for reactive in [true, false] {
+            let (danger, gathered, fled) = (Arc::new(AtomicBool::new(true)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+            let lib = hornet(danger.clone(), gathered, fled.clone());
+            let children = [BtNode::condition("danger"), a("flee")];
+            let mut node = if reactive { BtNode::reactive_sequence(children) } else { BtNode::sequence(children) };
+            let mut world = World::new();
+            assert_eq!(node.tick(e0(), &mut world, 0.1, &lib), BtStatus::Running);
+            danger.store(false, Ordering::SeqCst);
+            let status = node.tick(e0(), &mut world, 0.1, &lib);
+            if reactive {
+                assert_eq!((status, fled.load(Ordering::SeqCst)), (BtStatus::Failure, 1), "the condition failed: no second flight");
+                let BtNode::Sequence { current, .. } = &node else { unreachable!() };
+                assert_eq!(*current, 0);
+            } else {
+                assert_eq!((status, fled.load(Ordering::SeqCst)), (BtStatus::Running, 2), "memory: the step runs on");
+            }
+        }
+    }
+
+    /// A tree written before the flag existed reads as the memory composite it was, and a reactive
+    /// one round-trips.
+    #[test]
+    fn the_reactive_flag_defaults_to_memory_and_round_trips() {
+        let old: BtNode = serde_json::from_str(r#"{"Selector":{"children":[{"Action":"a"}],"current":0}}"#).expect("an old tree");
+        assert_eq!(old, BtNode::selector([a("a")]));
+        let new = BtNode::reactive_sequence([a("a")]);
+        let back: BtNode = serde_json::from_str(&serde_json::to_string(&new).unwrap()).unwrap();
+        assert_eq!(back, new);
+        assert!(back.is_reactive() && !old.is_reactive());
     }
 
     #[test]
