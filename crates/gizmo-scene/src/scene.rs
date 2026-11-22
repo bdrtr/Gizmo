@@ -430,6 +430,17 @@ pub fn migrate_camera_aim(entities: &mut [EntityData]) {
     }
 }
 
+/// What a reference to an entity outside the saved set becomes — see
+/// `gizmo_core::entity::references`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outside {
+    /// Nothing: the data goes to another world (a file, the editor's ▶, a prefab asset), where
+    /// that entity is not, so the reference reads as `Entity::INVALID`.
+    Nothing,
+    /// The same entity: the data is copied within this world, where it still is.
+    SameWorld,
+}
+
 /// Prefab data — like [`SceneData`] but anchored to a root entity.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[non_exhaustive]
@@ -752,6 +763,17 @@ impl SceneData {
         entity_ids: Vec<Entity>,
         registry: &gizmo_core::registry::ComponentRegistry,
     ) -> Vec<EntityData> {
+        Self::serialize_entities_in(world, entity_ids, registry, Outside::Nothing)
+    }
+
+    /// [`serialize_entities`](Self::serialize_entities), with what a reference to an entity
+    /// outside `entity_ids` is written as.
+    fn serialize_entities_in(
+        world: &World,
+        entity_ids: Vec<Entity>,
+        registry: &gizmo_core::registry::ComponentRegistry,
+        outside: Outside,
+    ) -> Vec<EntityData> {
         let mut entities_data = Vec::new();
         // Aggregated over all entities: how many dynamic components were written vs. dropped
         // (a drop is silent data loss; `serde_bridge` logs the per-component reason).
@@ -764,6 +786,13 @@ impl SceneData {
         let children_store = world.query::<&Children>();
         let editor_only_markers = world.query::<&gizmo_core::component::EditorOnly>();
         let deleted = world.query::<&gizmo_core::component::IsDeleted>();
+        // A component's `Entity` fields are references: one to an entity being saved is written,
+        // one to anything else — not saved, or a stale handle — as `Entity::INVALID`; for a copy
+        // into this same world, one to any live entity is kept (see `Outside`).
+        let _references = match outside {
+            Outside::Nothing => gizmo_core::entity::references::saving(entity_ids.iter().filter_map(|e| world.live(*e))),
+            Outside::SameWorld => gizmo_core::entity::references::saving(world.iter_alive_entities()),
+        };
 
         for &id in &entity_ids {
             let name = names.get(id).map(|n| n.0.clone());
@@ -1131,6 +1160,24 @@ impl SceneData {
         world: &mut World,
         registry: &gizmo_core::registry::ComponentRegistry,
     ) -> HashMap<u32, Entity> {
+        Self::instantiate_entities_in(entities, root_parent, world, registry, Outside::Nothing)
+    }
+
+    /// [`instantiate_entities`](Self::instantiate_entities), with what a reference to an entity
+    /// outside `entities` is read as.
+    fn instantiate_entities_in(
+        entities: Vec<EntityData>,
+        root_parent: Option<Entity>,
+        world: &mut World,
+        registry: &gizmo_core::registry::ComponentRegistry,
+        outside: Outside,
+    ) -> HashMap<u32, Entity> {
+        // Who a reference outside the batch can still name: in this same world, every entity
+        // alive before the batch is spawned.
+        let live_before: Vec<Entity> = match outside {
+            Outside::Nothing => Vec::new(),
+            Outside::SameWorld => world.iter_alive_entities(),
+        };
         let requested = entities.len();
         let mut id_map = HashMap::new();
 
@@ -1144,6 +1191,12 @@ impl SceneData {
         let mut components_loaded = 0usize;
         let mut components_failed = 0usize;
         let mut unknown_type_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        // A component's `Entity` fields are read as the entities their saved ids became; an id
+        // this batch does not hold reads as `Entity::INVALID` — or, for a copy into this same
+        // world, as the live entity it names.
+        let mut references_map: HashMap<u32, Entity> = live_before.into_iter().map(|e| (e.id(), e)).collect();
+        references_map.extend(id_map.iter().map(|(&saved, &new)| (saved, new)));
+        let references = gizmo_core::entity::references::loading(&references_map);
 
         for data in entities {
             let entity = id_map[&data.original_id];
@@ -1216,6 +1269,7 @@ impl SceneData {
             }
         }
 
+        drop(references);
         for (p_id, mut c_list) in children_map {
             if id_map.values().any(|&new| new == p_id) {
                 world.add_component(p_id, Children(c_list));
@@ -1247,6 +1301,88 @@ impl SceneData {
             "[Scene] instantiate_entities tamamlandı",
         );
         id_map
+    }
+
+    /// `root_entity_id` and its subtree as a prefab, in memory: what [`save_prefab`](Self::save_prefab)
+    /// writes and [`duplicate`](Self::duplicate) copies.
+    fn prefab_data(
+        world: &World,
+        root_entity_id: Entity,
+        registry: &gizmo_core::registry::ComponentRegistry,
+        outside: Outside,
+    ) -> PrefabData {
+        let mut ids_to_save = vec![root_entity_id];
+        let mut visited: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+        visited.insert(root_entity_id);
+        let children_storage = world.query::<&Children>();
+
+        let mut i = 0;
+        while i < ids_to_save.len() {
+            let current = ids_to_save[i];
+            if let Some(children_comp) = children_storage.get(current) {
+                for &child in &children_comp.0 {
+                    let child_id = child;
+                    // A dead child, written in directly, has nothing to save, and its id may be
+                    // someone else's by now.
+                    if !world.is_alive(child) {
+                        continue;
+                    }
+                    // Guard the BFS with a visited set: a `Children` CYCLE would
+                    // otherwise grow `ids_to_save` forever (hang/OOM), and a SHARED
+                    // child on a diamond hierarchy would be emitted twice → duplicate
+                    // `EntityData { original_id }` → clobbered/leaked entities on reload.
+                    if visited.insert(child_id) {
+                        ids_to_save.push(child_id);
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        let mut entities_data = Self::serialize_entities_in(world, ids_to_save.clone(), registry, outside);
+
+        // A "bare" root (e.g. an empty group/pivot node carrying only a `Children`
+        // component, with no name/mesh/material/dynamic components) is dropped by the
+        // skip-filter in `serialize_entities`. Force it back in so the prefab root
+        // always exists on reload — otherwise `load_prefab` can't map `root_id`, the
+        // root is never spawned, and its whole subtree detaches.
+        if !entities_data
+            .iter()
+            .any(|d| d.original_id == root_entity_id.id())
+        {
+            entities_data.push(EntityData {
+                original_id: root_entity_id.id(),
+                name: None,
+                mesh_source: None,
+                mesh_uuid: None,
+                material_source: None,
+                parent_id: None,
+                components: std::collections::BTreeMap::new(),
+            });
+        }
+
+        if let Some(root_data) = entities_data
+            .iter_mut()
+            .find(|d| d.original_id == root_entity_id.id())
+        {
+            root_data.parent_id = None;
+        }
+
+        let mut joints = Vec::new();
+        if let Ok(physics_world) = world.try_get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
+            for joint in &physics_world.joints {
+                if ids_to_save.iter().any(|e| e.id() == joint.entity_a.id()) && ids_to_save.iter().any(|e| e.id() == joint.entity_b.id()) {
+                    joints.push(joint.clone());
+                }
+            }
+        }
+
+        PrefabData {
+            version: CURRENT_SCENE_VERSION,
+            root_id: root_entity_id.id(),
+            entities: entities_data,
+            joints,
+        }
     }
 
     /// Write `root_entity_id` and its [`Children`] subtree to `file_path` as a RON prefab.
@@ -1302,78 +1438,7 @@ impl SceneData {
             }
         }
 
-        let mut ids_to_save = vec![root_entity_id];
-        let mut visited: std::collections::HashSet<Entity> = std::collections::HashSet::new();
-        visited.insert(root_entity_id);
-        let children_storage = world.query::<&Children>();
-
-        let mut i = 0;
-        while i < ids_to_save.len() {
-            let current = ids_to_save[i];
-            if let Some(children_comp) = children_storage.get(current) {
-                for &child in &children_comp.0 {
-                    let child_id = child;
-                    // A dead child, written in directly, has nothing to save, and its id may be
-                    // someone else's by now.
-                    if !world.is_alive(child) {
-                        continue;
-                    }
-                    // Guard the BFS with a visited set: a `Children` CYCLE would
-                    // otherwise grow `ids_to_save` forever (hang/OOM), and a SHARED
-                    // child on a diamond hierarchy would be emitted twice → duplicate
-                    // `EntityData { original_id }` → clobbered/leaked entities on reload.
-                    if visited.insert(child_id) {
-                        ids_to_save.push(child_id);
-                    }
-                }
-            }
-            i += 1;
-        }
-
-        let mut entities_data = Self::serialize_entities(world, ids_to_save.clone(), registry);
-
-        // A "bare" root (e.g. an empty group/pivot node carrying only a `Children`
-        // component, with no name/mesh/material/dynamic components) is dropped by the
-        // skip-filter in `serialize_entities`. Force it back in so the prefab root
-        // always exists on reload — otherwise `load_prefab` can't map `root_id`, the
-        // root is never spawned, and its whole subtree detaches.
-        if !entities_data
-            .iter()
-            .any(|d| d.original_id == root_entity_id.id())
-        {
-            entities_data.push(EntityData {
-                original_id: root_entity_id.id(),
-                name: None,
-                mesh_source: None,
-                mesh_uuid: None,
-                material_source: None,
-                parent_id: None,
-                components: std::collections::BTreeMap::new(),
-            });
-        }
-
-        if let Some(root_data) = entities_data
-            .iter_mut()
-            .find(|d| d.original_id == root_entity_id.id())
-        {
-            root_data.parent_id = None;
-        }
-
-        let mut joints = Vec::new();
-        if let Ok(physics_world) = world.try_get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
-            for joint in &physics_world.joints {
-                if ids_to_save.iter().any(|e| e.id() == joint.entity_a.id()) && ids_to_save.iter().any(|e| e.id() == joint.entity_b.id()) {
-                    joints.push(joint.clone());
-                }
-            }
-        }
-
-        let mut prefab = PrefabData {
-            version: CURRENT_SCENE_VERSION,
-            root_id: root_entity_id.id(),
-            entities: entities_data,
-            joints,
-        };
+        let mut prefab = Self::prefab_data(world, root_entity_id, registry, Outside::Nothing);
         let stamped = prefab.stamp_asset_identity(identity);
         if stamped > 0 {
             tracing::debug!(stamped, "[Scene] prefab varlık kimlikleri damgalandı");
@@ -1491,15 +1556,25 @@ impl SceneData {
             );
         }
 
-        let saved_root = prefab.root_id;
         let entity_count = prefab.entities.len();
+        let new_root_id = Self::spawn_prefab(prefab, parent_entity, world, registry, Outside::Nothing);
+        tracing::info!(path = %file_path, entity_count, "[Scene] Prefab yüklendi");
+        Ok(new_root_id)
+    }
 
-        let id_map = Self::instantiate_entities(
-            prefab.entities,
-            parent_entity,
-            world,
-            registry,
-        );
+    /// Spawns `prefab` under `parent_entity` and returns its new root: what
+    /// [`load_prefab`](Self::load_prefab) does with a file and [`duplicate`](Self::duplicate)
+    /// with a copy.
+    fn spawn_prefab(
+        prefab: PrefabData,
+        parent_entity: Option<Entity>,
+        world: &mut World,
+        registry: &gizmo_core::registry::ComponentRegistry,
+        outside: Outside,
+    ) -> Option<Entity> {
+        let saved_root = prefab.root_id;
+
+        let id_map = Self::instantiate_entities_in(prefab.entities, parent_entity, world, registry, outside);
 
         let new_root_id = id_map.get(&saved_root).copied();
         if new_root_id.is_none() {
@@ -1550,13 +1625,22 @@ impl SceneData {
             );
         }
 
-        tracing::info!(
-            path = %file_path,
-            entity_count,
-            joints_added,
-            "[Scene] Prefab yüklendi",
-        );
-        Ok(new_root_id)
+        tracing::debug!(joints_added, "[Scene] prefab joint'leri bağlandı");
+        new_root_id
+    }
+
+    /// A copy of `root` and its subtree in this same world, unparented — the editor's `Ctrl+D`.
+    /// Returns the copy's root, or `None` when nothing was copied.
+    ///
+    /// A component's `Entity` fields keep meaning what they meant: a reference inside the subtree
+    /// names the copy's own entity (a duplicated squad's leader is the copy's leader), and one
+    /// outside it names the same entity as the original's (a duplicated turret aims at the same
+    /// player). A prefab written to a file cannot do the second — the file goes to other worlds —
+    /// so this does not go through one.
+    pub fn duplicate(world: &mut World, root: Entity, registry: &gizmo_core::registry::ComponentRegistry) -> Option<Entity> {
+        let root = world.live(root)?;
+        let prefab = Self::prefab_data(world, root, registry, Outside::SameWorld);
+        Self::spawn_prefab(prefab, None, world, registry, Outside::SameWorld)
     }
 
     /// Every named entity as `(entity id, name)`.

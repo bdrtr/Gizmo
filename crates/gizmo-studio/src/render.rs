@@ -384,77 +384,29 @@ fn load_prefab(
     }
 }
 
-/// Where a duplicate of `ent_id` goes through: the system's temporary directory, named for this
-/// process, the entity and the moment. It was `demo/assets/prefabs/`, relative to wherever the
-/// studio was started: a project's own assets folder had a file appear and vanish in it on every
-/// Ctrl+D, and the directory was created from scratch under any other working directory.
+/// `Ctrl+D`: copies `ent_id` and its subtree within the world ([`SceneData::duplicate`]) and
+/// selects the copy.
 ///
-/// Named from the entity's NUMBERS, not its `Display` (`Entity(3:0)`): a colon in an NTFS file name
-/// is an alternate data stream, so on Windows the save wrote a stream of a file called
-/// `…_Entity(3`, the removal deleted only the stream, and the file stayed in the temp folder.
-fn duplicate_temp_path(ent_id: Entity, time_ns: u32) -> String {
-    std::env::temp_dir()
-        .join(format!(
-            "gizmo_duplicate_{}_{}v{}_{}.prefab",
-            std::process::id(),
-            ent_id.id(),
-            ent_id.generation(),
-            time_ns
-        ))
-        .to_string_lossy()
-        .into_owned()
-}
-
-/// `Ctrl+D`: duplicates `ent_id` by a round trip through a temporary prefab, and selects the copy.
+/// It was a round trip through a temporary prefab file — written, read back, deleted — with a
+/// failure to report at each half. A file is for other worlds, so it also had to drop every
+/// reference a component held to an entity outside the subtree (see
+/// `gizmo_core::entity::references`): a duplicated turret would aim at nothing. In memory, a copy
+/// keeps aiming at what the original aimed at.
+///
+/// [`SceneData::duplicate`]: gizmo::scene::SceneData::duplicate
 fn duplicate_entity(world: &mut World, ent_id: Entity, scene_registry: &gizmo::scene::registry::SceneRegistry) {
-    // Çakışmaları(Race condition) engellemek için temp dosyasını entity id ve zaman damgasıyla eşsiz(unique) yapıyoruz
-    // Saat UNIX_EPOCH'tan geride olsa bile (nadir) panik yerine 0 kullan.
-    let time_ns = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let temp_path = duplicate_temp_path(ent_id, time_ns);
-
-    // Duplicate is a round trip through a temporary prefab: save the entity out, read it back
-    // in. Either half can fail, and this used to drop the save's result and announce "Obje
-    // çoğaltıldı." before looking at the load's — so a duplicate that produced nothing at all
-    // still reported success, and a failed save surfaced (if at all) as a confusing load
-    // error about a file the user never asked for.
-    let save = gizmo::scene::SceneData::save_prefab(
-        world,
-        ent_id,
-        &temp_path,
-        scene_registry,
-    );
-    let outcome = match save {
-        Err(e) => DuplicateOutcome::SaveFailed(e.to_string()),
-        Ok(_) => match gizmo::scene::SceneData::load_prefab(
-            &temp_path,
-            None,
-            world,
-            scene_registry,
-        ) {
-            Ok(Some(new_id)) => DuplicateOutcome::Duplicated(new_id.id()),
-            Ok(None) => DuplicateOutcome::NothingLoaded,
-            Err(e) => DuplicateOutcome::LoadFailed(e.to_string()),
-        },
-    };
+    let copy = gizmo::scene::SceneData::duplicate(world, ent_id, scene_registry);
     if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-        match &outcome {
-            DuplicateOutcome::Duplicated(new_id) => {
+        match copy {
+            Some(new_ent) => {
                 ed.log_info("Obje çoğaltıldı.");
                 ed.clear_selection();
-                if let Some(new_ent) = world.get_entity(*new_id) {
-                    ed.selection.entities.insert(new_ent);
-                    ed.selection.primary = Some(new_ent);
-                }
+                ed.selection.entities.insert(new_ent);
+                ed.selection.primary = Some(new_ent);
             }
-            other => ed.log_error(&duplicate_failure_message(other)),
+            None => ed.log_error("Obje çoğaltılamadı — seçili varlık artık yok."),
         }
     }
-
-    // İşlem biter bitmez arkamızdaki kalıntıyı diskten temizleyelim
-    let _ = std::fs::remove_file(&temp_path);
 }
 
 /// Builds the meshes and colliders of the terrains an edit asked for (`generate_terrain_requests`).
@@ -543,78 +495,8 @@ fn generate_terrain(world: &mut World, renderer: &mut gizmo::renderer::Renderer,
     }
 }
 
-/// How a `Ctrl+D` duplicate ended.
-///
-/// Duplicating is a round trip: the entity is written to a temporary prefab and read straight back.
-/// Two calls, and both used to be able to fail without the user hearing about it — the save's
-/// result was discarded, and "Obje çoğaltıldı." was logged before the load's result was looked at.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum DuplicateOutcome {
-    Duplicated(u32),
-    SaveFailed(String),
-    /// The prefab was written and read, but carried no root entity — nothing appeared.
-    NothingLoaded,
-    LoadFailed(String),
-}
-
-/// The console line for a duplicate that did not produce an object.
-///
-/// Kept apart from the world-touching code so the four branches can be checked directly, and so
-/// the one branch that must NOT reach it — `Duplicated` — is visible as a mistake if it ever does.
-pub(crate) fn duplicate_failure_message(outcome: &DuplicateOutcome) -> String {
-    match outcome {
-        DuplicateOutcome::SaveFailed(e) => {
-            format!("Obje çoğaltılamadı — geçici prefab yazılamadı: {e}")
-        }
-        DuplicateOutcome::LoadFailed(e) => {
-            format!("Obje çoğaltılamadı — geçici prefab okunamadı: {e}")
-        }
-        DuplicateOutcome::NothingLoaded => {
-            "Obje çoğaltılamadı — geçici prefab bir kök entity içermiyor.".to_string()
-        }
-        // Not reachable from the call site, which handles this branch itself. Spelled out rather
-        // than `unreachable!()`: a wrong word in the console beats taking the editor down.
-        DuplicateOutcome::Duplicated(id) => {
-            format!("Obje çoğaltıldı (entity {id}) — bu satır bir hata olarak basıldı.")
-        }
-    }
-}
-
 #[cfg(test)]
 mod save_reporting_tests {
-    use super::*;
-
-    /// Every way a duplicate can fail gets its own line, and none of them says it worked.
-    #[test]
-    fn a_duplicate_that_produced_nothing_does_not_report_success() {
-        for outcome in [
-            DuplicateOutcome::SaveFailed("disk dolu".into()),
-            DuplicateOutcome::LoadFailed("bozuk prefab".into()),
-            DuplicateOutcome::NothingLoaded,
-        ] {
-            let line = duplicate_failure_message(&outcome);
-            assert!(
-                line.contains("çoğaltılamadı"),
-                "{outcome:?} produced {line:?}, which does not tell the user it failed"
-            );
-            assert!(
-                !line.contains("Obje çoğaltıldı."),
-                "{outcome:?} produced the success line: {line:?}"
-            );
-        }
-    }
-
-    /// The two halves are told apart, because they need different fixes.
-    #[test]
-    fn the_message_says_which_half_of_the_round_trip_failed() {
-        assert!(duplicate_failure_message(&DuplicateOutcome::SaveFailed("x".into()))
-            .contains("yazılamadı"));
-        assert!(duplicate_failure_message(&DuplicateOutcome::LoadFailed("x".into()))
-            .contains("okunamadı"));
-        assert!(duplicate_failure_message(&DuplicateOutcome::SaveFailed("disk dolu".into()))
-            .contains("disk dolu"), "the underlying error must survive into the message");
-    }
-
     /// No save in the studio may announce success without looking at its result.
     ///
     /// The three sites this guards — auto-save, prefab save, duplicate — all had the same shape:
@@ -873,18 +755,8 @@ mod file_request_tests {
         assert!(positions.iter().any(|&(e, p)| e != lamp && p == drop), "the instance is not at the drop: {positions:?}");
     }
 
-    /// The duplicate's temporary file name is one every file system takes: nothing Windows reserves.
-    /// It held `Entity(3:0)` once, and the colon made it an NTFS stream the removal did not reach.
-    #[test]
-    fn the_duplicate_temp_file_name_is_valid_on_windows() {
-        let path = duplicate_temp_path(Entity::new(3, 7), 123);
-        let name = std::path::Path::new(&path).file_name().unwrap().to_string_lossy().into_owned();
-        assert!(!name.chars().any(|c| "<>:\"/\\|?*".contains(c)), "a character Windows refuses in {name:?}");
-        assert!(name.contains("3v7"), "the entity is not in the name: {name:?}");
-    }
-
-    /// Ctrl+D: the copy exists and is selected, and the temporary prefab it went through is gone —
-    /// from the system's temporary directory, and never written into a project folder.
+    /// Ctrl+D: the copy exists and is selected, and no file is written — not in the system's
+    /// temporary directory, where the old round trip went, and never into a project folder.
     #[test]
     fn a_duplicate_selects_its_copy_and_leaves_no_file() {
         let project_folder = std::path::Path::new("demo/assets/prefabs");

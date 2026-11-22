@@ -168,6 +168,10 @@ impl SceneSnapshot {
         let mut dropped_components = 0usize;
         let names = world.query::<&gizmo_core::EntityName>();
         let editor_only_markers = world.query::<&gizmo_core::component::EditorOnly>();
+        // A component's `Entity` fields are references: kept for any live entity — the restore
+        // is into this world, where an uncaptured one (the editor's camera) is still there — and
+        // written as `Entity::INVALID` for a stale handle.
+        let _references = gizmo_core::entity::references::saving(world.iter_alive_entities());
 
         for ent in world.iter_alive_entities() {
             let id = ent;
@@ -370,6 +374,12 @@ impl SceneSnapshot {
             targets.push((snap_entity, ent));
         }
 
+        // References read back as what they name now: an entity still alive is itself, one this
+        // restore had to spawn again is its new entity (its id may differ).
+        let mut now: std::collections::HashMap<u32, gizmo_core::entity::Entity> =
+            world.iter_alive_entities().into_iter().map(|e| (e.id(), e)).collect();
+        now.extend(targets.iter().map(|(snap, ent)| (snap.entity_id, *ent)));
+        let _references = gizmo_core::entity::references::loading(&now);
         for (snap_entity, ent) in targets {
             if let Some(ref name) = snap_entity.name {
                 world.add_component(ent, gizmo_core::EntityName::new(name));

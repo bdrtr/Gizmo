@@ -50,6 +50,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A component's `Entity` fields survive a scene** (`gizmo_core::entity::references`). The scene
+  format spawns its entities again under new ids and remapped only `Parent`, `Children` and joint
+  endpoints; a component holding an `Entity` — a target, a key, a squad — was written as a number
+  and read back as the same number, naming whatever held that id in the new world. Inside the
+  scopes a scene now opens, every `Entity` a component serializes, in any shape, is a reference:
+  saved only if it names an entity being saved (else `Entity::INVALID`, a stale handle included),
+  read back as what that entity became. Covered for a file, the editor's ▶ (`of_entities` →
+  `instantiate`), a snapshot restore and a copy; outside a scope the wire form and behaviour are
+  unchanged. `entity_references.rs` — each test is red without the scopes.
+- **`SceneData::duplicate`: a copy within the same world**, the editor's `Ctrl+D`. A reference inside
+  the copied subtree names the copy's own entity, one outside it the same entity as the original's.
+  `Ctrl+D` was a round trip through a temporary prefab file, which named the original's own
+  entities from the copy (a raw id); a file is for other worlds, so the round trip is gone, and with
+  it the temporary file and its two failure messages.
+
 - **Breaking things in a game says what broke: `BreakEvent`.** A `Breakable` that shatters sends
   one into `Events<BreakEvent>` (`world.init_events::<BreakEvent>()`): the body, where it stood, where
   it was struck, how many pieces, its `break_sound`. `fracture_step` and `explosion_step` return the

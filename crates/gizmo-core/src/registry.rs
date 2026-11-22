@@ -288,6 +288,10 @@ impl ComponentRegistry {
     /// [`TypeRegistration`], built from `T`'s `serde` impls (RON for
     /// `serialize_fn`/`deserialize_fn`, `serde_json` for the JSON pair).
     ///
+    /// `T` may hold [`Entity`](crate::entity::Entity) handles, in any shape: a scene writes and
+    /// reads them as references (see [`entity::references`](crate::entity::references)), so they
+    /// still name the right entities after a load, the editor's ▶ or a copy.
+    ///
     /// # Errors
     /// - [`RegistryError::NameAlreadyRegistered`] — `name` is taken by a different type
     /// - [`RegistryError::TypeAlreadyRegistered`] — `T` is already registered under another name
