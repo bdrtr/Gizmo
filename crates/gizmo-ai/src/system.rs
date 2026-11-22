@@ -198,12 +198,6 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
     let grid_changed = grid.take_change();
     let grid = &*grid;
 
-    // Each agent's reach: how far it looks for neighbours, to separate from or to avoid (what it
-    // could cover in its avoidance horizon, and two bodies' width).
-    let reach = |a: &NavAgent| {
-        let avoid = if a.avoidance { a.max_speed * a.time_horizon + 2.0 * a.radius } else { 0.0 };
-        a.separation_radius.max(avoid)
-    };
     // Buckets as wide as the widest separation, and no wider than the first avoidance search: a
     // bucket the size of a whole reach puts a crowd in nine of them.
     let (agent_entities, cell): (Vec<Entity>, f32) = {
@@ -214,11 +208,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
     let agent_count = agent_entities.len();
 
     // Frame-başı toplu sayaçlar — iç döngüde per-iterasyon log yerine çıkışta AGGREGATE.
-    let mut recalc_count = 0u32;
-    let mut path_found = 0u32;
-    let mut path_failed = 0u32;
-    let mut stuck_count = 0u32;
-    let mut reached_count = 0u32;
+    let mut tally = NavTally::default();
 
     // SAFETY: ai_navigation_system runs as a scheduled system; the scheduler guarantees no
     // other system mutably aliases NavAgent/Velocity while it runs. NavAgent and Velocity are
@@ -245,13 +235,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
             (velocity, radius, steps_aside)
         })
         .collect();
-    let key = |p: Vec3| ((p.x / cell).floor() as i32, (p.z / cell).floor() as i32);
-    let mut buckets: std::collections::HashMap<(i32, i32), Vec<usize>> = std::collections::HashMap::new();
-    for (k, p) in positions.iter().enumerate() {
-        if let Some(p) = p {
-            buckets.entry(key(*p)).or_default().push(k);
-        }
-    }
+    let crowd = Crowd::new(positions, others, cell);
     let mut nearby: Vec<usize> = Vec::new();
 
     // Pass 1, in agent order: stuck detection and the replan decision — everything that changes
@@ -262,60 +246,9 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
             continue;
         };
         let Some(mut agent) = agents.get_mut(agent_id) else { continue };
-        let Some(mut target_pos) = agent.target else { continue };
-
-        // Stuck Algılama
-        if let Some(last_pos) = agent.last_agent_pos {
-            if (t.position - last_pos).length_squared() < 0.0025 {
-                // 0.05^2
-                agent.stuck_timer += dt;
-                if agent.stuck_timer > 2.0 {
-                    // Yalnız YENİ sıkışma geçişini say/logla (her frame tekrar etmesin).
-                    if agent.state != crate::components::NavAgentState::Stuck {
-                        stuck_count += 1;
-                        tracing::trace!(
-                            entity = %agent_id,
-                            stuck_timer = agent.stuck_timer,
-                            "[AI] Ajan sıkıştı — yol temizleniyor, yeniden hesaplanacak"
-                        );
-                    }
-                    agent.state = crate::components::NavAgentState::Stuck;
-                    agent.clear_path();
-                }
-            } else {
-                agent.stuck_timer = 0.0;
-                agent.last_agent_pos = Some(t.position);
-            }
-        } else {
-            agent.last_agent_pos = Some(t.position);
-        }
-
-        // Ajanın sadece XZ düzleminde yürümesi için (pathfinding'in çökmesini engeller)
-        target_pos.y = t.position.y;
-
-        agent.recalc.timer -= dt;
-        // Forced: no route yet, the route is used up, a wall moved, or the target moved > 2 m.
-        // A route that was searched for and does not exist is not "used up": retrying it every
-        // frame is the same answer bought again — measured, 4000 agents on a cluttered grid put
-        // ~950 searches into every frame that way. It waits for the schedule, a wall or a move.
-        let target_moved = agent.recalc.last_target_pos.is_none_or(|last| (last - target_pos).length() > 2.0);
-        let forced = (agent.is_done() && !agent.route_failed()) || grid_changed || target_moved;
-        let scheduled = agent.recalc.timer <= 0.0;
-
-        if forced || scheduled {
-            agent.recalc.last_target_pos = Some(target_pos);
-            // A scheduled replan keeps the agent's cadence. A forced one — which a whole crowd
-            // gets on the same frame when it is spawned or ordered together — puts the next
-            // scheduled one at the agent's own phase of the interval, so the crowd's replans
-            // spread over it instead of all landing on one frame every `interval` (measured,
-            // 1000 agents: 58 ms on every 30th frame against a 0.27 ms median).
-            agent.recalc.timer = if forced {
-                agent.recalc.interval * replan_phase(agent_id.id())
-            } else {
-                agent.recalc.interval
-            };
-            recalc_count += 1;
-            requests.push((index, t.position, target_pos));
+        let Some(target_pos) = agent.target else { continue };
+        if let Some(to) = decide_replan(&mut agent, agent_id, t, target_pos, dt, grid_changed, &mut tally) {
+            requests.push((index, t.position, to));
         }
     }
 
@@ -324,263 +257,21 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
     // order. A crowd that gets a new target on one frame — spawned together, or an RTS "all of
     // you, there" — used to pay every search on one thread: measured, 1000 agents on a 100 × 100
     // grid, 44 ms that frame against a 2.9 ms median; 4000 agents, 168 ms.
-    let routes: Vec<Option<Vec<Vec3>>> = {
-        // A handful of searches is cheaper on this thread than spread over the pool.
-        #[cfg(not(target_arch = "wasm32"))]
-        if requests.len() >= 16 {
-            use rayon::prelude::*;
-            requests.par_iter().with_min_len(4).map(|&(_, from, to)| grid.find_smooth_path(from, to)).collect()
-        } else {
-            requests.iter().map(|&(_, from, to)| grid.find_smooth_path(from, to)).collect()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            requests.iter().map(|&(_, from, to)| grid.find_smooth_path(from, to)).collect()
-        }
-    };
+    let routes = find_routes(grid, &requests);
     let mut planned: Vec<Option<Option<Vec<Vec3>>>> = vec![None; agent_entities.len()];
     for ((index, _, _), route) in requests.into_iter().zip(routes) {
         planned[index] = Some(route);
     }
 
     // Pass 3, in agent order: take the route, then steer.
-    for (index, &e) in agent_entities.iter().enumerate() {
-        let agent_id = e;
-
-        let t = if let Some(t) = transforms.get(agent_id) {
-            t
-        } else {
-            continue;
-        };
-        let mut v = if let Some(v) = velocities.get_mut(agent_id) {
-            v
-        } else {
-            continue;
-        };
+    for (index, &agent_id) in agent_entities.iter().enumerate() {
+        let Some(t) = transforms.get(agent_id) else { continue };
+        let Some(mut v) = velocities.get_mut(agent_id) else { continue };
         let mut agent = agents.get_mut(agent_id).unwrap();
-
-        if agent.target.is_none() {
-            // Yavaşla ve dur (Fiziksel sönümleme)
-            v.linear *= 1.0 - (dt * 5.0).min(1.0);
-            agent.state = crate::components::NavAgentState::Idle;
-            continue;
-        }
-
-        let mut target_pos = agent.target.unwrap();
-        target_pos.y = t.position.y;
-
-        if let Some(route) = planned[index].take() {
-            if let Some(new_path) = route {
-                let path_len = new_path.len();
-                agent.set_path(new_path);
-                agent.set_route_failed(false);
-                path_found += 1;
-                tracing::trace!(
-                    entity = %agent_id,
-                    path_len,
-                    "[AI] Ajan yolu yeniden hesaplandı"
-                );
-            } else {
-                // Yol bulunamadı: path temizlenir (sessiz yutmayı sayaca bağla — çıkışta warn!).
-                agent.clear_path();
-                agent.set_route_failed(true);
-                path_failed += 1;
-                tracing::trace!(
-                    entity = %agent_id,
-                    "[AI] Ajan için yol bulunamadı (hedef ulaşılamaz/duvar içinde?)"
-                );
-            }
-        }
-
-        // Neighbours, for separation and for avoidance: the buckets a radius around the agent
-        // overlaps, visited in agent order (sorted), so the forces sum in the same order a full scan
-        // sums them. Avoidance wants the ten nearest within the agent's reach; in a crowd they are a
-        // few of its own widths away, so the search starts there (`near_search`) and widens to the
-        // whole reach only when it has not found ten — measured, 600 ants searching their whole 4 m
-        // reach every frame: 12 ms.
-        let radius = agent.separation_radius;
-        let look = reach(&agent);
-        let mut neighbor_positions = Vec::new();
-        let mut avoid_neighbours: Vec<(f32, crate::avoidance::Neighbour)> = Vec::new();
-        let first = if agent.avoidance { look.min(near_search(agent.radius)).max(radius) } else { radius };
-        for (pass, within) in [first, look].into_iter().enumerate() {
-            if within <= 0.0 || (pass == 1 && (!agent.avoidance || within <= first || avoid_neighbours.len() >= MAX_AVOIDED)) {
-                continue;
-            }
-            neighbor_positions.clear();
-            avoid_neighbours.clear();
-            let (lo, hi) = (key(t.position - Vec3::splat(within)), key(t.position + Vec3::splat(within)));
-            nearby.clear();
-            for x in lo.0..=hi.0 {
-                for z in lo.1..=hi.1 {
-                    if let Some(bucket) = buckets.get(&(x, z)) {
-                        nearby.extend_from_slice(bucket);
-                    }
-                }
-            }
-            nearby.sort_unstable();
-            for &k in &nearby {
-                if k == index {
-                    continue;
-                }
-                if let Some(p) = positions[k] {
-                    let dist_sq = (p - t.position).length_squared();
-                    if dist_sq < radius * radius {
-                        neighbor_positions.push(p);
-                    }
-                    if agent.avoidance && dist_sq < within * within {
-                        let (velocity, r, steps_aside) = others[k];
-                        avoid_neighbours.push((
-                            dist_sq,
-                            crate::avoidance::Neighbour {
-                                position: gizmo_math::Vec2::new(p.x, p.z),
-                                velocity: gizmo_math::Vec2::new(velocity.x, velocity.z),
-                                radius: r,
-                                reciprocal: steps_aside,
-                            },
-                        ));
-                    }
-                }
-            }
-        }
-
-        let mut steering_force = Vec3::ZERO;
-
-        // Eğer yolda node varsa o node'a doğru ilerle
-        if !agent.is_done() {
-            let mut next_node = agent.current_waypoint().copied().unwrap_or(t.position);
-            next_node.y = t.position.y;
-
-            let dist_to_node = (next_node - t.position).length();
-
-            // Eğer node yarıçapına ulaştıysa VEYA çarpışıp hızı 0'a düştüyse bir sonrakine atla
-            if dist_to_node < agent.arrival_radius
-                || (v.linear.length() < 0.2 && dist_to_node < agent.arrival_radius * 2.5)
-            {
-                agent.advance(); // O(1) — remove(0) yerine indeks ilerlet
-                if agent.is_done() {
-                    // Yolu tamamladı
-                    steering_force += steering::arrive(
-                        t.position,
-                        target_pos,
-                        v.linear,
-                        agent.max_speed,
-                        agent.steering_force,
-                        agent.arrival_radius * 2.0,
-                    );
-
-                    v.linear += steering_force * dt;
-                    let speed = v.linear.length();
-                    if speed > agent.max_speed {
-                        v.linear = (v.linear / speed) * agent.max_speed;
-                    }
-                    v.linear.y = 0.0;
-
-                    agent.target = None;
-                    agent.state = crate::components::NavAgentState::Reached;
-                    reached_count += 1;
-                    tracing::trace!(entity = %agent_id, "[AI] Ajan hedefe ulaştı");
-                    continue;
-                } else {
-                    next_node = agent.current_waypoint().copied().unwrap_or(t.position);
-                    next_node.y = t.position.y;
-                }
-            }
-
-            // Eğer son node'a geldiysek Arrive, aksi halde Seek kullan
-            let remaining_nodes = agent.path_len() - agent.path_index();
-            steering_force += if remaining_nodes == 1 {
-                steering::arrive(
-                    t.position,
-                    next_node,
-                    v.linear,
-                    agent.max_speed,
-                    agent.steering_force,
-                    agent.arrival_radius * 2.0,
-                )
-            } else {
-                steering::seek(
-                    t.position,
-                    next_node,
-                    v.linear,
-                    agent.max_speed,
-                    agent.steering_force,
-                )
-            };
-
-            agent.state = crate::components::NavAgentState::Moving;
-        } else {
-            // No route: the target is in the agent's own cell (an empty path), or there is none to
-            // it. Steering straight at it is all there is — and arriving has to count here too: an
-            // agent sent to the cell it stands in used to stay `Moving` with its target set forever,
-            // so a patrol whose first point was where the guard started never went on to the next.
-            if (target_pos - t.position).length() < agent.arrival_radius {
-                v.linear = Vec3::ZERO;
-                agent.target = None;
-                agent.state = crate::components::NavAgentState::Reached;
-                reached_count += 1;
-                continue;
-            }
-            // Yol yoksa, en azından hedef doğrultusunda doğrudan gitmeyi dene
-            steering_force += steering::arrive(
-                t.position,
-                target_pos,
-                v.linear,
-                agent.max_speed,
-                agent.steering_force,
-                agent.arrival_radius * 2.0,
-            );
-            agent.state = crate::components::NavAgentState::Moving;
-        }
-
-        // Separation (Bireysel ayrılma kuvveti uygula, kütle çarpışmalarını yumuşatır)
-        let separation = steering::separate(
-            t.position,
-            v.linear,
-            &neighbor_positions,
-            agent.separation_radius,
-            agent.max_speed,
-            agent.steering_force,
-        );
-
-        // Final kuvveti hıza ekle
-        v.linear += (steering_force + separation * agent.separation_weight) * dt;
-
-        // Kuvvet eklendikten sonra linear max_speed ile sınırlandırılır, böylece ajan sonsuza hızlanmaz
-        let speed = v.linear.length();
-        if speed > agent.max_speed {
-            v.linear = (v.linear / speed) * agent.max_speed;
-        }
-
-        // Avoidance: the velocity nearest this one that runs into no neighbour within the horizon —
-        // the ten nearest, as RVO2 takes them.
-        if agent.avoidance && !avoid_neighbours.is_empty() {
-            if avoid_neighbours.len() > MAX_AVOIDED {
-                avoid_neighbours.select_nth_unstable_by(MAX_AVOIDED - 1, |a, b| a.0.total_cmp(&b.0));
-                avoid_neighbours.truncate(MAX_AVOIDED);
-            }
-            // Nearest first, and so the same order whatever the buckets gave.
-            avoid_neighbours.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let neighbours: Vec<crate::avoidance::Neighbour> = avoid_neighbours.iter().map(|(_, n)| *n).collect();
-            let own = others[index].0;
-            let chosen = crate::avoidance::avoid(
-                gizmo_math::Vec2::new(t.position.x, t.position.z),
-                gizmo_math::Vec2::new(own.x, own.z),
-                agent.radius,
-                gizmo_math::Vec2::new(v.linear.x, v.linear.z),
-                agent.max_speed,
-                &neighbours,
-                agent.time_horizon,
-                dt,
-            );
-            v.linear.x = chosen.x;
-            v.linear.z = chosen.y;
-        }
-
-        // Ajanın uzaya uçuşunu engellemek için Y eksenindeki suni birikimleri sıfırla
-        v.linear.y = 0.0;
+        steer(&mut agent, &mut v, agent_id, t, planned[index].take(), &crowd, index, &mut nearby, dt, &mut tally);
     }
 
+    let NavTally { recalc: recalc_count, path_found, path_failed, stuck: stuck_count, reached: reached_count } = tally;
     // Çıkışta AGGREGATE — yalnız bir navigasyon kararı olduysa logla (sessiz frame'ler gürültü yapmasın).
     if recalc_count > 0 || stuck_count > 0 || reached_count > 0 || path_failed > 0 {
         tracing::debug!(
@@ -603,6 +294,427 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
             agent_count,
             "[AI] Bazı ajanlar için yol hesaplanamadı bu frame'de"
         );
+    }
+}
+
+/// An agent's reach: how far it looks for neighbours, to separate from or to avoid (what it could
+/// cover in its avoidance horizon, and two bodies' width).
+fn reach(a: &NavAgent) -> f32 {
+    let avoid = if a.avoidance { a.max_speed * a.time_horizon + 2.0 * a.radius } else { 0.0 };
+    a.separation_radius.max(avoid)
+}
+
+/// One frame's navigation tallies, logged once at the end rather than per agent.
+#[derive(Default)]
+struct NavTally {
+    recalc: u32,
+    path_found: u32,
+    path_failed: u32,
+    stuck: u32,
+    reached: u32,
+}
+
+/// The crowd as the frame began, for separation and avoidance: where each agent is, what avoidance
+/// reads of it, and which XZ bucket it is in.
+struct Crowd {
+    positions: Vec<Option<Vec3>>,
+    /// How each agent moves, how wide it is, whether it will step aside (it avoids, and has
+    /// somewhere to go).
+    others: Vec<(Vec3, f32, bool)>,
+    buckets: std::collections::HashMap<(i32, i32), Vec<usize>>,
+    cell: f32,
+}
+
+impl Crowd {
+    /// The crowd, bucketed in XZ cells `cell` wide.
+    fn new(positions: Vec<Option<Vec3>>, others: Vec<(Vec3, f32, bool)>, cell: f32) -> Self {
+        let mut crowd = Crowd { positions, others, buckets: std::collections::HashMap::new(), cell };
+        for (k, p) in crowd.positions.iter().enumerate() {
+            if let Some(p) = p {
+                crowd.buckets.entry(crowd.key(*p)).or_default().push(k);
+            }
+        }
+        crowd
+    }
+
+    fn key(&self, p: Vec3) -> (i32, i32) {
+        ((p.x / self.cell).floor() as i32, (p.z / self.cell).floor() as i32)
+    }
+
+    /// Agent `index`'s neighbours: the ones within its separation radius, and for avoidance the
+    /// ones within its reach with their squared distances.
+    fn neighbours(
+        &self,
+        index: usize,
+        t: &Transform,
+        agent: &NavAgent,
+        nearby: &mut Vec<usize>,
+    ) -> (Vec<Vec3>, Vec<(f32, crate::avoidance::Neighbour)>) {
+        // Neighbours, for separation and for avoidance: the buckets a radius around the agent
+        // overlaps, visited in agent order (sorted), so the forces sum in the same order a full scan
+        // sums them. Avoidance wants the ten nearest within the agent's reach; in a crowd they are a
+        // few of its own widths away, so the search starts there (`near_search`) and widens to the
+        // whole reach only when it has not found ten — measured, 600 ants searching their whole 4 m
+        // reach every frame: 12 ms.
+        let radius = agent.separation_radius;
+        let look = reach(agent);
+        let mut neighbor_positions = Vec::new();
+        let mut avoid_neighbours: Vec<(f32, crate::avoidance::Neighbour)> = Vec::new();
+        let first = if agent.avoidance { look.min(near_search(agent.radius)).max(radius) } else { radius };
+        for (pass, within) in [first, look].into_iter().enumerate() {
+            if within <= 0.0 || (pass == 1 && (!agent.avoidance || within <= first || avoid_neighbours.len() >= MAX_AVOIDED)) {
+                continue;
+            }
+            neighbor_positions.clear();
+            avoid_neighbours.clear();
+            let (lo, hi) = (self.key(t.position - Vec3::splat(within)), self.key(t.position + Vec3::splat(within)));
+            nearby.clear();
+            for x in lo.0..=hi.0 {
+                for z in lo.1..=hi.1 {
+                    if let Some(bucket) = self.buckets.get(&(x, z)) {
+                        nearby.extend_from_slice(bucket);
+                    }
+                }
+            }
+            nearby.sort_unstable();
+            for &k in nearby.iter() {
+                if k == index {
+                    continue;
+                }
+                if let Some(p) = self.positions[k] {
+                    let dist_sq = (p - t.position).length_squared();
+                    if dist_sq < radius * radius {
+                        neighbor_positions.push(p);
+                    }
+                    if agent.avoidance && dist_sq < within * within {
+                        let (velocity, r, steps_aside) = self.others[k];
+                        avoid_neighbours.push((
+                            dist_sq,
+                            crate::avoidance::Neighbour {
+                                position: gizmo_math::Vec2::new(p.x, p.z),
+                                velocity: gizmo_math::Vec2::new(velocity.x, velocity.z),
+                                radius: r,
+                                reciprocal: steps_aside,
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+        (neighbor_positions, avoid_neighbours)
+    }
+}
+
+/// Pass 1 for one agent with a target: stuck detection, and whether its route is planned again
+/// this frame — `Some(target)`, flattened onto the agent's height, when it is.
+#[allow(clippy::too_many_arguments)]
+fn decide_replan(
+    agent: &mut NavAgent,
+    agent_id: Entity,
+    t: &Transform,
+    mut target_pos: Vec3,
+    dt: f32,
+    grid_changed: bool,
+    tally: &mut NavTally,
+) -> Option<Vec3> {
+    // Stuck Algılama
+    if let Some(last_pos) = agent.last_agent_pos {
+        if (t.position - last_pos).length_squared() < 0.0025 {
+            // 0.05^2
+            agent.stuck_timer += dt;
+            if agent.stuck_timer > 2.0 {
+                // Yalnız YENİ sıkışma geçişini say/logla (her frame tekrar etmesin).
+                if agent.state != crate::components::NavAgentState::Stuck {
+                    tally.stuck += 1;
+                    tracing::trace!(
+                        entity = %agent_id,
+                        stuck_timer = agent.stuck_timer,
+                        "[AI] Ajan sıkıştı — yol temizleniyor, yeniden hesaplanacak"
+                    );
+                }
+                agent.state = crate::components::NavAgentState::Stuck;
+                agent.clear_path();
+            }
+        } else {
+            agent.stuck_timer = 0.0;
+            agent.last_agent_pos = Some(t.position);
+        }
+    } else {
+        agent.last_agent_pos = Some(t.position);
+    }
+
+    // Ajanın sadece XZ düzleminde yürümesi için (pathfinding'in çökmesini engeller)
+    target_pos.y = t.position.y;
+
+    agent.recalc.timer -= dt;
+    // Forced: no route yet, the route is used up, a wall moved, or the target moved > 2 m.
+    // A route that was searched for and does not exist is not "used up": retrying it every
+    // frame is the same answer bought again — measured, 4000 agents on a cluttered grid put
+    // ~950 searches into every frame that way. It waits for the schedule, a wall or a move.
+    let target_moved = agent.recalc.last_target_pos.is_none_or(|last| (last - target_pos).length() > 2.0);
+    let forced = (agent.is_done() && !agent.route_failed()) || grid_changed || target_moved;
+    let scheduled = agent.recalc.timer <= 0.0;
+
+    if forced || scheduled {
+        agent.recalc.last_target_pos = Some(target_pos);
+        // A scheduled replan keeps the agent's cadence. A forced one — which a whole crowd
+        // gets on the same frame when it is spawned or ordered together — puts the next
+        // scheduled one at the agent's own phase of the interval, so the crowd's replans
+        // spread over it instead of all landing on one frame every `interval` (measured,
+        // 1000 agents: 58 ms on every 30th frame against a 0.27 ms median).
+        agent.recalc.timer = if forced {
+            agent.recalc.interval * replan_phase(agent_id.id())
+        } else {
+            agent.recalc.interval
+        };
+        tally.recalc += 1;
+        return Some(target_pos);
+    }
+    None
+}
+
+/// Pass 2: the routes the replans asked for, in their order.
+fn find_routes(grid: &NavGrid, requests: &[(usize, Vec3, Vec3)]) -> Vec<Option<Vec<Vec3>>> {
+    {
+        // A handful of searches is cheaper on this thread than spread over the pool.
+        #[cfg(not(target_arch = "wasm32"))]
+        if requests.len() >= 16 {
+            use rayon::prelude::*;
+            requests.par_iter().with_min_len(4).map(|&(_, from, to)| grid.find_smooth_path(from, to)).collect()
+        } else {
+            requests.iter().map(|&(_, from, to)| grid.find_smooth_path(from, to)).collect()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            requests.iter().map(|&(_, from, to)| grid.find_smooth_path(from, to)).collect()
+        }
+    }
+}
+
+/// The route pass 2 found for this agent, if it asked for one: taken, or the failure recorded.
+fn take_route(agent: &mut NavAgent, agent_id: Entity, route: Option<Option<Vec<Vec3>>>, tally: &mut NavTally) {
+    if let Some(route) = route {
+        if let Some(new_path) = route {
+            let path_len = new_path.len();
+            agent.set_path(new_path);
+            agent.set_route_failed(false);
+            tally.path_found += 1;
+            tracing::trace!(
+                entity = %agent_id,
+                path_len,
+                "[AI] Ajan yolu yeniden hesaplandı"
+            );
+        } else {
+            // Yol bulunamadı: path temizlenir (sessiz yutmayı sayaca bağla — çıkışta warn!).
+            agent.clear_path();
+            agent.set_route_failed(true);
+            tally.path_failed += 1;
+            tracing::trace!(
+                entity = %agent_id,
+                "[AI] Ajan için yol bulunamadı (hedef ulaşılamaz/duvar içinde?)"
+            );
+        }
+    }
+}
+
+/// Pass 3 for one agent: take its route, then steer — the route's force, separation, the speed
+/// limit, avoidance — or slow to a stop with no target.
+#[allow(clippy::too_many_arguments)]
+fn steer(
+    agent: &mut NavAgent,
+    v: &mut Velocity,
+    agent_id: Entity,
+    t: &Transform,
+    route: Option<Option<Vec<Vec3>>>,
+    crowd: &Crowd,
+    index: usize,
+    nearby: &mut Vec<usize>,
+    dt: f32,
+    tally: &mut NavTally,
+) {
+    if agent.target.is_none() {
+        // Yavaşla ve dur (Fiziksel sönümleme)
+        v.linear *= 1.0 - (dt * 5.0).min(1.0);
+        agent.state = crate::components::NavAgentState::Idle;
+        return;
+    }
+
+    let mut target_pos = agent.target.unwrap();
+    target_pos.y = t.position.y;
+
+    take_route(agent, agent_id, route, tally);
+
+    // Neighbours, for separation and for avoidance: the buckets a radius around the agent
+    // overlaps, visited in agent order (sorted), so the forces sum in the same order a full scan
+    // sums them. Avoidance wants the ten nearest within the agent's reach; in a crowd they are a
+    // few of its own widths away, so the search starts there (`near_search`) and widens to the
+    // whole reach only when it has not found ten — measured, 600 ants searching their whole 4 m
+    // reach every frame: 12 ms.
+    let (neighbor_positions, avoid_neighbours) = crowd.neighbours(index, t, agent, nearby);
+
+    let Some(steering_force) = path_force(agent, v, agent_id, t, target_pos, dt, tally) else {
+        return;
+    };
+
+    // Separation (Bireysel ayrılma kuvveti uygula, kütle çarpışmalarını yumuşatır)
+    let separation = steering::separate(
+        t.position,
+        v.linear,
+        &neighbor_positions,
+        agent.separation_radius,
+        agent.max_speed,
+        agent.steering_force,
+    );
+
+    // Final kuvveti hıza ekle
+    v.linear += (steering_force + separation * agent.separation_weight) * dt;
+
+    // Kuvvet eklendikten sonra linear max_speed ile sınırlandırılır, böylece ajan sonsuza hızlanmaz
+    let speed = v.linear.length();
+    if speed > agent.max_speed {
+        v.linear = (v.linear / speed) * agent.max_speed;
+    }
+
+    apply_avoidance(agent, v, t, crowd.others[index].0, avoid_neighbours, dt);
+
+    // Ajanın uzaya uçuşunu engellemek için Y eksenindeki suni birikimleri sıfırla
+    v.linear.y = 0.0;
+}
+
+/// The force along the agent's route — seek, or arrive on its last waypoint — or straight at the
+/// target with no route. `None` when the agent arrived this frame (its velocity then already set).
+fn path_force(
+    agent: &mut NavAgent,
+    v: &mut Velocity,
+    agent_id: Entity,
+    t: &Transform,
+    target_pos: Vec3,
+    dt: f32,
+    tally: &mut NavTally,
+) -> Option<Vec3> {
+    let mut steering_force = Vec3::ZERO;
+
+    // Eğer yolda node varsa o node'a doğru ilerle
+    if !agent.is_done() {
+        let mut next_node = agent.current_waypoint().copied().unwrap_or(t.position);
+        next_node.y = t.position.y;
+
+        let dist_to_node = (next_node - t.position).length();
+
+        // Eğer node yarıçapına ulaştıysa VEYA çarpışıp hızı 0'a düştüyse bir sonrakine atla
+        if dist_to_node < agent.arrival_radius
+            || (v.linear.length() < 0.2 && dist_to_node < agent.arrival_radius * 2.5)
+        {
+            agent.advance(); // O(1) — remove(0) yerine indeks ilerlet
+            if agent.is_done() {
+                // Yolu tamamladı
+                steering_force += steering::arrive(
+                    t.position,
+                    target_pos,
+                    v.linear,
+                    agent.max_speed,
+                    agent.steering_force,
+                    agent.arrival_radius * 2.0,
+                );
+
+                v.linear += steering_force * dt;
+                let speed = v.linear.length();
+                if speed > agent.max_speed {
+                    v.linear = (v.linear / speed) * agent.max_speed;
+                }
+                v.linear.y = 0.0;
+
+                agent.target = None;
+                agent.state = crate::components::NavAgentState::Reached;
+                tally.reached += 1;
+                tracing::trace!(entity = %agent_id, "[AI] Ajan hedefe ulaştı");
+                return None;
+            } else {
+                next_node = agent.current_waypoint().copied().unwrap_or(t.position);
+                next_node.y = t.position.y;
+            }
+        }
+
+        // Eğer son node'a geldiysek Arrive, aksi halde Seek kullan
+        let remaining_nodes = agent.path_len() - agent.path_index();
+        steering_force += if remaining_nodes == 1 {
+            steering::arrive(
+                t.position,
+                next_node,
+                v.linear,
+                agent.max_speed,
+                agent.steering_force,
+                agent.arrival_radius * 2.0,
+            )
+        } else {
+            steering::seek(
+                t.position,
+                next_node,
+                v.linear,
+                agent.max_speed,
+                agent.steering_force,
+            )
+        };
+
+        agent.state = crate::components::NavAgentState::Moving;
+    } else {
+        // No route: the target is in the agent's own cell (an empty path), or there is none to
+        // it. Steering straight at it is all there is — and arriving has to count here too: an
+        // agent sent to the cell it stands in used to stay `Moving` with its target set forever,
+        // so a patrol whose first point was where the guard started never went on to the next.
+        if (target_pos - t.position).length() < agent.arrival_radius {
+            v.linear = Vec3::ZERO;
+            agent.target = None;
+            agent.state = crate::components::NavAgentState::Reached;
+            tally.reached += 1;
+            return None;
+        }
+        // Yol yoksa, en azından hedef doğrultusunda doğrudan gitmeyi dene
+        steering_force += steering::arrive(
+            t.position,
+            target_pos,
+            v.linear,
+            agent.max_speed,
+            agent.steering_force,
+            agent.arrival_radius * 2.0,
+        );
+        agent.state = crate::components::NavAgentState::Moving;
+    }
+    Some(steering_force)
+}
+
+/// Avoidance: the velocity nearest the agent's that runs into none of its nearest neighbours
+/// within the horizon. `own` is how it moved as the frame began.
+fn apply_avoidance(
+    agent: &NavAgent,
+    v: &mut Velocity,
+    t: &Transform,
+    own: Vec3,
+    mut avoid_neighbours: Vec<(f32, crate::avoidance::Neighbour)>,
+    dt: f32,
+) {
+    // Avoidance: the velocity nearest this one that runs into no neighbour within the horizon —
+    // the ten nearest, as RVO2 takes them.
+    if agent.avoidance && !avoid_neighbours.is_empty() {
+        if avoid_neighbours.len() > MAX_AVOIDED {
+            avoid_neighbours.select_nth_unstable_by(MAX_AVOIDED - 1, |a, b| a.0.total_cmp(&b.0));
+            avoid_neighbours.truncate(MAX_AVOIDED);
+        }
+        // Nearest first, and so the same order whatever the buckets gave.
+        avoid_neighbours.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let neighbours: Vec<crate::avoidance::Neighbour> = avoid_neighbours.iter().map(|(_, n)| *n).collect();
+        let chosen = crate::avoidance::avoid(
+            gizmo_math::Vec2::new(t.position.x, t.position.z),
+            gizmo_math::Vec2::new(own.x, own.z),
+            agent.radius,
+            gizmo_math::Vec2::new(v.linear.x, v.linear.z),
+            agent.max_speed,
+            &neighbours,
+            agent.time_horizon,
+            dt,
+        );
+        v.linear.x = chosen.x;
+        v.linear.z = chosen.y;
     }
 }
 
