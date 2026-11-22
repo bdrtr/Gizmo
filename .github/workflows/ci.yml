@@ -127,6 +127,19 @@ jobs:
       # these tests but never runs them. This step is the only place they run.
       - name: Test gizmo-analysis with `app` (plugin wiring, off by default)
         run: cargo test --locked -p gizmo-analysis --features app
+      # The facade's tests compiled only with its default features, measured 2026-11-22: 13 errors
+      # under `--no-default-features --features physics` (a test module reaching for the
+      # renderer's imports, `simple`'s drivers, the GPU helper), 50 under `render,physics` (save
+      # and reopen tests needing `scene`), and three integration files needing subsystems they did
+      # not ask for. The powerset job lints the LIBRARY under every pair (`--no-dev-deps`), and the
+      # test job builds the DEFAULT set, so nothing built a test under anything else. These are the
+      # sets a game actually picks: physics alone, `headless`, and a renderer without the editor's.
+      - name: The facade's tests build without its default features
+        run: |
+          for features in physics headless render,physics render,physics,scene; do
+            RUSTFLAGS="-D warnings" cargo test --locked -p gizmo-engine --lib --tests \
+              --no-default-features --features "$features" --no-run
+          done
 
   # ── Feature composition: every feature combination of the two entry crates must build ──
   # A workspace build only ever exercises the DEFAULT feature set, which is how the facade

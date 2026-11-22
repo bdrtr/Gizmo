@@ -8,6 +8,9 @@
 //! These drive the two schedules directly rather than through the event loop, which needs a
 //! window and a GPU.
 
+// Built with what it drives — the schedules carry `FpsLook`, a renderer camera — so a build without those features skips it.
+#![cfg(all(feature = "render", feature = "physics"))]
+
 use gizmo::core::world::World;
 use gizmo::math::Vec3;
 use gizmo::prelude::*;

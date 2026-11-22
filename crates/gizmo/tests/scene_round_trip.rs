@@ -13,6 +13,9 @@
 //! is not registered (it owns a live wgpu bind group), so PBR maps do not survive a round trip.
 //! `MaterialSource` is what carries a material through a file, and that is what is asserted here.
 
+// Built with what it drives — a scene of lights, cameras and bodies, through the full registry — so a build without those features skips it.
+#![cfg(all(feature = "render", feature = "scene"))]
+
 use gizmo::core::component::{EntityName, MaterialSource, MeshSource};
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Camera, DirectionalLight};

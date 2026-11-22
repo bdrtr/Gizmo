@@ -336,6 +336,7 @@ mod tests {
     /// it would stand flat on the floor.
     #[test]
     #[ignore = "requires a GPU adapter"]
+    #[cfg(feature = "scene")]
     fn the_water_reopens_where_it_was_and_goes_on_the_same() {
         let _gpu = crate::test_gpu::gpu_lock();
         if !usable_gpu() {

@@ -198,7 +198,12 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    follows the parent's scale (`Relative::then`). `misket` divides its tray walls' half sizes by
 >    the tray's scale by hand. A decision to make: scale shapes by the world scale, as Unity does,
 >    or keep scale visual-only and say so where a scaled parent is given a child collider.
-> 5. **The facade's tests compile only with its default features.** `cargo test -p gizmo-engine
+> 5. ~~**The facade's tests compile only with its default features.**~~ **Closed 2026-11-23:** each
+>    test module, test and helper is gated on what it uses, three integration files on the
+>    subsystems they drive, and the CI `features` job builds the facade's tests (`--lib --tests
+>    --no-run`, warnings denied) under `physics`, `headless`, `render,physics` and
+>    `render,physics,scene`. The default build runs the same 3610 tests as before. *(Was:)*
+>    `cargo test -p gizmo-engine
 >    --lib --no-default-features --features physics` fails with 13 errors across several test
 >    modules — `systems::interpolation`'s tests import `crate::simple` (gated on `window` + `render`
 >    + `physics`), others name `gizmo_renderer`, `Transform`, `Collider`, `RigidBody`, `Vec3` without

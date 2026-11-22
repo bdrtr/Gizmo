@@ -292,7 +292,8 @@ impl gizmo_core::system::System for InterpolationAlphaSystem {
     }
 }
 
-#[cfg(test)]
+// Driven through `simple`'s fixed-step drivers, so built where `simple` is.
+#[cfg(all(test, feature = "window", feature = "render"))]
 mod tests {
     use super::*;
     use crate::simple::{sync_transforms, FixedPhysics};

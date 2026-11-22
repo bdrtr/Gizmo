@@ -97,7 +97,7 @@ pub mod spawner;
 /// The engine's own systems, as the facade wires them: transform propagation, the render
 /// batching path, the play loop, chunk streaming and the physics bridges.
 pub mod systems;
-#[cfg(test)]
+#[cfg(all(test, feature = "render"))]
 mod test_gpu;
 
 // === Motor Alt Sistemleri ===

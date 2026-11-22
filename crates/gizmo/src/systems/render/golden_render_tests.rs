@@ -769,6 +769,7 @@ fn every_pipeline_compiles_on_this_backend() {
 /// (`gizmo-renderer`'s `normalize_anim_time` covers looping, clamping and zero duration) and
 /// they all passed the entire time the feature was dead.
 #[test]
+#[cfg(feature = "animation")]
 fn default_render_pass_advances_skeletal_animation() {
     use crate::renderer::components::{AnimationClip, AnimationPlayer, SkeletonHierarchy};
     use gizmo_animation::skeletal::SkeletonJoint;
@@ -15161,6 +15162,7 @@ fn write_gltf_quad(name: &str, texture: &image::RgbaImage, sampler: Option<&str>
 /// is no file: it reopened with no geometry, and with a white material had there been any.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn a_textured_gltf_model_keeps_its_geometry_and_its_texture_through_a_save_and_reopen() {
     let _gpu = crate::test_gpu::gpu_lock();
     if !pollster::block_on(Renderer::headless_adapter_available())
@@ -15320,6 +15322,7 @@ fn a_gltf_model_asked_for_by_name_is_built_from_its_file() {
 /// what is saved. Before the sampler was data, a reopened pixel-art model came back blurred.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn a_gltf_models_sampler_survives_a_save_and_reopen() {
     let _gpu = crate::test_gpu::gpu_lock();
     if !pollster::block_on(Renderer::headless_adapter_available())
@@ -15452,6 +15455,7 @@ fn write_skinned_gltf() -> String {
 /// rebuilt, and a reopened character stood in its bind pose and never moved.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn an_animated_gltf_model_keeps_its_pose_through_a_save_and_reopen() {
     use gizmo_renderer::components::AnimationPlayer;
     let _gpu = crate::test_gpu::gpu_lock();
@@ -15521,6 +15525,7 @@ fn an_animated_gltf_model_keeps_its_pose_through_a_save_and_reopen() {
 /// fight it.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn a_state_machine_reopens_in_the_middle_of_its_blend() {
     use gizmo_renderer::components::{
         ActiveBlend, AnimationPlayer, AnimationState, AnimationStateMachine, AnimationTransition,
@@ -15631,6 +15636,7 @@ fn a_state_machine_reopens_in_the_middle_of_its_blend() {
 /// A skinned strip with three joints in a row — `Root` at the bottom (y = −1.5), `Mid` in the
 /// middle, `Tip` at the top (y = +1.5) — each row of vertices bound to the joint at its height.
 /// No clips: nothing animates it, so it stands in its bind pose unless something bends it.
+#[cfg(feature = "scene")]
 fn write_skinned_arm_gltf() -> String {
     let dir = std::env::temp_dir().join(format!("gizmo-gltf-arm-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -15703,6 +15709,7 @@ fn write_skinned_arm_gltf() -> String {
 /// could hold one.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn an_ik_chain_bends_the_limb_and_a_reopened_scene_bends_it_the_same() {
     use gizmo_renderer::components::{BoneAttachment, Skeleton};
     use gizmo_renderer::ik::{IkChains, TwoBoneIkChain};
@@ -15791,6 +15798,7 @@ fn an_ik_chain_bends_the_limb_and_a_reopened_scene_bends_it_the_same() {
 /// byte, and not the file's. The file was not written.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn an_edited_clip_is_what_a_reopened_model_plays() {
     use gizmo_renderer::components::AnimationPlayer;
     let _gpu = crate::test_gpu::gpu_lock();
@@ -15864,6 +15872,7 @@ fn an_edited_clip_is_what_a_reopened_model_plays() {
 /// was not scene data, and the restored star stood there with no geometry.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn geometry_made_from_points_survives_play_stop_and_a_save() {
     use gizmo_renderer::components::{MaterialDesc, MeshData};
     let _gpu = crate::test_gpu::gpu_lock();
@@ -15951,6 +15960,7 @@ fn geometry_made_from_points_survives_play_stop_and_a_save() {
 /// saved one.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn a_material_over_an_unnamed_texture_keeps_it_through_a_save() {
     let _gpu = crate::test_gpu::gpu_lock();
     if !pollster::block_on(Renderer::headless_adapter_available())
@@ -16013,6 +16023,7 @@ fn a_material_over_an_unnamed_texture_keeps_it_through_a_save() {
 }
 
 /// What [`draw_save_reopen`] saw on each side.
+#[cfg(feature = "scene")]
 struct Reopened {
     drawn: Vec<u8>,
     reopened: Vec<u8>,
@@ -16026,12 +16037,14 @@ struct Reopened {
 /// motion at the save (a tween) has to carry on from where it was. Each side draws three frames
 /// before the one compared, so what a frame captures on its first (a probe, a mirror) has been
 /// captured on both. The temporal pass is off: two frames of one scene are the same frame.
+#[cfg(feature = "scene")]
 async fn draw_save_reopen(dt: Option<f32>, build: impl FnOnce(&mut World, &Renderer)) -> Reopened {
     draw_save_reopen_with(dt, |_| {}, |world, renderer| build(world, renderer)).await
 }
 
 /// [`draw_save_reopen`] with `setup` run on each side's renderer first — what a game's own start
 /// does before a scene is opened (embedding its assets, say).
+#[cfg(feature = "scene")]
 async fn draw_save_reopen_with(
     dt: Option<f32>,
     setup: impl Fn(&mut Renderer),
@@ -16109,6 +16122,7 @@ async fn draw_save_reopen_with(
 /// captures once, and a probe over a changing colour captures whichever colour its first frame saw.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn what_is_seen_survives_a_save_first_batch() {
     use gizmo_renderer::components::{MaterialDesc, Occluder, PlanarReflection, ReflectionProbe, Wireframe};
     let _gpu = crate::test_gpu::gpu_lock();
@@ -16168,6 +16182,7 @@ fn what_is_seen_survives_a_save_first_batch() {
 /// — the embedded bytes when the game has registered them, which `setup` does on both sides.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn text_is_saved_in_its_faces() {
     use gizmo_renderer::components::{Text, TextAnchor};
     let _gpu = crate::test_gpu::gpu_lock();
@@ -16225,6 +16240,7 @@ fn text_is_saved_in_its_faces() {
 /// registered them (`setup`, both sides), else the file.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn sprites_and_tilemaps_are_saved_in_their_images() {
     use gizmo_renderer::components::{Sprite, SpriteAnimation, Tilemap};
     use gizmo_renderer::sprite::SpriteFilter;
@@ -16298,6 +16314,7 @@ fn sprites_and_tilemaps_are_saved_in_their_images() {
 /// saved UV rect points at.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn a_sprite_from_a_named_atlas_is_saved() {
     use gizmo_renderer::components::Sprite;
     use gizmo_renderer::sprite::SpriteFilter;
@@ -16343,6 +16360,7 @@ fn a_sprite_from_a_named_atlas_is_saved() {
 /// reopened frame is the saved one.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn a_sprite_of_the_engines_white_draws_and_is_saved() {
     use gizmo_renderer::components::Sprite;
     use gizmo_renderer::sprite::{ImageName, SpriteFilter, SpriteImageId};
@@ -16380,6 +16398,7 @@ fn a_sprite_of_the_engines_white_draws_and_is_saved() {
 /// owns a GPU bind group, so a scene saves its `DecalDesc`, and a decal is built from it again.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn decals_are_saved_with_their_textures() {
     use gizmo_renderer::components::{Decal, MaterialDesc};
     let _gpu = crate::test_gpu::gpu_lock();
@@ -16431,6 +16450,7 @@ fn decals_are_saved_with_their_textures() {
 /// entity carries for near by. A group owns GPU meshes, so a scene saves its `LodGroupDesc`.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn a_lod_group_is_saved_with_its_levels() {
     use gizmo_renderer::components::{LodGroup, LodLevel, MaterialDesc};
     let _gpu = crate::test_gpu::gpu_lock();
@@ -16465,6 +16485,7 @@ fn a_lod_group_is_saved_with_its_levels() {
 /// size (`CameraTargetDesc`) and the texture is made again.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn a_camera_target_is_saved_and_draws_again() {
     use gizmo_renderer::components::{Camera, CameraTarget, MaterialDesc};
     let _gpu = crate::test_gpu::gpu_lock();
@@ -16535,6 +16556,7 @@ fn a_camera_target_is_saved_and_draws_again() {
 /// reached — so the frames compared are after the save, where an unsaved tween stops.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn a_tween_saved_half_way_carries_on() {
     use gizmo_renderer::components::{ColorTween, MaterialDesc};
     let _gpu = crate::test_gpu::gpu_lock();
@@ -16613,6 +16635,7 @@ fn a_paused_games_scrubbed_playhead_moves_the_pose() {
 /// now its `MeshSource` (`mesh_sync`), so the reopened frame is the saved one.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn shapes_built_in_code_survive_a_save_and_reopen() {
     let _gpu = crate::test_gpu::gpu_lock();
     if !pollster::block_on(Renderer::headless_adapter_available())
@@ -16767,6 +16790,7 @@ fn a_materials_maps_are_saved_loaded_and_follow_their_sources() {
 /// A quad facing the camera whose second UV set spans its lightmap, with `desc` as its material
 /// (a `MaterialDesc`, as a loaded scene has it), lit by nothing but the sky — so what it shows is
 /// the ambient, or the lightmap in its place.
+#[cfg(feature = "scene")]
 fn lightmapped_quad(world: &mut World, desc: gizmo_renderer::components::MaterialDesc) {
     use gizmo_renderer::components::MeshData;
     let corner = |x: f32, y: f32| gizmo_renderer::gpu_types::Vertex {
@@ -16892,6 +16916,7 @@ fn write_lightmap() -> String {
 /// second UV set. Before 2026-11-14 the engine had no lightmap at all and dropped `TEXCOORD_1`.
 #[test]
 #[ignore = "requires a GPU adapter"]
+#[cfg(feature = "scene")]
 fn a_lightmap_lights_the_surface_with_what_was_baked() {
     use gizmo_renderer::components::{BlendMode, MaterialDesc, MaterialMaps};
     let _gpu = crate::test_gpu::gpu_lock();
@@ -19750,7 +19775,7 @@ fn a_tooltip_draws_a_box_and_its_text_beside_the_pointer() {
 /// no UI component was registered, and a reopened menu drew nothing.
 #[test]
 #[ignore = "requires a GPU adapter"]
-#[cfg(feature = "ui")]
+#[cfg(all(feature = "ui", feature = "scene"))]
 fn a_ui_draws_the_same_after_a_save_and_reopen() {
     use crate::ui::{BackgroundColor, ClipContent, FlexDirection, Node, ProgressBar, Scroll, Slider, Style, Toggle, UiTransform, Val, ZIndex};
     use gizmo_core::component::{Children, Parent};
@@ -19844,6 +19869,7 @@ fn a_ui_draws_the_same_after_a_save_and_reopen() {
     let _ = std::fs::remove_file(&scene_path);
 }
 
+#[cfg(feature = "ui")]
 async fn render_ui_scene(ui_box: bool, label: bool) -> Vec<u8> {
     const W: u32 = 128;
     let mut renderer = crate::test_gpu::headless_renderer(W, W).await;

@@ -720,8 +720,12 @@ impl gizmo_core::system::System for PhysicsStepSystem {
 
 #[cfg(test)]
 mod physics_step_tests {
-    use gizmo_core::Entity;
     use super::*;
+    // Named here rather than taken from the module's imports, which are the renderer's: the step
+    // tests need none of it, and a physics-only build compiles them too.
+    use crate::math::Vec3;
+    use gizmo_physics_core::{Collider, Transform};
+    use gizmo_physics_rigid::components::RigidBody;
     use crate::core::World;
     use gizmo_core::system::System;
     use gizmo_physics_rigid::components::Velocity;
@@ -784,8 +788,8 @@ mod physics_step_tests {
     }
 
     #[cfg(feature = "render")]
-    fn debris_ids(world: &World) -> Vec<Entity> {
-        world.query::<(Entity, &gizmo_physics_rigid::components::Debris)>().iter().map(|(entity, _)| entity).collect()
+    fn debris_ids(world: &World) -> Vec<gizmo_core::Entity> {
+        world.query::<(gizmo_core::Entity, &gizmo_physics_rigid::components::Debris)>().iter().map(|(entity, _)| entity).collect()
     }
 
     #[test]

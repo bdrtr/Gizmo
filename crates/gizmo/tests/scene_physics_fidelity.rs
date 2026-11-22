@@ -17,6 +17,9 @@
 //! Each test fails when its component's registration is taken out — checked by hand, one by one,
 //! when this file was written (2026-11-14).
 
+// Built with what it drives — every subsystem's components through a scene — so a build without those features skips it.
+#![cfg(all(feature = "render", feature = "scene", feature = "physics-dynamics", feature = "physics-soft", feature = "animation"))]
+
 use gizmo::core::component::EntityName;
 use gizmo::core::commands::CommandQueue;
 use gizmo::core::system::System;
