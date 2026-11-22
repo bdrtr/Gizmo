@@ -380,6 +380,9 @@ pub struct Renderer {
     /// and the editor's grid are drawn as usual. The editor toolbar's "Wire"; set around one view's
     /// draw by `gizmo`'s `draw_camera_into` (`ViewShading::Wire`).
     pub wire_only: bool,
+    /// This view leaves out what draws with the `Grid` material: an editor whose grid preference is
+    /// off. Set around one view's draw by `gizmo`'s `draw_camera_into` (`ViewOptions::without_grid`).
+    pub hides_grid: bool,
     /// How long the parts of the last draw took on whichever thread drew it, `(name, time)` — the
     /// draw's half of the frame profile. The draw runs on a copy of the world (often on a thread of
     /// its own), which has no profiler, so it writes here and the next frame's preparation, which

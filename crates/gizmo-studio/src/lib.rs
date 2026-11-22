@@ -9,26 +9,23 @@
 //! # Why an app has a library target
 //!
 //! Studio is not a published library and never will be (`publish = false`) — this target exists so
-//! that **the editor's render path can be reached from a test**. The engine has two of those paths:
-//! the game's deferred renderer in `gizmo::systems::render`, and
-//! [`render_pipeline::execute_render_pipeline`] here. They share their per-frame *setup* on
-//! purpose (lights, cascades, uniform blocks) and differ only in pass recording, but for as long
-//! as studio was a bare binary, nothing on the engine side could observe the studio half: the only
-//! cross-check between the two was a human comparing two windows.
+//! that **the editor's draw can be reached from a test**: `tests/studio_render_pixels.rs` reads
+//! back what the Scene and Game panels show.
 //!
-//! Every drift found in those paths so far — `BakedLit` routed one way and defaulted the other,
-//! the editor's DoF linearising depth against a hardcoded range, a light array read from the raw
-//! `Transform` in one and `GlobalTransform` in the other — was found by reading, not by failing.
-//! A `lib.rs` is the cheapest thing that changes that, and `tests/` next to it is where the parity
-//! checks live.
+//! It was made for a second reason that is gone. The editor had a render path of its own,
+//! [`render_pipeline`] then, beside the game's deferred renderer in `gizmo::systems::render`, and
+//! the only cross-check between the two was a human comparing two windows. Every drift found was
+//! found by reading — `BakedLit` routed one way and defaulted the other, the editor's DoF
+//! linearising depth against a hardcoded range, a light array read from the raw `Transform` in one
+//! and `GlobalTransform` in the other — and `tests/render_parity.rs` held the two side by side.
+//! Since 2026-11-22 both panels are drawn through the game path, and there is one renderer.
 //!
 //! The binary (`main.rs`) is only the entry point: [`run`] boots a [`gizmo::App`](gizmo::prelude::App) window and wires
 //! the setup/update/UI/render hooks to the modules below — on a game, too ([`StudioGame`]).
 
 /// The studio's render hook: editor objects, the scene/game viewports and their render targets.
 pub mod render;
-/// The studio's own render pipeline — the passes it records, separate from the engine's because
-/// it draws into viewport textures rather than the swapchain.
+/// The studio's two panels, both drawn through the game path (`draw_camera_into`).
 pub mod render_pipeline;
 /// Builds the studio's starting scene: the editor camera, the grid, the default light.
 pub mod setup;

@@ -185,26 +185,24 @@ pub fn ui_settings_window(ui: &mut egui::Ui, state: &mut EditorState) {
                 
                 ui.separator();
                 ui.heading("SSAO (Ekran Uzayı Ortam Gölgeleme)");
-                // Disabled because it does nothing here, and a control that silently does nothing
-                // is worse than one that explains itself.
+                // Disabled, with its reason. Until 2026-11-22 it did nothing: the panels drew through
+                // the studio's own forward renderer, which had no G-buffer for SSAO to read. They
+                // draw through the game path now, which draws SSAO as the game has it. A switch of
+                // the editor's own would make the viewport differ from the game, which is what the
+                // move was for; the setting is the renderer's (`Renderer::ssao`), where the game
+                // sets it.
                 //
-                // `Ssao::new` binds the deferred G-buffer's normal target; the editor viewport
-                // draws through the forward pipeline, which produces no such target. Studio was
-                // writing the strength into the SSAO uniform every frame and never recording a
-                // pass to read it, so both widgets have always been inert — the checkbox and a
-                // slider up to 5.0, neither changing a pixel. Making them live means giving the
-                // forward path a depth-normal prepass: a feature, not a fix.
-                //
-                // Kapalı: editör viewport'u forward hattan çiziliyor, SSAO ise deferred
-                // G-buffer'ının normal hedefine bağlı. Açıldığında hiçbir piksel değişmiyordu.
+                // Kapalı: paneller artık oyunun hattından çiziliyor ve SSAO'yu oyunun ayarıyla
+                // gösteriyor. Editöre ait ayrı bir anahtar görünümü oyundan ayırırdı.
                 ui.add_enabled_ui(false, |ui| {
                     ui.checkbox(&mut state.post_process.ssao_enabled, "SSAO Aktif")
                         .on_disabled_hover_text(
-                            "Studio'nun her iki görünümü de (Scene ve Game) forward hattan \
-                             çiziliyor; SSAO ise deferred G-buffer'ın normal hedefini istiyor. \
-                             Bu ayarın burada etkisi yok.\n\n\
-                             Both studio views render through the forward path; SSAO needs the \
-                             deferred G-buffer's normal target, so this setting does nothing here.",
+                            "Scene ve Game panelleri oyunun hattından çiziliyor; SSAO, oyunun \
+                             kendi ayarıyla (Renderer::ssao) görünüyor. Editöre ait ayrı bir \
+                             anahtar görünümü oyundan ayırırdı.\n\n\
+                             Both panels draw through the game path, with SSAO as the game sets \
+                             it (Renderer::ssao). An editor switch of its own would make the \
+                             viewport differ from the game.",
                         );
                 });
                 

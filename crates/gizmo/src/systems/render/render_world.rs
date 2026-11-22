@@ -307,6 +307,8 @@ pub fn render_extractor() -> Extractor {
         .resource::<crate::core::time::Time>()
         .resource::<super::ParticleSpawns>()
         .resource::<crate::renderer::GizmoFrame>()
+        // An editor's own lines, which its Scene panel draws over the game's (`EditorLines`).
+        .resource::<crate::renderer::EditorLines>()
         .resource::<super::WireframeConfig>()
         .resource::<super::visibility_index::VisibilityIndex>()
         .resource::<crate::renderer::screen_fade::ScreenFade>()

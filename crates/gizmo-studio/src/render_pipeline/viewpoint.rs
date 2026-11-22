@@ -1,163 +1,57 @@
-//! Which camera the viewport draws from, and which frustum it culls against.
+//! Which camera the Scene panel draws from, and the game camera's frustum it outlines.
 //!
 //! # Why this is its own file
 //!
-//! Two decisions were buried in the middle of `execute_render_pipeline`, forty lines apart, and
-//! both are the kind that a reader has to reconstruct from `if`s:
+//! **The editor draws from the game camera in play mode and the editor camera otherwise** — but
+//! only if the game camera actually exists, which is the branch nobody thinks about until a scene
+//! without one goes black. It was buried in the middle of a 600-line function once, and is a pure
+//! function of the world and two entity ids, which is what makes the tests at the bottom possible.
 //!
-//! - **The editor draws from the game camera in play mode and the editor camera otherwise** — but
-//!   only if the game camera actually exists, which is the branch nobody thinks about until a
-//!   scene without one goes black.
-//! - **It culls against the GAME camera's frustum even in edit mode.** That is deliberate: it lets
-//!   you fly the editor camera around and watch what the game camera would and would not draw.
-//!   Nothing said so except one line of Turkish in the middle of a 600-line function, and nothing
-//!   checked it.
-//!
-//! Both are pure functions of the world and two entity ids — no GPU, no `StudioState`, no
-//! `Renderer` — which is what makes the tests at the bottom possible. They are the first tests the
-//! editor's render path has ever had for its own camera behaviour.
+//! This file also decided what the Scene panel culled against: the game camera's frustum even in
+//! edit mode, so flying the editor camera around showed what the game would and would not draw.
+//! The panel draws through the game path since 2026-11-22, which culls by the camera it draws from,
+//! as other editors' scene views do (the owner's choice); the game camera's frustum is still
+//! outlined, in green (`EditorLines`).
 
 use gizmo::prelude::*;
-use gizmo::renderer::{CameraFrame, Frustum};
 
-/// Camera `id` as this frame draws it, standing at its `Transform`: with this instant's
-/// `CameraShake` applied by the game path's own `shake_view`, which reads the world and writes
-/// nothing — the camera the game owns is never moved to draw it. Every camera this file builds a
-/// matrix from goes through here, so the viewport, the Game panel and the culling frustum shake
-/// together, as they did when the shake was applied to the camera itself.
-fn shaken(world: &World, id: Entity, transform: &Transform) -> (Vec3, Quat) {
-    gizmo::systems::render::shake_view(world, id, transform.position, transform.rotation)
-}
-
-/// The camera this frame is drawn from, plus what the rest of the pipeline needs from it.
-pub(super) struct Viewpoint {
-    /// Ready for the uniform blocks; carries the jitter-free view-projection.
-    pub(super) camera: CameraFrame,
-    /// Vertical FOV in radians — the cascade fit needs the angle, and `CameraFrame` only carries
-    /// the matrix it produced.
-    pub(super) fov: f32,
-    /// True when the editor is playing or paused, i.e. showing the game rather than the scene.
-    pub(super) is_playing_mode: bool,
-}
-
-/// The camera the frame is drawn from.
-///
-/// Falls back, in order: the game camera when playing and it exists → the editor camera → a
-/// default 0.1..2000 perspective at the origin looking down -Z. That last one is not a nicety: a
-/// freshly created scene has no camera at all for a few frames, and the alternative to a default
-/// is a panic in the render loop.
-pub(super) fn resolve(
-    world: &World,
-    editor_camera: Entity,
-    game_camera: Entity,
-    aspect: f32,
-    exposure: f32,
-) -> Viewpoint {
-    let cameras = world.query::<&Camera>();
-    let transforms = world.query::<&Transform>();
-
-    let is_playing_mode = world
+/// Whether the editor is playing or paused, i.e. showing the game rather than the scene.
+pub(super) fn is_playing(world: &World) -> bool {
+    world
         .get_resource::<gizmo::editor::EditorState>()
-        .map(|ed| ed.is_playing() || ed.mode == gizmo::editor::EditorMode::Paused)
-        .unwrap_or(false);
+        .is_some_and(|ed| ed.is_playing() || ed.mode == gizmo::editor::EditorMode::Paused)
+}
 
-    let active = if is_playing_mode && cameras.get(game_camera).is_some() {
+/// The camera the Scene panel is drawn from: the game camera when playing and it exists, the
+/// editor camera otherwise.
+pub(super) fn scene_camera(world: &World, editor_camera: Entity, game_camera: Entity) -> Entity {
+    let has_camera = world.query::<&Camera>().get(game_camera).is_some();
+    if is_playing(world) && has_camera {
         game_camera
     } else {
         editor_camera
-    };
-
-    let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
-    let mut view_mat = Mat4::from_translation(Vec3::ZERO);
-    let mut position = Vec3::ZERO;
-    let mut near = 0.1f32;
-    let mut far = 2000.0f32;
-    let mut fov = std::f32::consts::FRAC_PI_4;
-    let mut forward = Vec3::new(0.0, 0.0, -1.0);
-
-    if let (Some(cam), Some(trans)) = (cameras.get(active), transforms.get(active)) {
-        let (at, turn) = shaken(world, active, trans);
-        proj = cam.get_projection(aspect);
-        view_mat = Camera::view(at, turn);
-        position = at;
-        near = cam.near;
-        far = cam.far;
-        fov = cam.fov;
-        forward = Camera::front(turn);
-    }
-
-    Viewpoint {
-        camera: CameraFrame { view_proj: proj * view_mat, position, forward, near, far, exposure },
-        fov,
-        is_playing_mode,
     }
 }
 
-/// The frustum this frame culls against.
-///
-/// **The game camera's, even in edit mode.** Flying the editor camera around therefore does not
-/// change what is culled, which is the point: you can watch what the game would draw from where it
-/// stands. In play mode the two cameras are the same one, so the question does not arise; with no
-/// game camera in the scene it falls back to the drawing camera's own frustum.
-pub(super) fn culling_frustum(
-    world: &World,
-    game_camera: Entity,
-    aspect: f32,
-    viewpoint: &Viewpoint,
-) -> Frustum {
-    let drawn = Frustum::from_matrix(&viewpoint.camera.view_proj);
-    if viewpoint.is_playing_mode {
-        return drawn;
-    }
+/// The game camera's view-projection at `aspect`, as this frame draws it (its `CameraShake`
+/// applied by the game path's own `shake_view`, which writes nothing). `None` with no game camera.
+pub(super) fn game_view_proj(world: &World, game_camera: Entity, aspect: f32) -> Option<Mat4> {
     let cameras = world.query::<&Camera>();
     let transforms = world.query::<&Transform>();
-    match (cameras.get(game_camera), transforms.get(game_camera)) {
-        (Some(cam), Some(trans)) => {
-            let (at, turn) = shaken(world, game_camera, trans);
-            let vp = cam.get_projection(aspect) * Camera::view(at, turn);
-            Frustum::from_matrix(&vp)
-        }
-        _ => drawn,
-    }
-}
-
-/// The game camera's view-projection, for the wire box the gizmo pass draws around what the game
-/// would see. `None` in play mode (you are already looking through it) or with no game camera.
-pub(super) fn game_view_proj(
-    world: &World,
-    game_camera: Entity,
-    aspect: f32,
-    viewpoint: &Viewpoint,
-) -> Option<Mat4> {
-    if viewpoint.is_playing_mode {
-        return None;
-    }
-    let cameras = world.query::<&Camera>();
-    let transforms = world.query::<&Transform>();
-    match (cameras.get(game_camera), transforms.get(game_camera)) {
-        (Some(cam), Some(trans)) => {
-            let (at, turn) = shaken(world, game_camera, trans);
-            Some(cam.get_projection(aspect) * Camera::view(at, turn))
-        }
-        _ => None,
-    }
+    let (cam, trans) = (cameras.get(game_camera)?, transforms.get(game_camera)?);
+    let (at, turn) = gizmo::systems::render::shake_view(world, game_camera, trans.position, trans.rotation);
+    Some(cam.get_projection(aspect) * Camera::view(at, turn))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const ASPECT: f32 = 16.0 / 9.0;
-
-    /// Spawns a camera at `pos` with a distinctive far plane, so which one was picked is readable
-    /// from the result.
-    fn camera_at(world: &mut World, pos: Vec3, far: f32) -> Entity {
+    /// Spawns a camera at `pos`.
+    fn camera_at(world: &mut World, pos: Vec3) -> Entity {
         let e = world.spawn();
         world.add_component(e, Transform::new(pos));
-        world.add_component(
-            e,
-            Camera::new(std::f32::consts::FRAC_PI_4, 0.1, far, false),
-        );
+        world.add_component(e, Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 100.0, false));
         e
     }
 
@@ -172,111 +66,44 @@ mod tests {
     #[test]
     fn edit_mode_draws_from_the_editor_camera() {
         let mut world = World::new();
-        let editor = camera_at(&mut world, Vec3::new(1.0, 0.0, 0.0), 111.0);
-        let game = camera_at(&mut world, Vec3::new(9.0, 0.0, 0.0), 999.0);
+        let editor = camera_at(&mut world, Vec3::new(1.0, 0.0, 0.0));
+        let game = camera_at(&mut world, Vec3::new(9.0, 0.0, 0.0));
         playing(&mut world, false);
-
-        let v = resolve(&world, editor, game, ASPECT, 1.0);
-        assert_eq!(v.camera.far, 111.0, "the editor camera should be the one drawn from");
-        assert_eq!(v.camera.position, Vec3::new(1.0, 0.0, 0.0));
-        assert!(!v.is_playing_mode);
+        assert_eq!(scene_camera(&world, editor, game), editor);
+        assert!(!is_playing(&world));
     }
 
     #[test]
     fn play_mode_draws_from_the_game_camera() {
         let mut world = World::new();
-        let editor = camera_at(&mut world, Vec3::new(1.0, 0.0, 0.0), 111.0);
-        let game = camera_at(&mut world, Vec3::new(9.0, 0.0, 0.0), 999.0);
+        let editor = camera_at(&mut world, Vec3::new(1.0, 0.0, 0.0));
+        let game = camera_at(&mut world, Vec3::new(9.0, 0.0, 0.0));
         playing(&mut world, true);
-
-        let v = resolve(&world, editor, game, ASPECT, 1.0);
-        assert_eq!(v.camera.far, 999.0, "play mode should show what the game camera sees");
-        assert!(v.is_playing_mode);
+        assert_eq!(scene_camera(&world, editor, game), game, "play mode shows what the game camera sees");
+        assert!(is_playing(&world));
     }
 
     /// The branch that decides whether a scene without a game camera goes black.
     #[test]
     fn play_mode_without_a_game_camera_falls_back_to_the_editor_camera() {
         let mut world = World::new();
-        let editor = camera_at(&mut world, Vec3::new(1.0, 0.0, 0.0), 111.0);
+        let editor = camera_at(&mut world, Vec3::new(1.0, 0.0, 0.0));
         playing(&mut world, true);
-
         // An id no entity has.
-        let v = resolve(&world, editor, Entity::new(4242, 0), ASPECT, 1.0);
-        assert_eq!(v.camera.far, 111.0, "a missing game camera must not blank the viewport");
-        assert!(v.is_playing_mode, "the mode is still play — only the camera fell back");
+        assert_eq!(scene_camera(&world, editor, Entity::new(4242, 0)), editor, "a missing game camera must not blank the viewport");
     }
 
-    /// A scene with no cameras at all still renders something rather than panicking.
+    /// The frustum outline is the game camera's, from where it stands, and there is none without one.
     #[test]
-    fn no_camera_at_all_yields_the_documented_default() {
-        let world = World::new();
-        let v = resolve(&world, Entity::new(1, 0), Entity::new(2, 0), ASPECT, 1.25);
-        assert_eq!((v.camera.near, v.camera.far), (0.1, 2000.0));
-        assert_eq!(v.camera.position, Vec3::ZERO);
-        assert_eq!(v.camera.forward, Vec3::new(0.0, 0.0, -1.0));
-        assert_eq!(v.fov, std::f32::consts::FRAC_PI_4);
-        assert_eq!(v.camera.exposure, 1.25, "exposure comes from the caller, not the camera");
-    }
-
-    /// The editor's deliberate oddity, tested for the first time: culling follows the GAME camera
-    /// while the picture follows the editor camera.
-    #[test]
-    fn edit_mode_culls_against_the_game_camera_not_the_one_it_draws_from() {
+    fn the_outlined_frustum_is_the_game_cameras() {
         let mut world = World::new();
-        // Editor camera at the origin looking down -Z; game camera far away looking the same way.
-        let editor = camera_at(&mut world, Vec3::ZERO, 500.0);
-        let game = camera_at(&mut world, Vec3::new(0.0, 0.0, 900.0), 500.0);
-        playing(&mut world, false);
-
-        let v = resolve(&world, editor, game, ASPECT, 1.0);
-        let culling = culling_frustum(&world, game, ASPECT, &v);
-        let drawn = Frustum::from_matrix(&v.camera.view_proj);
-
-        // A point just in front of the EDITOR camera: drawn from, but nowhere near the game one.
-        let near_editor = gizmo::math::Aabb::new(Vec3::new(-1.0, -1.0, -11.0), Vec3::new(1.0, 1.0, -9.0));
-        assert!(
-            drawn.intersects_aabb(near_editor),
-            "the point should be inside the camera actually being drawn from"
-        );
-        assert!(
-            !culling.intersects_aabb(near_editor),
-            "culling must follow the GAME camera in edit mode — that is what makes the editor \
-             able to show you what the game would drop"
-        );
-    }
-
-    #[test]
-    fn play_mode_culls_against_the_camera_it_draws_from() {
-        let mut world = World::new();
-        let editor = camera_at(&mut world, Vec3::ZERO, 500.0);
-        let game = camera_at(&mut world, Vec3::new(0.0, 0.0, 900.0), 500.0);
-        playing(&mut world, true);
-
-        let v = resolve(&world, editor, game, ASPECT, 1.0);
-        let culling = culling_frustum(&world, game, ASPECT, &v);
-        // Both are the game camera now, so a box in front of it is visible to both.
-        let in_front = gizmo::math::Aabb::new(
-            Vec3::new(-1.0, -1.0, 889.0),
-            Vec3::new(1.0, 1.0, 891.0),
-        );
-        assert_eq!(
-            culling.intersects_aabb(in_front),
-            Frustum::from_matrix(&v.camera.view_proj).intersects_aabb(in_front),
-            "in play mode the culling and drawing frusta are the same camera"
-        );
-    }
-
-    /// With no game camera to borrow a frustum from, culling falls back to what is drawn.
-    #[test]
-    fn without_a_game_camera_culling_follows_the_drawn_camera() {
-        let mut world = World::new();
-        let editor = camera_at(&mut world, Vec3::ZERO, 500.0);
-        playing(&mut world, false);
-
-        let v = resolve(&world, editor, Entity::new(4242, 0), ASPECT, 1.0);
-        let culling = culling_frustum(&world, Entity::new(4242, 0), ASPECT, &v);
-        let boxed = gizmo::math::Aabb::new(Vec3::new(-1.0, -1.0, -11.0), Vec3::new(1.0, 1.0, -9.0));
-        assert!(culling.intersects_aabb(boxed));
+        let game = camera_at(&mut world, Vec3::new(9.0, 0.0, 0.0));
+        let vp = game_view_proj(&world, game, 16.0 / 9.0).expect("a game camera");
+        // The camera's own position maps to the near plane's centre line: w = 0 there is behind,
+        // so test a point straight ahead of it instead — inside the frustum.
+        let ahead = vp * Vec4::new(9.0, 0.0, -10.0, 1.0);
+        let ndc = ahead.truncate() / ahead.w;
+        assert!(ahead.w > 0.0 && ndc.x.abs() <= 1.0 && ndc.y.abs() <= 1.0, "a point ahead of the game camera is outside its frustum: {ndc:?}");
+        assert!(game_view_proj(&world, Entity::new(4242, 0), 1.0).is_none());
     }
 }

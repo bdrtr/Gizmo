@@ -69,8 +69,22 @@ pub fn record_taa_and_overlays(
     // Render Gizmos AFTER TAA to avoid ghosting/washing out dynamic overlays. What the frame's
     // preparation took from the game's `Gizmos` (`GizmoFrame`): the draw reads it and leaves the
     // game's lines alone — ending their frame is `prepare_frame`'s.
-    if let Some(frame) = world.get_resource::<crate::renderer::GizmoFrame>().filter(|_| debug_lines) {
-        let gizmos = frame.gizmos();
+    // An editor's view draws the editor's own lines over them (`EditorLines`), and no other view does.
+    let frame = world.get_resource::<crate::renderer::GizmoFrame>().filter(|_| debug_lines);
+    let editor = world
+        .get_resource::<crate::renderer::EditorLines>()
+        .filter(|_| debug_lines && renderer.draws_editor_furniture);
+    let joined;
+    let lines = match (frame.as_deref(), editor.as_deref()) {
+        (Some(frame), None) => Some(frame.gizmos()),
+        (None, Some(editor)) => Some(&editor.0),
+        (Some(frame), Some(editor)) => {
+            joined = frame.gizmos().joined(&editor.0);
+            Some(&joined)
+        }
+        (None, None) => None,
+    };
+    if let Some(gizmos) = lines {
         if let Some(debug_renderer) = &mut renderer.debug_renderer {
             debug_renderer.update(&renderer.device, &renderer.queue, gizmos);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

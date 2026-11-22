@@ -459,6 +459,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The studio's Scene panel is drawn through the game path too, and the studio's own renderer is gone.**
+  - The panel is `draw_camera_into` with an editor's `ViewOptions`: the furniture, the toolbar's
+    shading, and the editor's lines.
+  - Gone with the old path: its batcher, cull loop, shadow, main and transparent passes, some
+    1 800 lines (`render_pipeline/{batching,passes}.rs` and most of `mod.rs`).
+  - Routed through the game path as an experiment, 27 of the 30 pixel tests passed as they were.
+    The other three asked for the `ViewOptions` that went in beforehand.
+  - **The editor's own lines** (`gizmo::renderer::EditorLines`, new) are drawn into the Scene panel
+    alone. They are the game camera's frustum while editing and the collider overlay
+    (`physics_debug_lines`, new, which `physics_debug_system` now calls). The overlay was written
+    into the game's `Gizmos`, which the game path draws into the Game panel too.
+  - `ViewOptions::without_grid()` (`Renderer::hides_grid`) carries the grid preference.
+  - **Culled by the camera it draws from** (the owner's choice, 2026-11-22). While editing, the Scene
+    panel culled against the game camera's frustum, so what the game camera did not see vanished
+    from the editor. A red box was also drawn around every object that passed. Both are gone; the
+    game camera's frustum is still outlined in green.
+  - **`tests/render_parity.rs`** compared the two paths, and nine of its tests and its capability
+    inventory have nothing left to compare. They are replaced by
+    `the_studio_draws_both_panels_through_the_game_path`: both panels call `draw_camera_into`, and
+    the studio's render code sets no pipeline and begins no pass but the window's clear.
+  - New pixel tests cover what had none: the furniture, the collider overlay, and a hidden Game
+    panel left untouched.
+  - The shadow-only test now counts only a real draw (more than 8/255). On the game path a
+    shadow-only caster is in the box the cascades are fitted to, and moves the frame's lighting by
+    1/255 at most.
+  - The editor's SSAO switch stays disabled, with its true reason: the panels show SSAO as the game
+    sets it.
+
 - **Every crate declares the MSRV.** `[workspace.package]` said `rust-version = "1.96"` and the `msrv` CI job
   builds on it, but no crate inherited it, so crates.io showed none and a dependent's MSRV-aware resolver saw
   none. All workspace members now carry `rust-version.workspace = true`, and `gizmo-engine` the workspace's

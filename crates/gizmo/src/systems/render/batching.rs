@@ -790,6 +790,7 @@ pub(super) fn collect_draw_items(
             skip_mirrors: renderer.skip_mirrors,
             skip_sky: renderer.skip_sky,
             furniture: renderer.draws_editor_furniture,
+            hides_grid: renderer.hides_grid,
             wire_any,
             wire_global,
             wire_on: &wire_on,
@@ -934,6 +935,8 @@ struct Walk<'a> {
     skip_sky: bool,
     /// `Renderer::draws_editor_furniture`: this view draws `EditorOnly` objects too.
     furniture: bool,
+    /// `Renderer::hides_grid`: this view leaves the `Grid` material out.
+    hides_grid: bool,
     wire_any: bool,
     wire_global: bool,
     wire_on: &'a gizmo_core::query::Query<'a, &'a crate::renderer::components::Wireframe>,
@@ -1017,7 +1020,7 @@ impl Walk<'_> {
     /// way, when it has no entry, or when it is drawn at a detail level whose batch it has not been
     /// to yet or that has been let go.
     fn kept_draw(&mut self, cache: &mut RenderCache, renderer: &mut Renderer, e: Entity, mirror: bool, is_occluder: bool) -> bool {
-        let Walk { hidden, hidden_any, cam_pos, velocity_read, skip_mirrors, skip_sky, .. } = *self;
+        let Walk { hidden, hidden_any, cam_pos, velocity_read, skip_mirrors, skip_sky, hides_grid, .. } = *self;
         let Some(kept) = cache.kept.get(e, mirror) else { return false };
         let p = &kept.prepared;
         if hidden_any && hidden.contains(&e) {
@@ -1027,6 +1030,9 @@ impl Walk<'_> {
             return true;
         }
         if skip_sky && (p.routing.is_skybox || p.routing.is_backdrop) {
+            return true;
+        }
+        if hides_grid && p.routing.is_grid {
             return true;
         }
         let lod = p.lod_for(cam_pos);
@@ -1076,6 +1082,7 @@ impl Walk<'_> {
             velocity_read,
             skip_mirrors,
             skip_sky,
+            hides_grid,
             wire_any,
             wire_global,
             wire_on,
@@ -1099,6 +1106,10 @@ impl Walk<'_> {
         let routing = prepared.routing;
         // An irradiance volume's capture is the light bounced off the scene, not the sky's.
         if skip_sky && (routing.is_skybox || routing.is_backdrop) {
+            return;
+        }
+        // An editor whose grid preference is off (`Renderer::hides_grid`).
+        if hides_grid && routing.is_grid {
             return;
         }
         // Kept unless part of it follows the camera or the frame: a backdrop's box and model,

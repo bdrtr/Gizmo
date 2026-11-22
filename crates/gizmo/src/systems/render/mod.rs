@@ -464,6 +464,7 @@ pub fn draw_camera_into(
         renderer.with_view_history(Some(camera), |renderer| {
             // For this view's own draw only: its mirrors, captured above, are the game's.
             renderer.draws_editor_furniture = options.furniture;
+            renderer.hides_grid = options.no_grid;
             let game_shading = renderer.shading_mode;
             if let Some(shading) = options.shading {
                 renderer.shading_mode = shading.mode();
@@ -481,6 +482,7 @@ pub fn draw_camera_into(
                 None,
             );
             renderer.draws_editor_furniture = false;
+            renderer.hides_grid = false;
             renderer.shading_mode = game_shading;
             renderer.wire_only = false;
         });
@@ -500,6 +502,9 @@ pub struct ViewOptions {
     /// How the view is shaded, when not the way the game shades it (`Renderer::shading_mode`): an
     /// editor's toolbar.
     pub shading: Option<ViewShading>,
+    /// Leave out what draws with the `Grid` material (`Renderer::hides_grid`): an editor whose grid
+    /// preference is off.
+    pub no_grid: bool,
 }
 
 /// One of the pictures an editor's toolbar switches its view between.
@@ -548,6 +553,13 @@ impl ViewOptions {
     #[must_use]
     pub fn with_shading(mut self, shading: ViewShading) -> Self {
         self.shading = Some(shading);
+        self
+    }
+
+    /// Without the grid: what draws with the `Grid` material is left out.
+    #[must_use]
+    pub fn without_grid(mut self) -> Self {
+        self.no_grid = true;
         self
     }
 }

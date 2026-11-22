@@ -11,317 +11,325 @@ use gizmo_physics_core::{Collider, ColliderShape, Transform, components::GpuPhys
 use gizmo_physics_rigid::components::RigidBody;
 
 #[cfg(feature = "render")]
-/// Draws the physics debug view: every collider's shape, plus the velocity and contact gizmos
-/// on top of it.
+/// Draws the physics debug view into the world's `Gizmos`: every collider's shape, plus the
+/// velocity and contact gizmos on top of it. [`physics_debug_lines`] draws the same into lines of
+/// the caller's.
 pub fn physics_debug_system(world: &crate::core::World) {
     if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
-        fn draw_collider(
-            trans: &Transform,
-            col: &Collider,
-            color: [f32; 4],
-            gizmos: &mut crate::renderer::Gizmos,
-        ) {
-            match &col.shape {
-                gizmo_physics_core::ColliderShape::Box(b) => {
-                    let h = b.half_extents;
-                    let r = trans.rotation;
-                    let p = trans.position;
-                    let p0 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, -h.z));
-                    let p1 = p + r.mul_vec3(Vec3::new(h.x, -h.y, -h.z));
-                    let p2 = p + r.mul_vec3(Vec3::new(h.x, h.y, -h.z));
-                    let p3 = p + r.mul_vec3(Vec3::new(-h.x, h.y, -h.z));
-                    let p4 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, h.z));
-                    let p5 = p + r.mul_vec3(Vec3::new(h.x, -h.y, h.z));
-                    let p6 = p + r.mul_vec3(Vec3::new(h.x, h.y, h.z));
-                    let p7 = p + r.mul_vec3(Vec3::new(-h.x, h.y, h.z));
+        physics_debug_lines(world, &mut gizmos);
+    }
+}
 
+#[cfg(feature = "render")]
+/// The physics debug view of [`physics_debug_system`], drawn into `gizmos`: an editor's overlay
+/// (`gizmo::renderer::EditorLines`), which is drawn into the editor's own view and not the game's.
+pub fn physics_debug_lines(world: &crate::core::World, gizmos: &mut crate::renderer::Gizmos) {
+    fn draw_collider(
+        trans: &Transform,
+        col: &Collider,
+        color: [f32; 4],
+        gizmos: &mut crate::renderer::Gizmos,
+    ) {
+        match &col.shape {
+            gizmo_physics_core::ColliderShape::Box(b) => {
+                let h = b.half_extents;
+                let r = trans.rotation;
+                let p = trans.position;
+                let p0 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, -h.z));
+                let p1 = p + r.mul_vec3(Vec3::new(h.x, -h.y, -h.z));
+                let p2 = p + r.mul_vec3(Vec3::new(h.x, h.y, -h.z));
+                let p3 = p + r.mul_vec3(Vec3::new(-h.x, h.y, -h.z));
+                let p4 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, h.z));
+                let p5 = p + r.mul_vec3(Vec3::new(h.x, -h.y, h.z));
+                let p6 = p + r.mul_vec3(Vec3::new(h.x, h.y, h.z));
+                let p7 = p + r.mul_vec3(Vec3::new(-h.x, h.y, h.z));
+
+                gizmos.draw_line(p0, p1, color);
+                gizmos.draw_line(p1, p2, color);
+                gizmos.draw_line(p2, p3, color);
+                gizmos.draw_line(p3, p0, color);
+                gizmos.draw_line(p4, p5, color);
+                gizmos.draw_line(p5, p6, color);
+                gizmos.draw_line(p6, p7, color);
+                gizmos.draw_line(p7, p4, color);
+                gizmos.draw_line(p0, p4, color);
+                gizmos.draw_line(p1, p5, color);
+                gizmos.draw_line(p2, p6, color);
+                gizmos.draw_line(p3, p7, color);
+            }
+            gizmo_physics_core::ColliderShape::Sphere(s) => {
+                let r = s.radius;
+                let min = trans.position - Vec3::new(r, r, r);
+                let max = trans.position + Vec3::new(r, r, r);
+                gizmos.draw_box(min, max, color);
+            }
+            gizmo_physics_core::ColliderShape::ConvexHull(ch) => {
+                let r = trans.rotation;
+                let p = trans.position;
+                for face in ch.faces.iter() {
+                    let p0 = p + r.mul_vec3(ch.vertices[face[0] as usize]);
+                    let p1 = p + r.mul_vec3(ch.vertices[face[1] as usize]);
+                    let p2 = p + r.mul_vec3(ch.vertices[face[2] as usize]);
                     gizmos.draw_line(p0, p1, color);
                     gizmos.draw_line(p1, p2, color);
-                    gizmos.draw_line(p2, p3, color);
-                    gizmos.draw_line(p3, p0, color);
-                    gizmos.draw_line(p4, p5, color);
-                    gizmos.draw_line(p5, p6, color);
-                    gizmos.draw_line(p6, p7, color);
-                    gizmos.draw_line(p7, p4, color);
-                    gizmos.draw_line(p0, p4, color);
-                    gizmos.draw_line(p1, p5, color);
-                    gizmos.draw_line(p2, p6, color);
-                    gizmos.draw_line(p3, p7, color);
-                }
-                gizmo_physics_core::ColliderShape::Sphere(s) => {
-                    let r = s.radius;
-                    let min = trans.position - Vec3::new(r, r, r);
-                    let max = trans.position + Vec3::new(r, r, r);
-                    gizmos.draw_box(min, max, color);
-                }
-                gizmo_physics_core::ColliderShape::ConvexHull(ch) => {
-                    let r = trans.rotation;
-                    let p = trans.position;
-                    for face in ch.faces.iter() {
-                        let p0 = p + r.mul_vec3(ch.vertices[face[0] as usize]);
-                        let p1 = p + r.mul_vec3(ch.vertices[face[1] as usize]);
-                        let p2 = p + r.mul_vec3(ch.vertices[face[2] as usize]);
-                        gizmos.draw_line(p0, p1, color);
-                        gizmos.draw_line(p1, p2, color);
-                        gizmos.draw_line(p2, p0, color);
-                    }
-                }
-                gizmo_physics_core::ColliderShape::Compound(shapes) => {
-                    for (local_t, sub_shape) in shapes {
-                        let world_pos = trans.position + trans.rotation.mul_vec3(local_t.position);
-                        let world_rot = trans.rotation * local_t.rotation;
-                        let sub_trans = gizmo_physics_core::Transform {
-                            position: world_pos,
-                            rotation: world_rot,
-                            scale: trans.scale,
-                            ..*trans
-                        };
-                        let temp_col = gizmo_physics_core::Collider::from_shape(*sub_shape.clone());
-                        draw_collider(&sub_trans, &temp_col, color, gizmos);
-                    }
-                }
-                gizmo_physics_core::ColliderShape::Plane(p) => {
-                    // Sonsuz zemin düzlemini büyük düz tel-ızgara olarak çiz ki hitbox görünür olsun.
-                    let n = p.normal.normalize();
-                    let up = if n.y.abs() < 0.99 {
-                        Vec3::new(0.0, 1.0, 0.0)
-                    } else {
-                        Vec3::new(1.0, 0.0, 0.0)
-                    };
-                    let t1 = n.cross(up).normalize();
-                    let t2 = n.cross(t1).normalize();
-                    // Izgara merkezini trans.position'ı düzleme izdüşürerek bul (düzlem: dot(n,x)=distance).
-                    let signed = n.dot(trans.position) - p.distance;
-                    let center = trans.position - n * signed;
-                    let half = 40.0_f32;
-                    let step = 4.0_f32;
-                    let n_lines = (half * 2.0 / step) as i32;
-                    for i in 0..=n_lines {
-                        let o = -half + i as f32 * step;
-                        gizmos.draw_line(center + t1 * o - t2 * half, center + t1 * o + t2 * half, color);
-                        gizmos.draw_line(center + t2 * o - t1 * half, center + t2 * o + t1 * half, color);
-                    }
-                }
-                gizmo_physics_core::ColliderShape::Cylinder(c) => {
-                    // Two rims and the lines between them. Drawn properly rather than left to
-                    // the fallback box below, because the shape exists for wheels and barrels
-                    // — the cases where seeing the real silhouette is the point.
-                    const SEGMENTS: usize = 16;
-                    let axis = trans.rotation.mul_vec3(Vec3::Y) * c.half_height;
-                    let u = trans.rotation.mul_vec3(Vec3::X) * c.radius;
-                    let w = trans.rotation.mul_vec3(Vec3::Z) * c.radius;
-                    let rim = |i: usize, end: f32| {
-                        let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-                        trans.position + axis * end + u * a.cos() + w * a.sin()
-                    };
-                    for i in 0..SEGMENTS {
-                        for end in [1.0, -1.0] {
-                            gizmos.draw_line(rim(i, end), rim(i + 1, end), color);
-                        }
-                        gizmos.draw_line(rim(i, 1.0), rim(i, -1.0), color);
-                    }
-                }
-                gizmo_physics_core::ColliderShape::Cone(c) => {
-                    // One rim and the lines up to the apex — the silhouette that tells a cone
-                    // from the cylinder next to it. The fallback box below would draw the same
-                    // outline for both, which is exactly the confusion this shape was added to
-                    // remove.
-                    const SEGMENTS: usize = 16;
-                    let axis = trans.rotation.mul_vec3(Vec3::Y) * c.half_height;
-                    let u = trans.rotation.mul_vec3(Vec3::X) * c.radius;
-                    let w = trans.rotation.mul_vec3(Vec3::Z) * c.radius;
-                    let apex = trans.position + axis;
-                    let rim = |i: usize| {
-                        let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-                        trans.position - axis + u * a.cos() + w * a.sin()
-                    };
-                    for i in 0..SEGMENTS {
-                        gizmos.draw_line(rim(i), rim(i + 1), color);
-                        gizmos.draw_line(rim(i), apex, color);
-                    }
-                }
-                gizmo_physics_core::ColliderShape::Heightfield(hf) => {
-                    // The field's bounds, not its surface. A terrain's cell edges are tens of
-                    // thousands of lines and would bury the rest of the frame; the box is what a
-                    // debug view of a static body is actually for — is it where I put it, and is
-                    // it as big as I think. The surface itself is on screen already.
-                    let (lo, hi) = (hf.local_aabb.min, hf.local_aabb.max);
-                    let mut corners = [Vec3::ZERO; 8];
-                    for (i, c) in corners.iter_mut().enumerate() {
-                        let local = Vec3::new(
-                            if i & 1 == 0 { lo.x } else { hi.x },
-                            if i & 2 == 0 { lo.y } else { hi.y },
-                            if i & 4 == 0 { lo.z } else { hi.z },
-                        );
-                        *c = trans.position + trans.rotation.mul_vec3(local);
-                    }
-                    for (a, b) in [
-                        (0, 1), (2, 3), (4, 5), (6, 7),
-                        (0, 2), (1, 3), (4, 6), (5, 7),
-                        (0, 4), (1, 5), (2, 6), (3, 7),
-                    ] {
-                        gizmos.draw_line(corners[a], corners[b], color);
-                    }
-                }
-                _ => {
-                    let min = trans.position - Vec3::new(1.0, 1.0, 1.0);
-                    let max = trans.position + Vec3::new(1.0, 1.0, 1.0);
-                    gizmos.draw_box(min, max, color);
+                    gizmos.draw_line(p2, p0, color);
                 }
             }
-        }
-
-        {
-            let q = world.query::<(
-            &gizmo_physics_core::Transform,
-            &gizmo_physics_core::Collider,
-            &gizmo_physics_rigid::components::RigidBody,
-        )>();
-            for (trans, col, rb) in q.iter() {
-                let color = if rb.is_static() {
-                    [0.5, 0.5, 0.5, 1.0]
-                } else if rb.is_sleeping {
-                    [0.9, 0.1, 0.1, 1.0]
+            gizmo_physics_core::ColliderShape::Compound(shapes) => {
+                for (local_t, sub_shape) in shapes {
+                    let world_pos = trans.position + trans.rotation.mul_vec3(local_t.position);
+                    let world_rot = trans.rotation * local_t.rotation;
+                    let sub_trans = gizmo_physics_core::Transform {
+                        position: world_pos,
+                        rotation: world_rot,
+                        scale: trans.scale,
+                        ..*trans
+                    };
+                    let temp_col = gizmo_physics_core::Collider::from_shape(*sub_shape.clone());
+                    draw_collider(&sub_trans, &temp_col, color, gizmos);
+                }
+            }
+            gizmo_physics_core::ColliderShape::Plane(p) => {
+                // Sonsuz zemin düzlemini büyük düz tel-ızgara olarak çiz ki hitbox görünür olsun.
+                let n = p.normal.normalize();
+                let up = if n.y.abs() < 0.99 {
+                    Vec3::new(0.0, 1.0, 0.0)
                 } else {
-                    [0.1, 0.9, 0.1, 1.0]
+                    Vec3::new(1.0, 0.0, 0.0)
                 };
-                draw_collider(trans, col, color, &mut gizmos);
-            }
-        }
-
-        {
-            let q = world.query_filtered::<(&gizmo_physics_core::Transform, &gizmo_physics_core::Collider), crate::core::query::Without<gizmo_physics_rigid::components::RigidBody>>();
-            for (trans, col) in q.iter() {
-                draw_collider(trans, col, [0.5, 0.5, 0.5, 1.0], &mut gizmos);
-            }
-        }
-
-        // --- Phase 5.5: Hitbox / Hurtbox Visuals ---
-        let draw_oriented_box = |trans: &gizmo_physics_core::Transform,
-                                 offset: gizmo_math::Vec3,
-                                 h: gizmo_math::Vec3,
-                                 color: [f32; 4],
-                                 gizmos: &mut crate::renderer::Gizmos| {
-            let p = trans.position + trans.rotation.mul_vec3(offset);
-            let r = trans.rotation;
-            let p0 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, -h.z));
-            let p1 = p + r.mul_vec3(Vec3::new(h.x, -h.y, -h.z));
-            let p2 = p + r.mul_vec3(Vec3::new(h.x, h.y, -h.z));
-            let p3 = p + r.mul_vec3(Vec3::new(-h.x, h.y, -h.z));
-            let p4 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, h.z));
-            let p5 = p + r.mul_vec3(Vec3::new(h.x, -h.y, h.z));
-            let p6 = p + r.mul_vec3(Vec3::new(h.x, h.y, h.z));
-            let p7 = p + r.mul_vec3(Vec3::new(-h.x, h.y, h.z));
-
-            gizmos.draw_line(p0, p1, color);
-            gizmos.draw_line(p1, p2, color);
-            gizmos.draw_line(p2, p3, color);
-            gizmos.draw_line(p3, p0, color);
-            gizmos.draw_line(p4, p5, color);
-            gizmos.draw_line(p5, p6, color);
-            gizmos.draw_line(p6, p7, color);
-            gizmos.draw_line(p7, p4, color);
-            gizmos.draw_line(p0, p4, color);
-            gizmos.draw_line(p1, p5, color);
-            gizmos.draw_line(p2, p6, color);
-            gizmos.draw_line(p3, p7, color);
-        };
-
-        {
-            let q = world.query::<(&gizmo_physics_core::Transform, &gizmo_physics_core::components::Hitbox)>();
-            for (trans, hitbox) in q.iter() {
-                if hitbox.active {
-                    draw_oriented_box(trans, hitbox.offset, hitbox.half_extents, [1.0, 0.0, 0.0, 1.0], &mut gizmos); // RED
+                let t1 = n.cross(up).normalize();
+                let t2 = n.cross(t1).normalize();
+                // Izgara merkezini trans.position'ı düzleme izdüşürerek bul (düzlem: dot(n,x)=distance).
+                let signed = n.dot(trans.position) - p.distance;
+                let center = trans.position - n * signed;
+                let half = 40.0_f32;
+                let step = 4.0_f32;
+                let n_lines = (half * 2.0 / step) as i32;
+                for i in 0..=n_lines {
+                    let o = -half + i as f32 * step;
+                    gizmos.draw_line(center + t1 * o - t2 * half, center + t1 * o + t2 * half, color);
+                    gizmos.draw_line(center + t2 * o - t1 * half, center + t2 * o + t1 * half, color);
                 }
             }
-        }
-
-        {
-            let q = world.query::<(&gizmo_physics_core::Transform, &gizmo_physics_core::components::Hurtbox)>();
-            for (trans, hurtbox) in q.iter() {
-                draw_oriented_box(trans, hurtbox.offset, hurtbox.half_extents, [0.0, 1.0, 0.0, 1.0], &mut gizmos); // GREEN
-            }
-        }
-
-        #[cfg(feature = "physics-soft")]
-        let soft_color = [1.0, 0.4, 0.8, 1.0]; // Pinkish for soft body
-        #[cfg(feature = "physics-soft")]
-        {
-            let q = world.query::<&gizmo_physics_soft::SoftBodyMesh>();
-            for sm in q.iter() {
-                for elem in &sm.elements {
-                    let p0 = sm.nodes[elem.node_indices[0] as usize].position;
-                    let p1 = sm.nodes[elem.node_indices[1] as usize].position;
-                    let p2 = sm.nodes[elem.node_indices[2] as usize].position;
-                    let p3 = sm.nodes[elem.node_indices[3] as usize].position;
-
-                    // 6 edges of a tetrahedron
-                    gizmos.draw_line(p0, p1, soft_color);
-                    gizmos.draw_line(p0, p2, soft_color);
-                    gizmos.draw_line(p0, p3, soft_color);
-                    gizmos.draw_line(p1, p2, soft_color);
-                    gizmos.draw_line(p1, p3, soft_color);
-                    gizmos.draw_line(p2, p3, soft_color);
+            gizmo_physics_core::ColliderShape::Cylinder(c) => {
+                // Two rims and the lines between them. Drawn properly rather than left to
+                // the fallback box below, because the shape exists for wheels and barrels
+                // — the cases where seeing the real silhouette is the point.
+                const SEGMENTS: usize = 16;
+                let axis = trans.rotation.mul_vec3(Vec3::Y) * c.half_height;
+                let u = trans.rotation.mul_vec3(Vec3::X) * c.radius;
+                let w = trans.rotation.mul_vec3(Vec3::Z) * c.radius;
+                let rim = |i: usize, end: f32| {
+                    let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+                    trans.position + axis * end + u * a.cos() + w * a.sin()
+                };
+                for i in 0..SEGMENTS {
+                    for end in [1.0, -1.0] {
+                        gizmos.draw_line(rim(i, end), rim(i + 1, end), color);
+                    }
+                    gizmos.draw_line(rim(i, 1.0), rim(i, -1.0), color);
                 }
             }
+            gizmo_physics_core::ColliderShape::Cone(c) => {
+                // One rim and the lines up to the apex — the silhouette that tells a cone
+                // from the cylinder next to it. The fallback box below would draw the same
+                // outline for both, which is exactly the confusion this shape was added to
+                // remove.
+                const SEGMENTS: usize = 16;
+                let axis = trans.rotation.mul_vec3(Vec3::Y) * c.half_height;
+                let u = trans.rotation.mul_vec3(Vec3::X) * c.radius;
+                let w = trans.rotation.mul_vec3(Vec3::Z) * c.radius;
+                let apex = trans.position + axis;
+                let rim = |i: usize| {
+                    let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+                    trans.position - axis + u * a.cos() + w * a.sin()
+                };
+                for i in 0..SEGMENTS {
+                    gizmos.draw_line(rim(i), rim(i + 1), color);
+                    gizmos.draw_line(rim(i), apex, color);
+                }
+            }
+            gizmo_physics_core::ColliderShape::Heightfield(hf) => {
+                // The field's bounds, not its surface. A terrain's cell edges are tens of
+                // thousands of lines and would bury the rest of the frame; the box is what a
+                // debug view of a static body is actually for — is it where I put it, and is
+                // it as big as I think. The surface itself is on screen already.
+                let (lo, hi) = (hf.local_aabb.min, hf.local_aabb.max);
+                let mut corners = [Vec3::ZERO; 8];
+                for (i, c) in corners.iter_mut().enumerate() {
+                    let local = Vec3::new(
+                        if i & 1 == 0 { lo.x } else { hi.x },
+                        if i & 2 == 0 { lo.y } else { hi.y },
+                        if i & 4 == 0 { lo.z } else { hi.z },
+                    );
+                    *c = trans.position + trans.rotation.mul_vec3(local);
+                }
+                for (a, b) in [
+                    (0, 1), (2, 3), (4, 5), (6, 7),
+                    (0, 2), (1, 3), (4, 6), (5, 7),
+                    (0, 4), (1, 5), (2, 6), (3, 7),
+                ] {
+                    gizmos.draw_line(corners[a], corners[b], color);
+                }
+            }
+            _ => {
+                let min = trans.position - Vec3::new(1.0, 1.0, 1.0);
+                let max = trans.position + Vec3::new(1.0, 1.0, 1.0);
+                gizmos.draw_box(min, max, color);
+            }
         }
+    }
 
-        // --- Phase 6.1: Süspansiyon Raycast Çizgisi + Kuvvet Okları ---
-        #[cfg(feature = "physics-dynamics")]
-        {
-            let q = world.query::<(
-            &gizmo_physics_core::Transform,
-            &gizmo_physics_dynamics::VehicleController,
-        )>();
-            for (trans, vehicle) in q.iter() {
-                for wheel in &vehicle.wheels {
-                    let attach_world =
-                        trans.position + trans.rotation.mul_vec3(wheel.attachment_local_pos);
-                    let ray_dir = trans.rotation.mul_vec3(wheel.direction_local).normalize();
-                    let ray_end = attach_world
-                        + ray_dir
-                            * (wheel.suspension_rest_length
-                                + wheel.suspension_max_travel
-                                + wheel.radius);
+    {
+        let q = world.query::<(
+        &gizmo_physics_core::Transform,
+        &gizmo_physics_core::Collider,
+        &gizmo_physics_rigid::components::RigidBody,
+    )>();
+        for (trans, col, rb) in q.iter() {
+            let color = if rb.is_static() {
+                [0.5, 0.5, 0.5, 1.0]
+            } else if rb.is_sleeping {
+                [0.9, 0.1, 0.1, 1.0]
+            } else {
+                [0.1, 0.9, 0.1, 1.0]
+            };
+            draw_collider(trans, col, color, gizmos);
+        }
+    }
 
-                    // Draw raycast maximum extent (Yellow line)
-                    gizmos.draw_line(attach_world, ray_end, [1.0, 1.0, 0.0, 1.0]);
+    {
+        let q = world.query_filtered::<(&gizmo_physics_core::Transform, &gizmo_physics_core::Collider), crate::core::query::Without<gizmo_physics_rigid::components::RigidBody>>();
+        for (trans, col) in q.iter() {
+            draw_collider(trans, col, [0.5, 0.5, 0.5, 1.0], gizmos);
+        }
+    }
 
-                    if wheel.is_grounded {
-                        if let Some(hit) = &wheel.ground_hit {
-                            // Kuvvet oku (Mavi) - sadece uzunluğu normalize edip görselleştirmek için / 10000 kullanıyoruz
-                            let force_dir = -ray_dir;
-                            let force_len = (wheel.suspension_force / 10000.0).clamp(0.1, 2.0);
-                            let arrow_end = hit.point + force_dir * force_len;
-                            gizmos.draw_line(hit.point, arrow_end, [0.0, 0.0, 1.0, 1.0]);
+    // --- Phase 5.5: Hitbox / Hurtbox Visuals ---
+    let draw_oriented_box = |trans: &gizmo_physics_core::Transform,
+                             offset: gizmo_math::Vec3,
+                             h: gizmo_math::Vec3,
+                             color: [f32; 4],
+                             gizmos: &mut crate::renderer::Gizmos| {
+        let p = trans.position + trans.rotation.mul_vec3(offset);
+        let r = trans.rotation;
+        let p0 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, -h.z));
+        let p1 = p + r.mul_vec3(Vec3::new(h.x, -h.y, -h.z));
+        let p2 = p + r.mul_vec3(Vec3::new(h.x, h.y, -h.z));
+        let p3 = p + r.mul_vec3(Vec3::new(-h.x, h.y, -h.z));
+        let p4 = p + r.mul_vec3(Vec3::new(-h.x, -h.y, h.z));
+        let p5 = p + r.mul_vec3(Vec3::new(h.x, -h.y, h.z));
+        let p6 = p + r.mul_vec3(Vec3::new(h.x, h.y, h.z));
+        let p7 = p + r.mul_vec3(Vec3::new(-h.x, h.y, h.z));
 
-                            // Mevcut süspansiyon uzunluğu + tekerlek merkezi çizgisi (Turuncu)
-                            let wheel_center = attach_world + ray_dir * wheel.suspension_length;
-                            gizmos.draw_line(wheel_center, hit.point, [1.0, 0.5, 0.0, 1.0]);
-                        }
+        gizmos.draw_line(p0, p1, color);
+        gizmos.draw_line(p1, p2, color);
+        gizmos.draw_line(p2, p3, color);
+        gizmos.draw_line(p3, p0, color);
+        gizmos.draw_line(p4, p5, color);
+        gizmos.draw_line(p5, p6, color);
+        gizmos.draw_line(p6, p7, color);
+        gizmos.draw_line(p7, p4, color);
+        gizmos.draw_line(p0, p4, color);
+        gizmos.draw_line(p1, p5, color);
+        gizmos.draw_line(p2, p6, color);
+        gizmos.draw_line(p3, p7, color);
+    };
+
+    {
+        let q = world.query::<(&gizmo_physics_core::Transform, &gizmo_physics_core::components::Hitbox)>();
+        for (trans, hitbox) in q.iter() {
+            if hitbox.active {
+                draw_oriented_box(trans, hitbox.offset, hitbox.half_extents, [1.0, 0.0, 0.0, 1.0], gizmos); // RED
+            }
+        }
+    }
+
+    {
+        let q = world.query::<(&gizmo_physics_core::Transform, &gizmo_physics_core::components::Hurtbox)>();
+        for (trans, hurtbox) in q.iter() {
+            draw_oriented_box(trans, hurtbox.offset, hurtbox.half_extents, [0.0, 1.0, 0.0, 1.0], gizmos); // GREEN
+        }
+    }
+
+    #[cfg(feature = "physics-soft")]
+    let soft_color = [1.0, 0.4, 0.8, 1.0]; // Pinkish for soft body
+    #[cfg(feature = "physics-soft")]
+    {
+        let q = world.query::<&gizmo_physics_soft::SoftBodyMesh>();
+        for sm in q.iter() {
+            for elem in &sm.elements {
+                let p0 = sm.nodes[elem.node_indices[0] as usize].position;
+                let p1 = sm.nodes[elem.node_indices[1] as usize].position;
+                let p2 = sm.nodes[elem.node_indices[2] as usize].position;
+                let p3 = sm.nodes[elem.node_indices[3] as usize].position;
+
+                // 6 edges of a tetrahedron
+                gizmos.draw_line(p0, p1, soft_color);
+                gizmos.draw_line(p0, p2, soft_color);
+                gizmos.draw_line(p0, p3, soft_color);
+                gizmos.draw_line(p1, p2, soft_color);
+                gizmos.draw_line(p1, p3, soft_color);
+                gizmos.draw_line(p2, p3, soft_color);
+            }
+        }
+    }
+
+    // --- Phase 6.1: Süspansiyon Raycast Çizgisi + Kuvvet Okları ---
+    #[cfg(feature = "physics-dynamics")]
+    {
+        let q = world.query::<(
+        &gizmo_physics_core::Transform,
+        &gizmo_physics_dynamics::VehicleController,
+    )>();
+        for (trans, vehicle) in q.iter() {
+            for wheel in &vehicle.wheels {
+                let attach_world =
+                    trans.position + trans.rotation.mul_vec3(wheel.attachment_local_pos);
+                let ray_dir = trans.rotation.mul_vec3(wheel.direction_local).normalize();
+                let ray_end = attach_world
+                    + ray_dir
+                        * (wheel.suspension_rest_length
+                            + wheel.suspension_max_travel
+                            + wheel.radius);
+
+                // Draw raycast maximum extent (Yellow line)
+                gizmos.draw_line(attach_world, ray_end, [1.0, 1.0, 0.0, 1.0]);
+
+                if wheel.is_grounded {
+                    if let Some(hit) = &wheel.ground_hit {
+                        // Kuvvet oku (Mavi) - sadece uzunluğu normalize edip görselleştirmek için / 10000 kullanıyoruz
+                        let force_dir = -ray_dir;
+                        let force_len = (wheel.suspension_force / 10000.0).clamp(0.1, 2.0);
+                        let arrow_end = hit.point + force_dir * force_len;
+                        gizmos.draw_line(hit.point, arrow_end, [0.0, 0.0, 1.0, 1.0]);
+
+                        // Mevcut süspansiyon uzunluğu + tekerlek merkezi çizgisi (Turuncu)
+                        let wheel_center = attach_world + ray_dir * wheel.suspension_length;
+                        gizmos.draw_line(wheel_center, hit.point, [1.0, 0.5, 0.0, 1.0]);
                     }
                 }
             }
         }
+    }
 
-        // (Ölü rigid `Vehicle` süspansiyon debug-draw bloğu kaldırıldı — o araç sistemi silindi;
-        // kanonik dynamics `VehicleController` debug-draw'u yukarıda.)
+    // (Ölü rigid `Vehicle` süspansiyon debug-draw bloğu kaldırıldı — o araç sistemi silindi;
+    // kanonik dynamics `VehicleController` debug-draw'u yukarıda.)
 
-        // --- Phase 6.2: Temas Normalleri ve Penetrasyon Derinliği ---
-        if let Some(phys_world) = world.get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
-            for event in phys_world.collision_events() {
-                for contact in &event.contact_points {
-                    let p1 = contact.point;
-                    let p2 = contact.point + contact.normal * 0.5; // Normal arrow
-                    gizmos.draw_line(p1, p2, [1.0, 0.0, 0.0, 1.0]); // Red normal
+    // --- Phase 6.2: Temas Normalleri ve Penetrasyon Derinliği ---
+    if let Some(phys_world) = world.get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
+        for event in phys_world.collision_events() {
+            for contact in &event.contact_points {
+                let p1 = contact.point;
+                let p2 = contact.point + contact.normal * 0.5; // Normal arrow
+                gizmos.draw_line(p1, p2, [1.0, 0.0, 0.0, 1.0]); // Red normal
 
-                    let p_pen = contact.point - contact.normal * contact.penetration;
-                    gizmos.draw_line(p1, p_pen, [1.0, 0.0, 1.0, 1.0]); // Magenta penetration depth
-                }
+                let p_pen = contact.point - contact.normal * contact.penetration;
+                gizmos.draw_line(p1, p_pen, [1.0, 0.0, 1.0, 1.0]); // Magenta penetration depth
             }
         }
-        tracing::trace!(vertices = gizmos.vertex_count(), "physics_debug_system: gizmo lines");
     }
+    tracing::trace!(vertices = gizmos.vertex_count(), "physics_debug_system: gizmo lines");
 }
 
 /// The static-collider slot a plane-collider entity holds in the GPU bodies' table. Internal

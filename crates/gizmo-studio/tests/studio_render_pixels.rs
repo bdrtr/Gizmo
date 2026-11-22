@@ -856,9 +856,10 @@ fn editor_furniture_is_in_the_scene_panel_and_not_the_game_panel() {
 /// panel, and with it off it is not. Written with the furniture test above, for the same move:
 /// nothing tested that the overlay reaches the viewport.
 ///
-/// The outline is debug lines: the studio's update runs `physics_debug_system` when the switch is
-/// on, which writes them into the frame's `Gizmos`, and the frame's preparation hands them to the
-/// draw (`GizmoFrame`). The test does what the update does, then draws.
+/// The outline is the editor's own lines (`EditorLines`), which the render pipeline makes from the
+/// switch each frame and the game path draws into the Scene panel alone. Until 2026-11-22 the
+/// studio's update wrote them into the game's `Gizmos`; this test then had to do what the update
+/// did.
 #[test]
 fn the_collider_overlay_shows_when_asked_for() {
     let _gpu = gpu_lock();
@@ -868,22 +869,15 @@ fn the_collider_overlay_shows_when_asked_for() {
     if pollster::block_on(Renderer::headless_adapter_is_software()) {
         return;
     }
-    let collider = |overlay: bool| {
-        move |world: &mut World| {
-            world.spawn_bundle((
-                Transform::new(Vec3::new(0.0, 0.0, 0.0)),
-                GlobalTransform::default(),
-                gizmo::physics::Collider::box_collider(Vec3::splat(2.0)),
-            ));
-            // The studio's world has the frame's debug lines from its setup on.
-            world.insert_resource(gizmo::renderer::Gizmos::default());
-            if overlay {
-                gizmo::systems::physics::physics_debug_system(world);
-            }
-        }
+    let collider = |world: &mut World| {
+        world.spawn_bundle((
+            Transform::new(Vec3::new(0.0, 0.0, 0.0)),
+            GlobalTransform::default(),
+            gizmo::physics::Collider::box_collider(Vec3::splat(2.0)),
+        ));
     };
-    let (on, _) = render_with_world(false, |ed| ed.show_colliders = true, collider(true));
-    let (off, _) = render_with_world(false, |ed| ed.show_colliders = false, collider(false));
+    let (on, _) = render_with_world(false, |ed| ed.show_colliders = true, collider);
+    let (off, _) = render_with_world(false, |ed| ed.show_colliders = false, collider);
     let differing = target_difference(&on, &off);
     assert!(
         differing > on.len() / 200,
@@ -897,8 +891,9 @@ fn the_collider_overlay_shows_when_asked_for() {
 /// In the default layout Scene and Game are tabs of the same leaf, so at most one is ever on
 /// screen — and the studio used to render the game camera as a full extra scene pass every frame
 /// regardless, which measured as roughly 40% of the frame (2.6-3.0 ms down to 1.65-1.69 ms on this
-/// machine). With the panel hidden that pass must not happen, and the game target then holds
-/// whatever the cheap shared path put there: the editor's own picture, byte for byte.
+/// machine). With the panel hidden that pass must not happen: the game target is not touched, and
+/// still holds the zeros it was made with. (While the panels had a renderer of their own, a hidden
+/// panel got a copy of the Scene panel's picture, and this test compared the two.)
 ///
 /// This is the assertion that stops the gate being quietly inverted or dropped. Without it, a gate
 /// that never fires would leave the test above green and the saving gone.
@@ -911,12 +906,12 @@ fn a_hidden_game_panel_does_not_pay_for_a_second_render() {
     if pollster::block_on(Renderer::headless_adapter_is_software()) {
         return;
     }
-    let (scene_px, game_px) = render_scene_and_game_targets(false);
-    let differing = target_difference(&scene_px, &game_px);
+    let (_, game_px) = render_scene_and_game_targets(false);
+    let drawn = game_px.iter().filter(|&&b| b != 0).count();
     assert_eq!(
-        differing, 0,
-        "the game target differs from the scene target in {differing} bytes with the panel \
-         hidden — the separate game-camera pass ran for a panel nobody is looking at"
+        drawn, 0,
+        "{drawn} bytes of the game target were drawn with the panel hidden — the game camera's \
+         pass ran for a panel nobody is looking at"
     );
 }
 
@@ -3046,6 +3041,13 @@ fn a_shadow_only_object_is_drawn_by_no_loop_of_the_viewport() {
     let _gpu = gpu_lock();
     let Some(empty) = render_game_material_frame(GameMaterial::None) else { return };
     let differing = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+    // Drawn, by more than a step of quantisation. A shadow-only object is a caster: it is in the
+    // scene's box the cascades are fitted to, so on the game path the frame's lighting moves a little
+    // when one is there (measured 2026-11-22: 1 564 texels, by at most 1/255). Being drawn moves them
+    // by far more.
+    let drawn = |a: &[u8], b: &[u8]| {
+        a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x.iter().zip(*y).any(|(p, q)| p.abs_diff(*q) > 8)).count()
+    };
     let routes: [(&str, fn(Material) -> Material); 3] = [
         ("double-sided", |m| m.with_double_sided(true)),
         ("transparent", |m| m.with_pbr(Vec4::new(0.8, 0.4, 0.2, 0.6), 0.6, 0.0)),
@@ -3055,7 +3057,7 @@ fn a_shadow_only_object_is_drawn_by_no_loop_of_the_viewport() {
         let on = render_cube_frame(GameMaterial::Pbr, adjust, ShadowCasting::On).expect("usable");
         assert!(differing(&empty, &on) > 300, "the {name} cube is not drawn at all");
         let only = render_cube_frame(GameMaterial::Pbr, adjust, ShadowCasting::Only).expect("usable");
-        assert_eq!(differing(&empty, &only), 0, "a shadow-only {name} cube was drawn in the viewport");
+        assert_eq!(drawn(&empty, &only), 0, "a shadow-only {name} cube was drawn in the viewport");
     }
 }
 

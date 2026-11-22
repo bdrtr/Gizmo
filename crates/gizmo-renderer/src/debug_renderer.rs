@@ -56,6 +56,16 @@ impl Gizmos {
         self.lines.clear();
     }
 
+    /// These lines and `other`'s, with this one's depth-test setting: a view that draws an editor's
+    /// lines over the game's ([`EditorLines`]).
+    #[must_use]
+    pub fn joined(&self, other: &Gizmos) -> Gizmos {
+        let mut joined = self.clone();
+        joined.lines.extend_from_slice(&other.lines);
+        joined.fixed_lines.extend_from_slice(&other.fixed_lines);
+        joined
+    }
+
     /// Every line to draw this frame: the last fixed step's, then this frame's.
     pub fn vertices(&self) -> impl Iterator<Item = &GizmoVertex> {
         self.fixed_lines.iter().chain(&self.lines)
@@ -177,6 +187,15 @@ impl Gizmos {
 /// cannot draw from a copy of that world. Replaced whole every frame, so nothing has to clear it.
 #[derive(Clone, Default)]
 pub struct GizmoFrame(Gizmos);
+
+/// **An editor's own debug lines**: what the editor shows about the scene rather than what the
+/// scene draws — the game camera's frustum, the collider overlay. Drawn into an editor's view
+/// alone (`Renderer::draws_editor_furniture`), over the game's lines; the game's own `Gizmos` are
+/// drawn into every view, the editor's Game panel's included, so the editor's lines cannot go there.
+///
+/// The editor fills it each frame before its views are drawn, whole; the draw only reads it.
+#[derive(Clone, Default)]
+pub struct EditorLines(pub Gizmos);
 
 impl GizmoFrame {
     /// The lines to draw: the last fixed step's and this frame's, with the game's depth-test

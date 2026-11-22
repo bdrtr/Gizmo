@@ -304,7 +304,7 @@ pub use csm::{
     CASCADE_COUNT, CASCADE_LAMBDA, SHADOW_DISTANCE,
     SHADOW_FADE_FRACTION, SHADOW_MAP_RES,
 };
-pub use debug_renderer::{GizmoFrame, GizmoRendererSystem, Gizmos};
+pub use debug_renderer::{EditorLines, GizmoFrame, GizmoRendererSystem, Gizmos};
 pub use decal::DecalState;
 pub use draw_order::{batch_depth, sort_back_to_front};
 pub use deferred::{
