@@ -629,6 +629,14 @@ impl PlayLoop {
     /// every exported game alike.
     fn physics_pass(&mut self, world: &mut World, dt: f32) -> u32 {
         ensure_physics_world(world);
+        // The scripts read the physics events of every step since their last update, each once
+        // (`PhysicsEventLog`): kept only when there are scripts to read it.
+        #[cfg(feature = "scripting")]
+        if world.get_resource::<crate::scripting::ScriptEngine>().is_some()
+            && world.get_resource::<crate::physics::system::PhysicsEventLog>().is_none()
+        {
+            world.insert_resource(crate::physics::system::PhysicsEventLog::default());
+        }
         let (steps, remaining) = plan_steps(self.accumulator, dt);
         for _ in 0..steps {
             #[cfg(feature = "physics-dynamics")]

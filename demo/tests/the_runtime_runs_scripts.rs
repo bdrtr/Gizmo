@@ -611,3 +611,37 @@ fn a_script_can_drive_an_animation_and_read_it_back() {
     );
     assert_eq!(player.speed, 2.0, "the speed the script set must have landed");
 }
+
+/// A script sees each physics event once, whatever the frame rate. Its lists were the last physics
+/// step's: a frame of two steps lost the first's events, a frame of none handed the last step's
+/// over again — measured, a ball entering a zone once was counted 0 times at 30 fps, once at 60,
+/// twice at 120 and four times at 240.
+#[test]
+fn a_script_sees_each_trigger_entry_once_at_any_frame_rate() {
+    use gizmo::physics::{Collider, RigidBody, Velocity};
+    use gizmo::scripting::{ScriptEngine, ScriptValue};
+    const COUNTER: &str = r#"
+enters = 0
+function on_update(dt)
+    for _, ev in ipairs(physics.triggers) do
+        if ev.status == "enter" then enters = enters + 1 end
+    end
+end
+"#;
+    for fps in [30.0f32, 60.0, 120.0, 240.0] {
+        let mut world = World::new();
+        world.insert_resource(gizmo::physics::world::PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+        let mut engine = ScriptEngine::new().expect("Lua");
+        engine.load_script_source("counter.lua", COUNTER.to_string()).expect("the counter loads");
+        world.insert_resource(engine);
+        world.spawn_bundle((Transform::new(Vec3::new(0.0, 2.0, 0.0)), Collider::box_collider(Vec3::new(1.0, 0.5, 1.0)).with_trigger(true)));
+        world.spawn_bundle((Transform::new(Vec3::new(0.0, 5.0, 0.0)), RigidBody::new(1.0, true), Velocity::default(), Collider::sphere(0.25)));
+        let mut play = PlayLoop::new();
+        let input = gizmo::core::input::Input::default();
+        for _ in 0..(3.0 * fps) as usize {
+            play.step(&mut world, 1.0 / fps, &input, &mut |_| {});
+        }
+        let enters = world.get_resource_mut::<ScriptEngine>().and_then(|mut e| e.get_global("counter.lua", "enters"));
+        assert_eq!(enters, Some(ScriptValue::Num(1.0)), "at {fps} fps the script counted the one entry {enters:?} times");
+    }
+}

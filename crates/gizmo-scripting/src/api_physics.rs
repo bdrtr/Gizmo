@@ -177,10 +177,23 @@ pub fn update_physics_api(
     
     let triggers = lua.create_table()?;
     let collisions = lua.create_table()?;
-    
+
+    // The steps since the last update, each event once, from the host's log when it keeps one
+    // (`PhysicsEventLog`, which `PlayLoop` does). Without one, the last step's events: right only
+    // at exactly one step a frame — a frame with two steps lost the first's, and a frame with none
+    // handed the script the last step's events again.
+    let logged = world
+        .try_get_resource_mut::<gizmo_physics_rigid::system::PhysicsEventLog>()
+        .ok()
+        .map(|mut log| (std::mem::take(&mut log.triggers), std::mem::take(&mut log.collisions)));
+
     if let Ok(physics_world) = world.try_get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
+        let (trigger_events, collision_events) = match logged {
+            Some(events) => events,
+            None => (physics_world.trigger_events().to_vec(), physics_world.collision_events().to_vec()),
+        };
         // Trigger (Tetikleyici) Olayları
-        for (i, t_event) in physics_world.trigger_events().iter().enumerate() {
+        for (i, t_event) in trigger_events.iter().enumerate() {
             let ev = lua.create_table()?;
             ev.set("trigger_id", t_event.trigger_entity.id())?;
             ev.set("other_id", t_event.other_entity.id())?;
@@ -194,7 +207,7 @@ pub fn update_physics_api(
         }
         
         // Fiziksel Çarpışma Olayları
-        for (i, c_event) in physics_world.collision_events().iter().enumerate() {
+        for (i, c_event) in collision_events.iter().enumerate() {
             let ev = lua.create_table()?;
             ev.set("entity_a", c_event.entity_a.id())?;
             ev.set("entity_b", c_event.entity_b.id())?;
@@ -208,8 +221,8 @@ pub fn update_physics_api(
         }
 
         trace!(
-            trigger_count = physics_world.trigger_events().len(),
-            collision_count = physics_world.collision_events().len(),
+            trigger_count = trigger_events.len(),
+            collision_count = collision_events.len(),
             "[Scripting] fizik olayları Lua'ya aktarıldı"
         );
     } else {
@@ -232,6 +245,29 @@ mod tests {
     use gizmo_physics_rigid::world::PhysicsWorld;
     use gizmo_physics_core::collision::{TriggerEvent, CollisionEvent, CollisionEventType};
     use mlua::Lua;
+
+    /// With the host's event log in the world, the lists are the log's — every step since the last
+    /// update — and the log is emptied, so the next update does not hand them over again.
+    #[test]
+    fn the_lists_take_the_event_log_and_empty_it() {
+        let lua = Lua::new();
+        register_physics_api(&lua, Arc::new(CommandQueue::new())).unwrap();
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new());
+        let enter = |id: u32| TriggerEvent {
+            trigger_entity: gizmo_physics_core::BodyHandle::from_id(1),
+            other_entity: gizmo_physics_core::BodyHandle::from_id(id),
+            event_type: CollisionEventType::Started,
+        };
+        // Two steps' events, logged.
+        world.insert_resource(gizmo_physics_rigid::system::PhysicsEventLog { triggers: vec![enter(2), enter(3)], collisions: Vec::new() });
+        update_physics_api(&lua, &world).unwrap();
+        let count = |lua: &Lua| lua.load("return #physics.triggers").eval::<usize>().unwrap();
+        assert_eq!(count(&lua), 2, "both steps' entries");
+        assert!(world.get_resource::<gizmo_physics_rigid::system::PhysicsEventLog>().unwrap().triggers.is_empty(), "taken");
+        update_physics_api(&lua, &world).unwrap();
+        assert_eq!(count(&lua), 0, "and not handed over again");
+    }
 
     #[test]
     fn test_update_physics_api() {

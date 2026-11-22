@@ -885,8 +885,32 @@ fn write_back_to_ecs(world: &World, physics_world: &PhysicsWorld, sync: &mut Ecs
     }
 }
 
-/// Step 7: the step's trigger and collision events, into the ECS's event queues.
+/// The trigger and collision events of every physics step since its reader last took them.
+///
+/// The physics world keeps only the last step's events (`PhysicsWorld::trigger_events`), and a
+/// frame takes as many fixed steps as its time buys — none in a short frame, two or more in a long
+/// one. A reader that looks once a frame at the world's list therefore missed every step but the
+/// last, and saw the last again on a frame with no step: a Lua script counted a ball entering a
+/// zone 0 times at 30 fps, once at 60, twice at 120 and four times at 240. With this resource in the
+/// world, each step appends its events here, and the reader takes them (`std::mem::take`) — each
+/// event exactly once, whatever the frame rate.
+///
+/// Inserted by the host that has such a reader (`gizmo::systems::PlayLoop`, for the scripts), and
+/// emptied by it: nothing else takes from it, so a log nobody reads grows.
+#[derive(Debug, Default)]
+pub struct PhysicsEventLog {
+    /// Every trigger event since the last take, in step order.
+    pub triggers: Vec<gizmo_physics_core::TriggerEvent>,
+    /// Every collision event since the last take, in step order.
+    pub collisions: Vec<gizmo_physics_core::CollisionEvent>,
+}
+
+/// Step 7: the step's trigger and collision events, into the ECS's event queues and the event log.
 fn dispatch_events(world: &World, physics_world: &PhysicsWorld) {
+    if let Ok(mut log) = world.try_get_resource_mut::<PhysicsEventLog>() {
+        log.triggers.extend(physics_world.trigger_events.iter().cloned());
+        log.collisions.extend(physics_world.collision_events.iter().cloned());
+    }
     if let Ok(mut trigger_queue) =
         world.try_get_resource_mut::<gizmo_core::event::Events<gizmo_physics_core::TriggerEvent>>()
     {
