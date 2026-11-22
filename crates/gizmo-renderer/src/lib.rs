@@ -170,6 +170,8 @@ pub mod occlusion;
 pub mod planar;
 pub mod fxaa;
 pub mod gi;
+// The wgpu descriptors written once (`compute_pipeline`, `buffer_entry`, `texture_2d_entry`).
+pub(crate) mod descriptors;
 /// GPU SPH fluid simulation and its surface rendering.
 pub mod gpu_fluid;
 /// The GPU particle system — simulated and drawn from the same buffer.

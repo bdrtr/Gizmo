@@ -57,129 +57,35 @@ pub fn create_physics_pipelines(
     culled_boxes_buffer: &wgpu::Buffer,
     indirect_buffer: &wgpu::Buffer,
 ) -> PhysicsPipelines {
-    let compute_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-            label: Some("physics_compute_layout"),
-        });
+    use crate::descriptors::{buffer_entry, compute_pipeline, whole_buffer_entries};
+    use wgpu::BufferBindingType::{Storage, Uniform};
+    let compute = wgpu::ShaderStages::COMPUTE;
+    let compute_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        entries: &[
+            buffer_entry(0, compute, Uniform),
+            buffer_entry(1, compute, Storage { read_only: false }),
+            buffer_entry(2, compute, Storage { read_only: false }),
+            buffer_entry(3, compute, Storage { read_only: false }),
+            buffer_entry(4, compute, Storage { read_only: true }),
+            buffer_entry(5, compute, Storage { read_only: false }),
+            buffer_entry(6, compute, Storage { read_only: false }),
+            buffer_entry(7, compute, Storage { read_only: false }),
+        ],
+        label: Some("physics_compute_layout"),
+    });
 
     let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: &compute_bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: params_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: boxes_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: grid_heads_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: linked_nodes_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: colliders_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 5,
-                resource: awake_flags_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 6,
-                resource: joints_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 7,
-                resource: box_contacts_buffer.as_entire_binding(),
-            },
-        ],
+        entries: &whole_buffer_entries(&[
+            params_buffer,
+            boxes_buffer,
+            grid_heads_buffer,
+            linked_nodes_buffer,
+            colliders_buffer,
+            awake_flags_buffer,
+            joints_buffer,
+            box_contacts_buffer,
+        ]),
         label: Some("physics_compute_bind_group"),
     });
 
@@ -194,70 +100,15 @@ pub fn create_physics_pipelines(
         immediate_size: 0,
     });
 
-    let pipeline_clear = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Physics Clear"),
-        layout: Some(&compute_pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("clear_grid"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_build = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Physics Build"),
-        layout: Some(&compute_pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("build_grid"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_narrowphase = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Physics Narrowphase"),
-        layout: Some(&compute_pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("narrowphase"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_solve = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Physics Solve"),
-        layout: Some(&compute_pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("solve_collisions_safe"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_apply_forces = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Physics Apply Forces"),
-        layout: Some(&compute_pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("apply_forces"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_restitution = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Physics Restitution"),
-        layout: Some(&compute_pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("apply_restitution"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_integrate = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Physics Integrate"),
-        layout: Some(&compute_pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("integrate"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_solve_joints = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Physics Solve Joints"),
-        layout: Some(&compute_pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("solve_joints"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
+    let stage = |label: &str, entry: &str| compute_pipeline(device, label, &compute_pipeline_layout, &compute_shader, entry);
+    let pipeline_clear = stage("Physics Clear", "clear_grid");
+    let pipeline_build = stage("Physics Build", "build_grid");
+    let pipeline_narrowphase = stage("Physics Narrowphase", "narrowphase");
+    let pipeline_solve = stage("Physics Solve", "solve_collisions_safe");
+    let pipeline_apply_forces = stage("Physics Apply Forces", "apply_forces");
+    let pipeline_restitution = stage("Physics Restitution", "apply_restitution");
+    let pipeline_integrate = stage("Physics Integrate", "integrate");
+    let pipeline_solve_joints = stage("Physics Solve Joints", "solve_joints");
 
     // Composed so physics_render.wgsl can `#import gizmo::common::{SceneUniforms}`.
     let render_shader = crate::pipeline::load_shader_composed(
@@ -310,73 +161,19 @@ pub fn create_physics_pipelines(
             cache: None,
     });
 
-    let culling_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-            label: Some("physics_culling_layout"),
-        });
+    let culling_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        entries: &[
+            buffer_entry(0, compute, Uniform),
+            buffer_entry(1, compute, Storage { read_only: true }),
+            buffer_entry(2, compute, Storage { read_only: false }),
+            buffer_entry(3, compute, Storage { read_only: false }),
+        ],
+        label: Some("physics_culling_layout"),
+    });
 
     let culling_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: &culling_bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: params_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: boxes_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: culled_boxes_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: indirect_buffer.as_entire_binding(),
-            },
-        ],
+        entries: &whole_buffer_entries(&[params_buffer, boxes_buffer, culled_boxes_buffer, indirect_buffer]),
         label: Some("physics_culling_bind_group"),
     });
 
@@ -394,14 +191,7 @@ pub fn create_physics_pipelines(
         immediate_size: 0,
     });
 
-    let pipeline_culling = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Physics Culling Pipeline"),
-        layout: Some(&culling_pipeline_layout),
-        module: &culling_shader,
-        entry_point: Some("cull_main"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
+    let pipeline_culling = compute_pipeline(device, "Physics Culling Pipeline", &culling_pipeline_layout, &culling_shader, "cull_main");
 
     PhysicsPipelines {
         compute_bind_group_layout,

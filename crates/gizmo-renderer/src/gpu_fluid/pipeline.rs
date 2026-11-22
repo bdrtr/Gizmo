@@ -80,93 +80,9 @@ pub fn create_fluid_pipelines(
     scratch_buffer: &wgpu::Buffer,
     wetting_buffer: &wgpu::Buffer,
 ) -> FluidPipelines {
-    let compute_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(16),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-            label: Some("fluid_compute_layout"),
-        });
+    use crate::descriptors::compute_pipeline;
 
+    let compute_bind_group_layout = simulation_layout(device);
     let compute_bind_group = create_compute_bind_group(
         device,
         &compute_bind_group_layout,
@@ -197,207 +113,27 @@ pub fn create_fluid_pipelines(
         bind_group_layouts: &[Some(&compute_bind_group_layout)],
         immediate_size: 0,
     });
+    let stage = |label: &str, entry: &str| compute_pipeline(device, label, &pipeline_layout, &compute_shader, entry);
 
-    let pipeline_clear = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("fluid_clear"),
-        layout: Some(&pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("clear_grid"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_hash = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("fluid_hash"),
-        layout: Some(&pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("hash_pass"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_sort = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("fluid_sort"),
-        layout: Some(&pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("bitonic_sort_pass"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_offsets = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("fluid_offsets"),
-        layout: Some(&pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("grid_offsets_pass"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_predict = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Fluid Predict Pipeline"),
-        layout: Some(&pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("predict"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_calc_lambda = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Fluid Calc Lambda"),
-        layout: Some(&pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("calc_lambda"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let pipeline_apply_delta_p = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Fluid Apply Delta P"),
-        layout: Some(&pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("apply_delta_p"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
+    let pipeline_clear = stage("fluid_clear", "clear_grid");
+    let pipeline_hash = stage("fluid_hash", "hash_pass");
+    let pipeline_sort = stage("fluid_sort", "bitonic_sort_pass");
+    let pipeline_offsets = stage("fluid_offsets", "grid_offsets_pass");
+    let pipeline_predict = stage("Fluid Predict Pipeline", "predict");
+    let pipeline_calc_lambda = stage("Fluid Calc Lambda", "calc_lambda");
+    let pipeline_apply_delta_p = stage("Fluid Apply Delta P", "apply_delta_p");
     // AAA: Vorticity Confinement pipeline (computes ω = ∇ × v)
-    let pipeline_compute_vorticity =
-        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Fluid Compute Vorticity"),
-            layout: Some(&pipeline_layout),
-            module: &compute_shader,
-            entry_point: Some("compute_vorticity"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-    let pipeline_update_velocity =
-        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Fluid Update Velocity"),
-            layout: Some(&pipeline_layout),
-            module: &compute_shader,
-            entry_point: Some("update_velocity"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-    let simple = |label: &str, entry: &str| {
-        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(label),
-            layout: Some(&pipeline_layout),
-            module: &compute_shader,
-            entry_point: Some(entry),
-            compilation_options: Default::default(),
-            cache: None,
-        })
-    };
-    let pipeline_commit_positions = simple("Fluid Commit Positions", "commit_positions");
-    let pipeline_derive_velocity = simple("Fluid Derive Velocity", "derive_velocity");
-    let pipeline_commit_velocity = simple("Fluid Commit Velocity", "commit_velocity");
-    let pipeline_count_wetting = simple("Fluid Count Wetting", "count_wetting");
+    let pipeline_compute_vorticity = stage("Fluid Compute Vorticity", "compute_vorticity");
+    let pipeline_update_velocity = stage("Fluid Update Velocity", "update_velocity");
+    let pipeline_commit_positions = stage("Fluid Commit Positions", "commit_positions");
+    let pipeline_derive_velocity = stage("Fluid Derive Velocity", "derive_velocity");
+    let pipeline_commit_velocity = stage("Fluid Commit Velocity", "commit_velocity");
+    let pipeline_count_wetting = stage("Fluid Count Wetting", "count_wetting");
     // AAA: Foam/Spray classification pipeline
-    let pipeline_classify = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Fluid Classify Particles"),
-        layout: Some(&pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("classify_particles"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
+    let pipeline_classify = stage("Fluid Classify Particles", "classify_particles");
 
     // SSFR Layouts
-    let particle_render_bg_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("SSFR Particle BG Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-    let blur_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("SSFR Blur BG Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba16Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-    let composite_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("SSFR Composite BG Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
-        });
+    let (particle_render_bg_layout, blur_bind_group_layout, composite_bind_group_layout) = surface_layouts(device);
 
     // SSFR Shaders
     let depth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -425,132 +161,66 @@ pub fn create_fluid_pipelines(
         immediate_size: 0,
     });
 
-    let pipeline_depth = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("SSFR Depth"),
-        layout: Some(&ssfr_render_layout),
-        vertex: wgpu::VertexState {
-            module: &depth_shader,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
+    let pipeline_depth = surface_pipeline(
+        device,
+        "SSFR Depth",
+        &ssfr_render_layout,
+        &depth_shader,
+        wgpu::PrimitiveTopology::TriangleStrip,
+        wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::Rgba16Float,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &depth_shader,
-            entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba16Float,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Less),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-            cache: None,
-    });
+        Some(depth_test(true)),
+    );
 
-    let pipeline_thickness = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("SSFR Thickness"),
-        layout: Some(&ssfr_render_layout),
-        vertex: wgpu::VertexState {
-            module: &thickness_shader,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &thickness_shader,
-            entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::R16Float, // Thickness uses R16Float
-                blend: Some(wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::One,
-                        dst_factor: wgpu::BlendFactor::One,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: wgpu::BlendComponent::REPLACE,
-                }),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-            cache: None,
-    });
-
-    let pipeline_blur = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("SSFR Blur"),
-        layout: Some(
-            &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Blur Layout"),
-                bind_group_layouts: &[Some(&blur_bind_group_layout)],
-                immediate_size: 0,
+    let pipeline_thickness = surface_pipeline(
+        device,
+        "SSFR Thickness",
+        &ssfr_render_layout,
+        &thickness_shader,
+        wgpu::PrimitiveTopology::TriangleStrip,
+        wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::R16Float, // Thickness uses R16Float
+            blend: Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent::REPLACE,
             }),
-        ),
-        module: &blur_shader,
-        entry_point: Some("blur_main"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
+            write_mask: wgpu::ColorWrites::ALL,
+        },
+        None,
+    );
 
-    let pipeline_composite = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("SSFR Composite"),
-        layout: Some(
-            &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Composite Layout"),
-                bind_group_layouts: &[Some(global_bind_group_layout), Some(&composite_bind_group_layout)],
-                immediate_size: 0,
-            }),
-        ),
-        vertex: wgpu::VertexState {
-            module: &composite_shader,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &composite_shader,
-            entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: output_format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::Less),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-            cache: None,
+    let blur_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Blur Layout"),
+        bind_group_layouts: &[Some(&blur_bind_group_layout)],
+        immediate_size: 0,
     });
+    let pipeline_blur = compute_pipeline(device, "SSFR Blur", &blur_layout, &blur_shader, "blur_main");
+
+    let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Composite Layout"),
+        bind_group_layouts: &[Some(global_bind_group_layout), Some(&composite_bind_group_layout)],
+        immediate_size: 0,
+    });
+    let pipeline_composite = surface_pipeline(
+        device,
+        "SSFR Composite",
+        &composite_layout,
+        &composite_shader,
+        wgpu::PrimitiveTopology::TriangleList,
+        wgpu::ColorTargetState {
+            format: output_format,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        },
+        Some(depth_test(false)),
+    );
 
     // AAA: Foam/Spray render pipeline
     let foam_shader = crate::pipeline::load_shader_composed(
@@ -559,48 +229,26 @@ pub fn create_fluid_pipelines(
         include_str!("../shaders/fluid_foam.wgsl"),
         "Foam Shader",
     );
-
-    let pipeline_foam = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("SSFR Foam/Spray"),
-        layout: Some(&ssfr_render_layout),
-        vertex: wgpu::VertexState {
-            module: &foam_shader,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
+    let pipeline_foam = surface_pipeline(
+        device,
+        "SSFR Foam/Spray",
+        &ssfr_render_layout,
+        &foam_shader,
+        wgpu::PrimitiveTopology::TriangleStrip,
+        wgpu::ColorTargetState {
+            format: output_format,
+            blend: Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                    dst_factor: wgpu::BlendFactor::One, // Additive
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent::OVER,
+            }),
+            write_mask: wgpu::ColorWrites::ALL,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &foam_shader,
-            entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: output_format,
-                blend: Some(wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::SrcAlpha,
-                        dst_factor: wgpu::BlendFactor::One, // Additive
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: wgpu::BlendComponent::OVER,
-                }),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::Less),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-            cache: None,
-    });
+        Some(depth_test(false)),
+    );
 
     FluidPipelines {
         compute_bind_group_layout,
@@ -627,6 +275,131 @@ pub fn create_fluid_pipelines(
         particle_render_bg_layout,
         blur_bind_group_layout,
         composite_bind_group_layout,
+    }
+}
+
+/// The layout of the group every simulation pass binds: the parameters, the particles, the grid,
+/// the colliders (read only), the sort keys, the sort stage's parameters (a 16-byte slot at a
+/// dynamic offset, one per stage), the scratch and the wetting counters.
+fn simulation_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    use crate::descriptors::buffer_entry;
+    use wgpu::BufferBindingType::{Storage, Uniform};
+    let compute = wgpu::ShaderStages::COMPUTE;
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        entries: &[
+            buffer_entry(0, compute, Uniform),
+            buffer_entry(1, compute, Storage { read_only: false }),
+            buffer_entry(2, compute, Storage { read_only: false }),
+            buffer_entry(3, compute, Storage { read_only: true }),
+            buffer_entry(4, compute, Storage { read_only: false }),
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: compute,
+                ty: wgpu::BindingType::Buffer {
+                    ty: Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(16),
+                },
+                count: None,
+            },
+            buffer_entry(6, compute, Storage { read_only: false }),
+            buffer_entry(7, compute, Storage { read_only: false }),
+        ],
+        label: Some("fluid_compute_layout"),
+    })
+}
+
+/// The surface passes' layouts: the particles the splats read, the blur's group (the depth in,
+/// the smoothed depth out, its parameters) and the composite's (depth, thickness, scene colour and
+/// their samplers).
+fn surface_layouts(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::BindGroupLayout, wgpu::BindGroupLayout) {
+    use crate::descriptors::{buffer_entry, texture_2d_entry};
+    let particle_render_bg_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("SSFR Particle BG Layout"),
+        entries: &[buffer_entry(1, wgpu::ShaderStages::VERTEX, wgpu::BufferBindingType::Storage { read_only: true })],
+    });
+
+    let compute = wgpu::ShaderStages::COMPUTE;
+    let blur_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("SSFR Blur BG Layout"),
+        entries: &[
+            texture_2d_entry(0, compute, false),
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: compute,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+            buffer_entry(2, compute, wgpu::BufferBindingType::Uniform),
+        ],
+    });
+
+    let fragment = wgpu::ShaderStages::FRAGMENT;
+    let sampler = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: fragment,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+        count: None,
+    };
+    let composite_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("SSFR Composite BG Layout"),
+        entries: &[
+            texture_2d_entry(0, fragment, false),
+            sampler(1),
+            texture_2d_entry(2, fragment, false),
+            sampler(3),
+            texture_2d_entry(4, fragment, true),
+        ],
+    });
+    (particle_render_bg_layout, blur_bind_group_layout, composite_bind_group_layout)
+}
+
+/// One of the surface's screen passes: `vs_main` and `fs_main` of `shader`, no vertex buffers,
+/// drawing into `target`.
+fn surface_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    topology: wgpu::PrimitiveTopology,
+    target: wgpu::ColorTargetState,
+    depth_stencil: Option<wgpu::DepthStencilState>,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(target)],
+        }),
+        primitive: wgpu::PrimitiveState { topology, ..Default::default() },
+        depth_stencil,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// A `Less` test against the scene's `Depth32Float` depth, writing to it when `write`.
+fn depth_test(write: bool) -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        format: wgpu::TextureFormat::Depth32Float,
+        depth_write_enabled: Some(write),
+        depth_compare: Some(wgpu::CompareFunction::Less),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
     }
 }
 

@@ -149,73 +149,22 @@ impl GpuFemSystem {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
-        let compute_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-                label: Some("fem_compute_layout"),
-            });
+        use crate::descriptors::{buffer_entry, compute_pipeline, whole_buffer_entries};
+        use wgpu::BufferBindingType::{Storage, Uniform};
+        let compute = wgpu::ShaderStages::COMPUTE;
+        let compute_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                buffer_entry(0, compute, Uniform),
+                buffer_entry(1, compute, Storage { read_only: false }),
+                buffer_entry(2, compute, Storage { read_only: true }),
+                buffer_entry(3, compute, Storage { read_only: true }),
+            ],
+            label: Some("fem_compute_layout"),
+        });
 
         let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &compute_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: nodes_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: elements_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: colliders_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &whole_buffer_entries(&[&params_buffer, &nodes_buffer, &elements_buffer, &colliders_buffer]),
             label: Some("fem_compute_bind_group"),
         });
 
@@ -230,32 +179,10 @@ impl GpuFemSystem {
             immediate_size: 0,
         });
 
-        let pipeline_clear = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("FEM Clear Forces"),
-            layout: Some(&pipeline_layout),
-            module: &compute_shader,
-            entry_point: Some("clear_forces"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-
-        let pipeline_stress = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("FEM Compute Stress"),
-            layout: Some(&pipeline_layout),
-            module: &compute_shader,
-            entry_point: Some("compute_stress"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-
-        let pipeline_integrate = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("FEM Integrate"),
-            layout: Some(&pipeline_layout),
-            module: &compute_shader,
-            entry_point: Some("integrate"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let stage = |label: &str, entry: &str| compute_pipeline(device, label, &pipeline_layout, &compute_shader, entry);
+        let pipeline_clear = stage("FEM Clear Forces", "clear_forces");
+        let pipeline_stress = stage("FEM Compute Stress", "compute_stress");
+        let pipeline_integrate = stage("FEM Integrate", "integrate");
 
         Self {
             nodes_buffer,
