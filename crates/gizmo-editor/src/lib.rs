@@ -137,8 +137,12 @@ pub fn draw_editor(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     state.game_view_visible = false;
 
     let ctx = ui.ctx().clone();
-    // ==== Global Klavye Kısayolları (Sadece text alanları odakta değilken) ====
-    if !ctx.egui_wants_keyboard_input() {
+    // ==== The tool keys, Q W E R — bound here and nowhere else ====
+    // Not while egui takes text; not while the right button flies the camera, where Q, E and W are
+    // down, up and forward; and not in play, where the keys are the game's. They were bound three
+    // times — here, in the toolbar and in the studio's shortcuts — and only the studio's copy knew
+    // about flight, so flying down or up switched the tool to Select or Rotate anyway.
+    if !ctx.egui_wants_keyboard_input() && !state.camera.fly_active && !state.is_playing() {
         ctx.input(|i| {
             if i.key_pressed(egui::Key::Q) { state.gizmo_mode = GizmoMode::Select; }
             if i.key_pressed(egui::Key::W) { state.gizmo_mode = GizmoMode::Translate; }
@@ -635,6 +639,45 @@ VmData:\t   777777 kB
             bytes > 1024 * 1024 && bytes < 1024_u64.pow(4),
             "implausible RSS: {bytes} bytes"
         );
+    }
+}
+
+#[cfg(test)]
+mod tool_key_tests {
+    use super::*;
+
+    /// The tool keys change the tool — bound once, in `draw_editor` — and not while the right
+    /// button flies the camera, where Q and E are down and up, nor in play, where the keys are the
+    /// game's. The toolbar's copy and the studio's had no flight gate, so flying switched tools.
+    #[test]
+    fn the_tool_keys_change_the_tool_except_in_flight_and_in_play() {
+        let world = World::new();
+        let ctx = egui::Context::default();
+        let press = |key| egui::RawInput {
+            events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }],
+            ..Default::default()
+        };
+        let frame = |state: &mut EditorState, key| {
+            ctx.run_ui(press(key), |ui| draw_editor(ui, &world, state)).drop_without_applying_deltas();
+        };
+        let mut state = EditorState { dock_state: editor_state::create_default_dock_state(), ..Default::default() };
+        state.gizmo_mode = GizmoMode::Translate;
+
+        frame(&mut state, egui::Key::Q);
+        assert_eq!(state.gizmo_mode, GizmoMode::Select, "Q is Select");
+
+        state.camera.fly_active = true;
+        frame(&mut state, egui::Key::E);
+        assert_eq!(state.gizmo_mode, GizmoMode::Select, "flying up with E switched the tool");
+
+        state.camera.fly_active = false;
+        state.mode = EditorMode::Play;
+        frame(&mut state, egui::Key::R);
+        assert_eq!(state.gizmo_mode, GizmoMode::Select, "R in a game switched the editor's tool");
+
+        state.mode = EditorMode::Edit;
+        frame(&mut state, egui::Key::R);
+        assert_eq!(state.gizmo_mode, GizmoMode::Scale, "R is Scale");
     }
 }
 

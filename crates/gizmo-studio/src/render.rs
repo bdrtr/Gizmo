@@ -74,27 +74,18 @@ pub fn render_studio(
         }
     }
 
-    let mut save_req = None;
-    let mut clear_req = false;
-    let mut load_req = None;
-    let mut prefab_save_req = None;
-    let mut prefab_load_req = None;
-    let mut gltf_req = None;
-    let mut duplicate_reqs = Vec::new();
     // ▶ and ⏹ are the update hook's (`systems::simulation`, `crate::pie`): it swaps the worlds, and
     // the render hook draws whichever is current. What is left here is the game's setup, which needs
     // the renderer.
-
-    if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-        save_req = ed.scene.save_request.take();
-        load_req = ed.scene.load_request.take();
-        clear_req = ed.scene.clear_request;
-        ed.scene.clear_request = false;
-        prefab_save_req = ed.prefab_save_request.take();
-        prefab_load_req = ed.prefab_load_request.take();
-        gltf_req = ed.gltf_load_request.take();
-        duplicate_reqs = std::mem::take(&mut ed.duplicate_requests);
-    }
+    let FileRequests {
+        save: save_req,
+        clear: clear_req,
+        load: load_req,
+        prefab_save: prefab_save_req,
+        prefab_load: prefab_load_req,
+        gltf: gltf_req,
+        duplicates: duplicate_reqs,
+    } = take_file_requests(world, state.session.is_some());
 
     run_game_setup(world, state, renderer);
 
@@ -151,6 +142,46 @@ fn with_asset_identity<R>(
         world.insert_resource(m);
     }
     result
+}
+
+/// The file requests the editor's panels and shortcuts queued this frame, taken out of its state.
+#[derive(Default)]
+struct FileRequests {
+    save: Option<String>,
+    clear: bool,
+    load: Option<String>,
+    prefab_save: Option<(Entity, String)>,
+    prefab_load: Option<(String, Option<Entity>, Option<gizmo::math::Vec3>)>,
+    gltf: Option<(String, Option<gizmo::math::Vec3>)>,
+    duplicates: Vec<Entity>,
+}
+
+/// Takes this frame's file requests out of the editor's state. Under ▶ (`playing`) a scene is not
+/// saved, opened or cleared: those are the edited world's, and the current world is the play world.
+/// Saving there wrote the running game — whatever it had moved, spawned and destroyed — over the
+/// scene file, and a scene opened or cleared there was thrown away at ⏹. The requests are refused
+/// with a warning, whichever control made them (the shortcut, the menu, a dialog); prefabs and
+/// duplicates go on, being made from what is in front of you.
+fn take_file_requests(world: &mut World, playing: bool) -> FileRequests {
+    let mut requests = FileRequests::default();
+    if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+        requests.save = ed.scene.save_request.take();
+        requests.load = ed.scene.load_request.take();
+        requests.clear = std::mem::take(&mut ed.scene.clear_request);
+        requests.prefab_save = ed.prefab_save_request.take();
+        requests.prefab_load = ed.prefab_load_request.take();
+        requests.gltf = ed.gltf_load_request.take();
+        requests.duplicates = std::mem::take(&mut ed.duplicate_requests);
+        if playing && (requests.save.is_some() || requests.load.is_some() || requests.clear) {
+            requests.save = None;
+            requests.load = None;
+            requests.clear = false;
+            let message = "Play sırasında sahne kaydedilmez, açılmaz ya da temizlenmez — önce ⏹ ile durdurun.";
+            ed.log_warning(message);
+            ed.status_message = message.to_string();
+        }
+    }
+    requests
 }
 
 /// The game's setup on a play world ▶ has just built (`crate::pie::GameSetupPending`), and from
@@ -756,6 +787,33 @@ mod file_request_tests {
         world.insert_resource(EditorState::default());
         world.insert_resource(gizmo::renderer::asset::AssetManager::new());
         world
+    }
+
+    /// Under ▶ a scene is not saved, opened or cleared: the current world is the play world, and
+    /// saving it wrote the running game over the scene file. Prefabs still are.
+    #[test]
+    fn a_scene_is_not_saved_opened_or_cleared_in_play() {
+        let mut world = editor_world();
+        let queue = |world: &mut World| {
+            let mut ed = world.get_resource_mut::<EditorState>().unwrap();
+            ed.scene.save_request = Some("levels/forest.gizmo".into());
+            ed.scene.load_request = Some("levels/cave.gizmo".into());
+            ed.scene.clear_request = true;
+            ed.prefab_save_request = Some((Entity::new(3, 0), "door.prefab".into()));
+        };
+        queue(&mut world);
+        let playing = take_file_requests(&mut world, true);
+        assert_eq!((playing.save, playing.load, playing.clear), (None, None, false));
+        assert!(playing.prefab_save.is_some(), "a prefab is made from what is in front of you");
+        let ed = world.get_resource::<EditorState>().unwrap();
+        assert!(ed.scene.save_request.is_none() && !ed.scene.clear_request, "refused, not kept for after ⏹");
+        drop(ed);
+
+        queue(&mut world);
+        let editing = take_file_requests(&mut world, false);
+        assert_eq!(editing.save.as_deref(), Some("levels/forest.gizmo"));
+        assert_eq!(editing.load.as_deref(), Some("levels/cave.gizmo"));
+        assert!(editing.clear);
     }
 
     /// A scene saved and loaded back is the scene, the editor's camera survives the load, and the

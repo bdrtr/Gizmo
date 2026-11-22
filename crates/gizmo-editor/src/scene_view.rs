@@ -46,15 +46,36 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     let is_dragging_gizmo = gizmo_interacted || !state.scene.gizmo_original_transforms.is_empty();
     rubber_band(ui, &response, state, !is_dragging_gizmo && !axis_gizmo_hot);
 
-    // F (Focus) Kamera Odaklanması
+    // F: the camera focuses on the selection, smoothly (`focus_target`). Here alone: the studio's
+    // shortcuts took F too and teleported the camera on the same press.
     if !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::F)) {
-        if let Some(entity) = state.selection.primary {
-            let transforms = world.query::<&gizmo_physics_core::Transform>();
-            if let Some(t) = transforms.get(entity) {
-                state.camera.focus_target = Some(t.position);
-            }
+        if let Some(center) = selection_center(world, state) {
+            state.camera.focus_target = Some(center);
         }
     }
+}
+
+/// The centre of the selection in the world: the mean of the selected entities' world positions.
+///
+/// A child's `Transform` is local to its parent, so the world position is its `GlobalTransform`'s,
+/// which the frame's propagation keeps; an entity without one is read from its `Transform`. The
+/// focus went to the primary's local position, which for a child of anything that is not at the
+/// origin is somewhere else entirely.
+fn selection_center(world: &World, state: &EditorState) -> Option<gizmo_math::Vec3> {
+    let globals = world.query::<&gizmo_physics_core::components::GlobalTransform>();
+    let transforms = world.query::<&gizmo_physics_core::Transform>();
+    let positions: Vec<gizmo_math::Vec3> = state
+        .selection
+        .entities
+        .iter()
+        .filter_map(|&e| {
+            globals
+                .get(e)
+                .map(|g| g.matrix.w_axis.truncate())
+                .or_else(|| transforms.get(e).map(|t| t.position))
+        })
+        .collect();
+    (!positions.is_empty()).then(|| positions.iter().copied().sum::<gizmo_math::Vec3>() / positions.len() as f32)
 }
 
 /// The viewport's camera input: the pointer's NDC, fly mode, look, pan, orbit and zoom — all
@@ -718,6 +739,32 @@ fn format_thousands(n: u32) -> String {
         out.push(c);
     }
     out
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    /// F focuses on the selection's centre in the world: a child's `Transform` is local, so its
+    /// world position is its `GlobalTransform`'s. It went to the primary's local position.
+    #[test]
+    fn the_focus_is_the_selections_centre_in_the_world() {
+        use gizmo_math::{Mat4, Vec3};
+        use gizmo_physics_core::{components::GlobalTransform, Transform};
+        let mut world = World::new();
+        let child = world.spawn();
+        world.add_component(child, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
+        world.add_component(child, GlobalTransform { matrix: Mat4::from_translation(Vec3::new(10.0, 1.0, 0.0)) });
+        let root = world.spawn();
+        world.add_component(root, Transform::new(Vec3::new(0.0, 1.0, 4.0)));
+        let mut state = EditorState::default();
+        state.select_exclusive(child);
+        assert_eq!(selection_center(&world, &state), Some(Vec3::new(10.0, 1.0, 0.0)));
+        state.toggle_selection(root);
+        assert_eq!(selection_center(&world, &state), Some(Vec3::new(5.0, 1.0, 2.0)), "the mean of both");
+        state.clear_selection();
+        assert_eq!(selection_center(&world, &state), None);
+    }
 }
 
 #[cfg(test)]

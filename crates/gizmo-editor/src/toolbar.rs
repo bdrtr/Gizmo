@@ -141,13 +141,7 @@ fn draw_tool_row(ui: &mut egui::Ui, state: &mut EditorState) {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
 
-                // Q-W-E-R (only while nothing is taking text).
-                if !ui.ctx().egui_wants_keyboard_input() {
-                    if ui.input(|i| i.key_pressed(egui::Key::Q)) { state.gizmo_mode = GizmoMode::Select; }
-                    if ui.input(|i| i.key_pressed(egui::Key::W)) { state.gizmo_mode = GizmoMode::Translate; }
-                    if ui.input(|i| i.key_pressed(egui::Key::E)) { state.gizmo_mode = GizmoMode::Rotate; }
-                    if ui.input(|i| i.key_pressed(egui::Key::R)) { state.gizmo_mode = GizmoMode::Scale; }
-                }
+                // The Q W E R keys are `draw_editor`'s, the one place they are bound.
 
                 // Icon-only, like the prototype. The shortcut lives in the tooltip instead of the
                 // label, which is what lets four tools fit in the width of one old button.
