@@ -164,6 +164,25 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
 
     let pts = points;
 
+    let [p0, p1, p2, p3] = match initial_simplex(pts) {
+        Ok(corners) => corners,
+        Err(flat) => return flat,
+    };
+    let mut faces = tetrahedron(pts, [p0, p1, p2, p3]);
+    assign_outside_points(pts, &mut faces, [p0, p1, p2, p3]);
+
+    // Main Quickhull Loop: while a face has points outside it, the furthest of them joins the hull.
+    while let Some(active_face_idx) = faces.iter().position(|f| !f.outside_set.is_empty()) {
+        faces = add_point(pts, faces, active_face_idx);
+    }
+
+    hull_from_faces(pts, &faces)
+}
+
+/// The hull's first four corners — the two extreme points furthest apart, the point furthest from
+/// their line, the point furthest from those three's plane — or, for input with no volume, the
+/// hull it has instead (`Err`): one vertex, a segment, or the deduplicated planar points.
+fn initial_simplex(pts: &[Vec3]) -> Result<[usize; 4], ConvexHull> {
     // 1. Find 6 extreme points
     let mut min_x = 0;
     let mut max_x = 0;
@@ -215,10 +234,10 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
         tracing::debug!(
             "convex hull input is a single point (all coincident); returning one vertex, no faces"
         );
-        return ConvexHull {
+        return Err(ConvexHull {
             vertices: vec![pts[0]],
             faces: vec![],
-        };
+        });
     }
 
     // Find p2 furthest from line p0-p1
@@ -242,10 +261,10 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
         tracing::debug!(
             "convex hull input is collinear; collapsed to a segment (two vertices, no faces)"
         );
-        return ConvexHull {
+        return Err(ConvexHull {
             vertices: vec![pts[p0], pts[p1]],
             faces: vec![],
-        };
+        });
     }
 
     // Find p3 furthest from plane p0-p1-p2
@@ -276,13 +295,17 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
             vertex_count = dedup.len(),
             "convex hull input is coplanar; returning a planar polygon without faces"
         );
-        return ConvexHull {
+        return Err(ConvexHull {
             vertices: dedup,
             faces: vec![],
-        };
+        });
     }
 
-    // Build initial tetrahedron faces
+    Ok([p0, p1, p2, p3])
+}
+
+/// The tetrahedron on `corners`, each face wound so its normal points away from the fourth corner.
+fn tetrahedron(pts: &[Vec3], [p0, p1, p2, p3]: [usize; 4]) -> Vec<HullFace> {
     let mut faces = Vec::new();
 
     // Ensure normal points OUTWARD.
@@ -311,8 +334,12 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
     faces.push(f1);
     faces.push(f2);
     faces.push(f3);
+    faces
+}
 
-    // Assign points to initial faces
+/// Every point but the corners goes to the outside set of the face it is furthest in front of, if
+/// any is by more than `EPSILON`.
+fn assign_outside_points(pts: &[Vec3], faces: &mut [HullFace], [p0, p1, p2, p3]: [usize; 4]) {
     for i in 0..pts.len() {
         if i == p0 || i == p1 || i == p2 || i == p3 {
             continue;
@@ -334,118 +361,111 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
             faces[best_face].outside_set.push(i);
         }
     }
+}
 
-    // Main Quickhull Loop
-    loop {
-        // Find a face with an active outside set
-        let mut active_face_idx = usize::MAX;
-        for (i, f) in faces.iter().enumerate() {
-            if !f.outside_set.is_empty() {
-                active_face_idx = i;
-                break;
-            }
+/// One step of the hull: the point of `faces[active_face_idx]`'s outside set furthest from it joins
+/// the hull. Every face it can see is replaced by a fan from it to their horizon, and their outside
+/// points are handed to the new faces.
+fn add_point(pts: &[Vec3], mut faces: Vec<HullFace>, active_face_idx: usize) -> Vec<HullFace> {
+    // Pick the furthest point in the outside set
+    let mut best_pt = 0;
+    let mut max_d = -1.0;
+    let active_face = &faces[active_face_idx];
+
+    for &idx in &active_face.outside_set {
+        let d = active_face.distance(pts[idx], pts);
+        if d > max_d {
+            max_d = d;
+            best_pt = idx;
         }
+    }
 
-        if active_face_idx == usize::MAX {
-            break; // Finished!
+    let p = pts[best_pt];
+
+    // Find all visible faces
+    let mut visible_faces = Vec::new();
+    for (i, f) in faces.iter().enumerate() {
+        if f.distance(p, pts) > EPSILON {
+            visible_faces.push(i);
         }
+    }
 
-        // Pick the furthest point in the outside set
-        let mut best_pt = 0;
-        let mut max_d = -1.0;
-        let active_face = &faces[active_face_idx];
-
-        for &idx in &active_face.outside_set {
-            let d = active_face.distance(pts[idx], pts);
-            if d > max_d {
-                max_d = d;
-                best_pt = idx;
-            }
+    // Extract horizon edges
+    // A directed edge (u, v) is added. If a neighboring visible face adds (v, u), they cancel out.
+    // BTreeMap: deterministik iterasyon sırası (HashMap rastgele seed'liydi →
+    // horizon kenar sırası, dolayısıyla hull çıktısı çalıştırmadan çalıştırmaya
+    // değişiyordu; bu rollback/replay determinizmini bozuyordu).
+    let mut edge_counts = BTreeMap::new();
+    for &f_idx in &visible_faces {
+        let f = &faces[f_idx];
+        let edges = [(f.v[0], f.v[1]), (f.v[1], f.v[2]), (f.v[2], f.v[0])];
+        for &(u, v) in &edges {
+            *edge_counts.entry((u, v)).or_insert(0) += 1;
         }
+    }
 
-        let p = pts[best_pt];
-
-        // Find all visible faces
-        let mut visible_faces = Vec::new();
-        for (i, f) in faces.iter().enumerate() {
-            if f.distance(p, pts) > EPSILON {
-                visible_faces.push(i);
-            }
+    let mut horizon_edges = Vec::new();
+    for (&(u, v), &count) in &edge_counts {
+        if count == 1 && !edge_counts.contains_key(&(v, u)) {
+            horizon_edges.push((u, v));
         }
+    }
 
-        // Extract horizon edges
-        // A directed edge (u, v) is added. If a neighboring visible face adds (v, u), they cancel out.
-        // BTreeMap: deterministik iterasyon sırası (HashMap rastgele seed'liydi →
-        // horizon kenar sırası, dolayısıyla hull çıktısı çalıştırmadan çalıştırmaya
-        // değişiyordu; bu rollback/replay determinizmini bozuyordu).
-        let mut edge_counts = BTreeMap::new();
-        for &f_idx in &visible_faces {
-            let f = &faces[f_idx];
-            let edges = [(f.v[0], f.v[1]), (f.v[1], f.v[2]), (f.v[2], f.v[0])];
-            for &(u, v) in &edges {
-                *edge_counts.entry((u, v)).or_insert(0) += 1;
-            }
-        }
-
-        let mut horizon_edges = Vec::new();
-        for (&(u, v), &count) in &edge_counts {
-            if count == 1 && !edge_counts.contains_key(&(v, u)) {
-                horizon_edges.push((u, v));
-            }
-        }
-
-        // Collect all points from the outside sets of visible faces
-        let mut orphaned_points = Vec::new();
-        for &f_idx in &visible_faces {
-            for &idx in &faces[f_idx].outside_set {
-                if idx != best_pt {
-                    orphaned_points.push(idx);
-                }
-            }
-        }
-
-        // Delete visible faces (mark by removing them later, for now we will build a new face list)
-        let mut new_faces = Vec::new();
-        for (i, f) in faces.into_iter().enumerate() {
-            if !visible_faces.contains(&i) {
-                new_faces.push(f);
-            }
-        }
-        faces = new_faces;
-
-        // Create new faces from horizon edges to P
-        let mut new_face_indices = Vec::new();
-        for &(u, v) in &horizon_edges {
-            let new_face = HullFace::new(u, v, best_pt, pts);
-            faces.push(new_face);
-            new_face_indices.push(faces.len() - 1);
-        }
-
-        // Reassign orphaned points
-        for idx in orphaned_points {
-            let pt = pts[idx];
-            let mut best_face = usize::MAX;
-            let mut best_d = EPSILON;
-
-            for &f_idx in &new_face_indices {
-                let d = faces[f_idx].distance(pt, pts);
-                if d > best_d {
-                    best_d = d;
-                    best_face = f_idx;
-                }
-            }
-
-            if best_face != usize::MAX {
-                faces[best_face].outside_set.push(idx);
+    // Collect all points from the outside sets of visible faces
+    let mut orphaned_points = Vec::new();
+    for &f_idx in &visible_faces {
+        for &idx in &faces[f_idx].outside_set {
+            if idx != best_pt {
+                orphaned_points.push(idx);
             }
         }
     }
 
+    // Delete visible faces (mark by removing them later, for now we will build a new face list)
+    let mut new_faces = Vec::new();
+    for (i, f) in faces.into_iter().enumerate() {
+        if !visible_faces.contains(&i) {
+            new_faces.push(f);
+        }
+    }
+    faces = new_faces;
+
+    // Create new faces from horizon edges to P
+    let mut new_face_indices = Vec::new();
+    for &(u, v) in &horizon_edges {
+        let new_face = HullFace::new(u, v, best_pt, pts);
+        faces.push(new_face);
+        new_face_indices.push(faces.len() - 1);
+    }
+
+    // Reassign orphaned points
+    for idx in orphaned_points {
+        let pt = pts[idx];
+        let mut best_face = usize::MAX;
+        let mut best_d = EPSILON;
+
+        for &f_idx in &new_face_indices {
+            let d = faces[f_idx].distance(pt, pts);
+            if d > best_d {
+                best_d = d;
+                best_face = f_idx;
+            }
+        }
+
+        if best_face != usize::MAX {
+            faces[best_face].outside_set.push(idx);
+        }
+    }
+    faces
+}
+
+/// The hull's output: the vertices the faces use, in index order, and the faces renumbered to them.
+fn hull_from_faces(pts: &[Vec3], faces: &[HullFace]) -> ConvexHull {
     // Extract unique vertices and mapped indices.
     // BTreeSet: çıktı köşe sırasının deterministik olması için (HashSet iterasyonu
     // rastgeleydi → out_vertices/faces remap sırası değişiyordu).
     let mut vertex_set = BTreeSet::new();
-    for f in &faces {
+    for f in faces {
         vertex_set.insert(f.v[0]);
         vertex_set.insert(f.v[1]);
         vertex_set.insert(f.v[2]);
@@ -460,7 +480,7 @@ pub fn compute_convex_hull(points: &[Vec3]) -> ConvexHull {
     }
 
     let mut out_faces = Vec::new();
-    for f in &faces {
+    for f in faces {
         out_faces.push([
             old_to_new[&f.v[0]],
             old_to_new[&f.v[1]],
