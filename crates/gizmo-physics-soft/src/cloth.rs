@@ -473,98 +473,14 @@ impl Cloth {
         let sub_dt = dt / (sub_steps as f32);
         let sub_dt2 = sub_dt * sub_dt;
 
-        // Per-node collision scratch, reused across sub-steps: the pre-collision impact
-        // velocity and (if the node touches a collider) the contact normal. Kept out of
-        // `ClothNode` so the public particle struct — and its `PartialEq`/determinism —
-        // stays clean. Only populated when there are rigid colliders to resolve against.
-        let mut impact_vel: Vec<Vec3> = Vec::new();
-        let mut contact_normal: Vec<Option<Vec3>> = Vec::new();
-        // …and which body that contact was with, so the reaction knows where to go.
-        let mut contact_body: Vec<Option<BodyHandle>> = Vec::new();
-        // Edge-pass accumulation: corrections are summed per node and applied as an AVERAGE,
-        // so a node shared by many edges is not shoved once per incident edge (compounding).
-        let mut edge_push: Vec<Vec3> = Vec::new();
-        let mut edge_cnt: Vec<u32> = Vec::new();
-        // Where each collider can touch the cloth at all: its world box, grown by the widest reach
-        // any pass below tests with (the edge gate's `2 · thickness`). A node or an edge wholly
-        // outside it cannot be within reach of the shape, so every test below would return
-        // nothing for it — skipping the pair changes no result, it only stops paying for it. The
-        // edge pass's own broad phase was a sphere round the collider's centre, which for a
-        // floor — a 24 × 1 × 24 m box under `sinama`'s cloths — was 17 m wide and let every edge
-        // through to eight samples against the floor, every sub-step: 12 of the scene's 12.5 ms.
-        let reach = Vec3::splat(self.thickness * 2.0 + 1e-4);
-        let collider_box: Vec<(Vec3, Vec3)> = colliders
-            .iter()
-            .map(|(_, t, c)| {
-                let b = c.compute_aabb(t.position, t.rotation);
-                (Vec3::from(b.min) - reach, Vec3::from(b.max) + reach)
-            })
-            .collect();
-        // `false` only when the box `lo..hi` is certainly clear of collider `ci`'s; a NaN anywhere
-        // compares false and keeps the pair.
-        let clear = |lo: Vec3, hi: Vec3, ci: usize| {
-            let (clo, chi) = collider_box[ci];
-            hi.cmplt(clo).any() || lo.cmpgt(chi).any()
-        };
-        if !colliders.is_empty() {
-            impact_vel = vec![Vec3::ZERO; self.nodes.len()];
-            contact_normal = vec![None; self.nodes.len()];
-            contact_body = vec![None; self.nodes.len()];
-            edge_push = vec![Vec3::ZERO; self.nodes.len()];
-            edge_cnt = vec![0u32; self.nodes.len()];
-        }
+        let mut scratch = ContactScratch::new(self.nodes.len(), colliders, self.thickness);
 
         for _ in 0..sub_steps {
             for c in &mut self.constraints {
                 c.lambda = 0.0;
             }
-
-            // Predict
-            for node in &mut self.nodes {
-                if node.inv_mass == 0.0 {
-                    continue;
-                }
-                let velocity = (node.position - node.prev_position) / sub_dt;
-                node.prev_position = node.position;
-
-                // Add gravity and damping (frame-rate independent)
-                let damping = self.damping;
-                let next_vel = velocity * damping.powf(sub_dt) + gravity * sub_dt;
-                node.position += next_vel * sub_dt;
-            }
-
-            // Solve Constraints
-            for constraint in &mut self.constraints {
-                let (pos_a, pos_b, inv_m_a, inv_m_b) = {
-                    let a = &self.nodes[constraint.node_a];
-                    let b = &self.nodes[constraint.node_b];
-                    (a.position, b.position, a.inv_mass, b.inv_mass)
-                };
-
-                let w_sum = inv_m_a + inv_m_b;
-                if w_sum == 0.0 {
-                    continue;
-                }
-
-                let diff = pos_a - pos_b;
-                let dist = diff.length();
-                if dist < 1e-6 {
-                    continue;
-                }
-
-                let n = diff / dist;
-                let c = dist - constraint.rest_length;
-                let alpha = constraint.compliance / sub_dt2;
-
-                let delta_lambda = (-c - alpha * constraint.lambda) / (w_sum + alpha);
-                constraint.lambda += delta_lambda;
-
-                let p = n * delta_lambda;
-
-                self.nodes[constraint.node_a].position += p * inv_m_a;
-                self.nodes[constraint.node_b].position -= p * inv_m_b;
-            }
-
+            self.predict(gravity, sub_dt);
+            self.solve_constraints(sub_dt2);
             // Rigid-body collision — drape the cloth over every sphere/box collider.
             //
             // Structured as THREE passes so each node gets ONE velocity response per step
@@ -572,220 +488,312 @@ impl Cloth {
             // cloth). Passes only correct POSITION; the reconstructed impact velocity is
             // captured up front and the response is applied once at the end.
             if !colliders.is_empty() {
-                let (thickness, friction) = (self.thickness, self.friction);
+                self.collide_with_bodies(colliders, reactions, impulses, &mut scratch, sub_dt);
+            }
+            self.floor_collision(sub_dt);
+        }
+        self.tear();
+    }
 
-                // Impact velocity (post-predict, post-constraint) BEFORE any collision push,
-                // and the contact normal for each node that ends up touching something.
-                for (((node, cn), cb), iv) in self
-                    .nodes
-                    .iter()
-                    .zip(contact_normal.iter_mut())
-                    .zip(contact_body.iter_mut())
-                    .zip(impact_vel.iter_mut())
-                {
-                    *cn = None;
-                    *cb = None;
-                    *iv = if node.inv_mass != 0.0 {
-                        (node.position - node.prev_position) / sub_dt
-                    } else {
-                        Vec3::ZERO
-                    };
-                }
+    /// Each free node's next position: its velocity, damped (frame-rate independent), plus gravity.
+    fn predict(&mut self, gravity: Vec3, sub_dt: f32) {
+        for node in &mut self.nodes {
+            if node.inv_mass == 0.0 {
+                continue;
+            }
+            let velocity = (node.position - node.prev_position) / sub_dt;
+            node.prev_position = node.position;
 
-                // Pass 1 — node contact: project each dynamic node out of each collider.
-                for ((node, cn), cb) in self.nodes.iter_mut().zip(contact_normal.iter_mut()).zip(contact_body.iter_mut()) {
-                    if node.inv_mass == 0.0 {
-                        continue;
-                    }
-                    for (ci, (handle, ctrans, col)) in colliders.iter().enumerate() {
-                        if clear(node.position, node.position, ci) {
-                            continue;
-                        }
-                        if let Some((new_pos, n)) =
-                            project_point_out(node.position, thickness, &col.shape, ctrans)
-                        {
-                            node.position = new_pos;
-                            *cn = Some(n);
-                            *cb = Some(*handle);
-                        }
-                    }
-                }
+            // Add gravity and damping (frame-rate independent)
+            let damping = self.damping;
+            let next_vel = velocity * damping.powf(sub_dt) + gravity * sub_dt;
+            node.position += next_vel * sub_dt;
+        }
+    }
 
-                // Pass 2 — edge contact: a collider can fit BETWEEN sparse nodes, so a
-                // low-resolution cloth (or a coarse "board") would tunnel through if only the
-                // nodes were tested. For each edge we find the point ALONG the segment that
-                // penetrates deepest (sampling several parameters `t`, not just the midpoint —
-                // an off-centre/tilted edge is deepest nearest the collider, not at its middle)
-                // and push the two endpoints out with barycentric weights so that contact point
-                // reaches the surface.
-                //
-                // Gate: skip the edge if EITHER endpoint is already at/near this collider's
-                // surface — the node pass owns that region and pushing the edge too would
-                // inflate the drape off the surface. The gate uses a slightly widened band
-                // (`2*thickness`) so a node RESTING exactly at `radius+thickness` still counts
-                // as contact (`project_point_out` uses a strict `<`, so the exact-surface node
-                // would otherwise leak through). Corrections are accumulated and applied as a
-                // per-node AVERAGE, and an endpoint is never pushed INTO the collider (which,
-                // for an edge straddling a box, the shared contact normal would otherwise do).
-                for i in 0..edge_push.len() {
-                    edge_push[i] = Vec3::ZERO;
-                    edge_cnt[i] = 0;
-                }
-                const SAMPLES: usize = 8;
-                for ci in 0..self.constraints.len() {
-                    let a_idx = self.constraints[ci].node_a;
-                    let b_idx = self.constraints[ci].node_b;
-                    let (ma, mb) = (self.nodes[a_idx].inv_mass, self.nodes[b_idx].inv_mass);
-                    if ma == 0.0 && mb == 0.0 {
-                        continue;
-                    }
-                    for (ci, (handle, ctrans, col)) in colliders.iter().enumerate() {
-                        let Some(bound) = collider_bound(&col.shape) else {
-                            continue;
-                        };
-                        // Re-read per collider: an earlier collider may have moved the nodes.
-                        let pa = self.nodes[a_idx].position;
-                        let pb = self.nodes[b_idx].position;
-                        if clear(pa.min(pb), pa.max(pb), ci) {
-                            continue;
-                        }
-                        // Broad phase: skip unless the segment comes within reach of the collider.
-                        let reach = bound + thickness;
-                        if seg_point_dist_sq(pa, pb, ctrans.position) > reach * reach {
-                            continue;
-                        }
-                        // Gate: endpoint already resolved by the node pass → skip this edge.
-                        let gate = thickness * 2.0;
-                        if project_point_out(pa, gate, &col.shape, ctrans).is_some()
-                            || project_point_out(pb, gate, &col.shape, ctrans).is_some()
-                        {
-                            continue;
-                        }
-                        // Deepest-penetrating interior sample point.
-                        let mut best: Option<(f32, Vec3, Vec3, f32)> = None; // (t, corr, n, pen²)
-                        for k in 1..SAMPLES {
-                            let t = k as f32 / SAMPLES as f32;
-                            let pt = pa + (pb - pa) * t;
-                            if let Some((new_pt, n)) =
-                                project_point_out(pt, thickness, &col.shape, ctrans)
-                            {
-                                let pen = (new_pt - pt).length_squared();
-                                if best.is_none_or(|(_, _, _, bp)| pen > bp) {
-                                    best = Some((t, new_pt - pt, n, pen));
-                                }
-                            }
-                        }
-                        let Some((t, corr, n, _)) = best else {
-                            continue;
-                        };
-                        // Barycentric split so the contact point at `t` moves out by `corr`.
-                        // Never drive an endpoint INTO the collider (which, for an edge
-                        // straddling a box, the shared contact normal would otherwise do).
-                        let (ua, ub) = (1.0 - t, t);
-                        let denom = (ua * ua + ub * ub).max(1e-6);
-                        if ma != 0.0 {
-                            let d = corr * (ua / denom);
-                            if project_point_out(pa + d, thickness, &col.shape, ctrans).is_none() {
-                                edge_push[a_idx] += d;
-                                edge_cnt[a_idx] += 1;
-                                contact_normal[a_idx] = Some(n);
-                                contact_body[a_idx] = Some(*handle);
-                            }
-                        }
-                        if mb != 0.0 {
-                            let d = corr * (ub / denom);
-                            if project_point_out(pb + d, thickness, &col.shape, ctrans).is_none() {
-                                edge_push[b_idx] += d;
-                                edge_cnt[b_idx] += 1;
-                                contact_normal[b_idx] = Some(n);
-                                contact_body[b_idx] = Some(*handle);
-                            }
-                        }
-                    }
-                }
-                // Apply the averaged accumulated edge corrections.
-                for (node, (push, cnt)) in self
-                    .nodes
-                    .iter_mut()
-                    .zip(edge_push.iter().zip(edge_cnt.iter()))
-                {
-                    if *cnt > 0 {
-                        node.position += *push / *cnt as f32;
-                    }
-                }
+    /// One XPBD pass over the distance constraints.
+    fn solve_constraints(&mut self, sub_dt2: f32) {
+        for constraint in &mut self.constraints {
+            let (pos_a, pos_b, inv_m_a, inv_m_b) = {
+                let a = &self.nodes[constraint.node_a];
+                let b = &self.nodes[constraint.node_b];
+                (a.position, b.position, a.inv_mass, b.inv_mass)
+            };
 
-                // Pass 3 — velocity response, ONCE per contacted node: remove the inward normal
-                // component of the impact velocity **relative to the body at the contact**
-                // (inelastic) and apply friction to the tangential remainder, then rebuild
-                // prev_position from the new velocity. Against a body at rest — every static
-                // collider, and every one when `reactions` is empty — the relative velocity is
-                // the node's own, exactly, and so is the arithmetic. What the node gained, the
-                // body owes back.
-                for (((node, cn), cb), iv) in self
-                    .nodes
-                    .iter_mut()
-                    .zip(contact_normal.iter())
-                    .zip(contact_body.iter())
-                    .zip(impact_vel.iter())
-                {
-                    if node.inv_mass == 0.0 {
-                        continue;
-                    }
-                    if let Some(n) = *cn {
-                        let reaction = cb.map_or(crate::coupling::RigidReaction::IMMOVABLE, |b| crate::coupling::reaction_for(reactions, b));
-                        let surface = reaction.velocity_at(node.position);
-                        let vel = *iv;
-                        let rel = vel - surface;
-                        let vn = rel.dot(n);
-                        let new_vel = if vn < 0.0 {
-                            (rel - n * vn) * (1.0 - friction) + surface
-                        } else {
-                            vel
-                        };
-                        node.prev_position = node.position - new_vel * sub_dt;
-                        if let (Some(body), true) = (*cb, reaction.can_react()) {
-                            let impulse = (vel - new_vel) * node.mass;
-                            crate::coupling::accumulate_impulse(
-                                impulses,
-                                &crate::coupling::NodeImpact {
-                                    body,
-                                    point: node.position,
-                                    normal: n,
-                                    impulse,
-                                    angular_impulse: (node.position - reaction.center_of_mass).cross(impulse),
-                                },
-                            );
-                        }
-                    }
-                }
+            let w_sum = inv_m_a + inv_m_b;
+            if w_sum == 0.0 {
+                continue;
             }
 
-            // Floor Collision
-            for node in &mut self.nodes {
-                if node.inv_mass == 0.0 {
+            let diff = pos_a - pos_b;
+            let dist = diff.length();
+            if dist < 1e-6 {
+                continue;
+            }
+
+            let n = diff / dist;
+            let c = dist - constraint.rest_length;
+            let alpha = constraint.compliance / sub_dt2;
+
+            let delta_lambda = (-c - alpha * constraint.lambda) / (w_sum + alpha);
+            constraint.lambda += delta_lambda;
+
+            let p = n * delta_lambda;
+
+            self.nodes[constraint.node_a].position += p * inv_m_a;
+            self.nodes[constraint.node_b].position -= p * inv_m_b;
+        }
+    }
+
+    /// The cloth against the rigid bodies, in three passes so each node gets ONE velocity
+    /// response per sub-step: the nodes pushed out (`node_contacts`), the edges a collider fits
+    /// between (`edge_contacts`), then the response and the reactions owed (`contact_response`).
+    fn collide_with_bodies(
+        &mut self,
+        colliders: &[(BodyHandle, Transform, Collider)],
+        reactions: &[(BodyHandle, crate::coupling::RigidReaction)],
+        impulses: &mut Vec<crate::coupling::RigidImpulse>,
+        scratch: &mut ContactScratch,
+        sub_dt: f32,
+    ) {
+        let (thickness, friction) = (self.thickness, self.friction);
+        self.record_impact_velocities(scratch, sub_dt);
+        self.node_contacts(colliders, scratch, thickness);
+        self.edge_contacts(colliders, scratch, thickness);
+        self.contact_response(reactions, impulses, scratch, friction, sub_dt);
+    }
+
+    /// Impact velocity (post-predict, post-constraint) BEFORE any collision push; the contacts cleared.
+    fn record_impact_velocities(&self, scratch: &mut ContactScratch, sub_dt: f32) {
+        let ContactScratch { impact_vel, contact_normal, contact_body, .. } = scratch;
+        for (((node, cn), cb), iv) in self
+            .nodes
+            .iter()
+            .zip(contact_normal.iter_mut())
+            .zip(contact_body.iter_mut())
+            .zip(impact_vel.iter_mut())
+        {
+            *cn = None;
+            *cb = None;
+            *iv = if node.inv_mass != 0.0 {
+                (node.position - node.prev_position) / sub_dt
+            } else {
+                Vec3::ZERO
+            };
+        }
+    }
+
+    /// Pass 1 — node contact: each dynamic node projected out of each collider.
+    fn node_contacts(&mut self, colliders: &[(BodyHandle, Transform, Collider)], scratch: &mut ContactScratch, thickness: f32) {
+        let ContactScratch { contact_normal, contact_body, collider_box, .. } = scratch;
+        for ((node, cn), cb) in self.nodes.iter_mut().zip(contact_normal.iter_mut()).zip(contact_body.iter_mut()) {
+            if node.inv_mass == 0.0 {
+                continue;
+            }
+            for (ci, (handle, ctrans, col)) in colliders.iter().enumerate() {
+                if clear_of(collider_box, node.position, node.position, ci) {
                     continue;
                 }
-                if node.position.y < self.thickness {
-                    // Capture the true predicted impact velocity BEFORE clamping the
-                    // position: computing it from the clamped position would understate
-                    // the vertical impact speed, corrupting friction/`prev_position`
-                    // reconstruction and injecting a wrong impulse next frame.
-                    let mut vel = (node.position - node.prev_position) / sub_dt;
-
-                    node.position.y = self.thickness;
-
-                    // Simple friction: damp horizontal velocity when touching ground.
-                    vel.x *= 1.0 - self.friction;
-                    vel.z *= 1.0 - self.friction;
-                    // Aşağı yönlü hızı koru-MA: zemine doğru momentum biriktirmek
-                    // titreme/enerji enjeksiyonuna yol açıyordu (yukarı serbest).
-                    vel.y = vel.y.max(0.0);
-                    node.prev_position = node.position - vel * sub_dt;
+                if let Some((new_pos, n)) =
+                    project_point_out(node.position, thickness, &col.shape, ctrans)
+                {
+                    node.position = new_pos;
+                    *cn = Some(n);
+                    *cb = Some(*handle);
                 }
             }
         }
+    }
 
-        // Tearing: drop any constraint stretched beyond rest_length * tear_factor so the
+    fn edge_contacts(&mut self, colliders: &[(BodyHandle, Transform, Collider)], scratch: &mut ContactScratch, thickness: f32) {
+        let ContactScratch { contact_normal, contact_body, edge_push, edge_cnt, collider_box, .. } = scratch;
+        // Pass 2 — edge contact: a collider can fit BETWEEN sparse nodes, so a
+        // low-resolution cloth (or a coarse "board") would tunnel through if only the
+        // nodes were tested. For each edge we find the point ALONG the segment that
+        // penetrates deepest (sampling several parameters `t`, not just the midpoint —
+        // an off-centre/tilted edge is deepest nearest the collider, not at its middle)
+        // and push the two endpoints out with barycentric weights so that contact point
+        // reaches the surface.
+        //
+        // Gate: skip the edge if EITHER endpoint is already at/near this collider's
+        // surface — the node pass owns that region and pushing the edge too would
+        // inflate the drape off the surface. The gate uses a slightly widened band
+        // (`2*thickness`) so a node RESTING exactly at `radius+thickness` still counts
+        // as contact (`project_point_out` uses a strict `<`, so the exact-surface node
+        // would otherwise leak through). Corrections are accumulated and applied as a
+        // per-node AVERAGE, and an endpoint is never pushed INTO the collider (which,
+        // for an edge straddling a box, the shared contact normal would otherwise do).
+        for i in 0..edge_push.len() {
+            edge_push[i] = Vec3::ZERO;
+            edge_cnt[i] = 0;
+        }
+        const SAMPLES: usize = 8;
+        for ci in 0..self.constraints.len() {
+            let a_idx = self.constraints[ci].node_a;
+            let b_idx = self.constraints[ci].node_b;
+            let (ma, mb) = (self.nodes[a_idx].inv_mass, self.nodes[b_idx].inv_mass);
+            if ma == 0.0 && mb == 0.0 {
+                continue;
+            }
+            for (ci, (handle, ctrans, col)) in colliders.iter().enumerate() {
+                let Some(bound) = collider_bound(&col.shape) else {
+                    continue;
+                };
+                // Re-read per collider: an earlier collider may have moved the nodes.
+                let pa = self.nodes[a_idx].position;
+                let pb = self.nodes[b_idx].position;
+                if clear_of(collider_box, pa.min(pb), pa.max(pb), ci) {
+                    continue;
+                }
+                // Broad phase: skip unless the segment comes within reach of the collider.
+                let reach = bound + thickness;
+                if seg_point_dist_sq(pa, pb, ctrans.position) > reach * reach {
+                    continue;
+                }
+                // Gate: endpoint already resolved by the node pass → skip this edge.
+                let gate = thickness * 2.0;
+                if project_point_out(pa, gate, &col.shape, ctrans).is_some()
+                    || project_point_out(pb, gate, &col.shape, ctrans).is_some()
+                {
+                    continue;
+                }
+                // Deepest-penetrating interior sample point.
+                let mut best: Option<(f32, Vec3, Vec3, f32)> = None; // (t, corr, n, pen²)
+                for k in 1..SAMPLES {
+                    let t = k as f32 / SAMPLES as f32;
+                    let pt = pa + (pb - pa) * t;
+                    if let Some((new_pt, n)) =
+                        project_point_out(pt, thickness, &col.shape, ctrans)
+                    {
+                        let pen = (new_pt - pt).length_squared();
+                        if best.is_none_or(|(_, _, _, bp)| pen > bp) {
+                            best = Some((t, new_pt - pt, n, pen));
+                        }
+                    }
+                }
+                let Some((t, corr, n, _)) = best else {
+                    continue;
+                };
+                // Barycentric split so the contact point at `t` moves out by `corr`.
+                // Never drive an endpoint INTO the collider (which, for an edge
+                // straddling a box, the shared contact normal would otherwise do).
+                let (ua, ub) = (1.0 - t, t);
+                let denom = (ua * ua + ub * ub).max(1e-6);
+                if ma != 0.0 {
+                    let d = corr * (ua / denom);
+                    if project_point_out(pa + d, thickness, &col.shape, ctrans).is_none() {
+                        edge_push[a_idx] += d;
+                        edge_cnt[a_idx] += 1;
+                        contact_normal[a_idx] = Some(n);
+                        contact_body[a_idx] = Some(*handle);
+                    }
+                }
+                if mb != 0.0 {
+                    let d = corr * (ub / denom);
+                    if project_point_out(pb + d, thickness, &col.shape, ctrans).is_none() {
+                        edge_push[b_idx] += d;
+                        edge_cnt[b_idx] += 1;
+                        contact_normal[b_idx] = Some(n);
+                        contact_body[b_idx] = Some(*handle);
+                    }
+                }
+            }
+        }
+        // Apply the averaged accumulated edge corrections.
+        for (node, (push, cnt)) in self
+            .nodes
+            .iter_mut()
+            .zip(edge_push.iter().zip(edge_cnt.iter()))
+        {
+            if *cnt > 0 {
+                node.position += *push / *cnt as f32;
+            }
+        }
+    }
+
+    fn contact_response(
+        &mut self,
+        reactions: &[(BodyHandle, crate::coupling::RigidReaction)],
+        impulses: &mut Vec<crate::coupling::RigidImpulse>,
+        scratch: &ContactScratch,
+        friction: f32,
+        sub_dt: f32,
+    ) {
+        let ContactScratch { impact_vel, contact_normal, contact_body, .. } = scratch;
+        // Pass 3 — velocity response, ONCE per contacted node: remove the inward normal
+        // component of the impact velocity **relative to the body at the contact**
+        // (inelastic) and apply friction to the tangential remainder, then rebuild
+        // prev_position from the new velocity. Against a body at rest — every static
+        // collider, and every one when `reactions` is empty — the relative velocity is
+        // the node's own, exactly, and so is the arithmetic. What the node gained, the
+        // body owes back.
+        for (((node, cn), cb), iv) in self
+            .nodes
+            .iter_mut()
+            .zip(contact_normal.iter())
+            .zip(contact_body.iter())
+            .zip(impact_vel.iter())
+        {
+            if node.inv_mass == 0.0 {
+                continue;
+            }
+            if let Some(n) = *cn {
+                let reaction = cb.map_or(crate::coupling::RigidReaction::IMMOVABLE, |b| crate::coupling::reaction_for(reactions, b));
+                let surface = reaction.velocity_at(node.position);
+                let vel = *iv;
+                let rel = vel - surface;
+                let vn = rel.dot(n);
+                let new_vel = if vn < 0.0 {
+                    (rel - n * vn) * (1.0 - friction) + surface
+                } else {
+                    vel
+                };
+                node.prev_position = node.position - new_vel * sub_dt;
+                if let (Some(body), true) = (*cb, reaction.can_react()) {
+                    let impulse = (vel - new_vel) * node.mass;
+                    crate::coupling::accumulate_impulse(
+                        impulses,
+                        &crate::coupling::NodeImpact {
+                            body,
+                            point: node.position,
+                            normal: n,
+                            impulse,
+                            angular_impulse: (node.position - reaction.center_of_mass).cross(impulse),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// The ground plane at `y = 0`: a node below its thickness is lifted onto it, with friction.
+    fn floor_collision(&mut self, sub_dt: f32) {
+        for node in &mut self.nodes {
+            if node.inv_mass == 0.0 {
+                continue;
+            }
+            if node.position.y < self.thickness {
+                // Capture the true predicted impact velocity BEFORE clamping the
+                // position: computing it from the clamped position would understate
+                // the vertical impact speed, corrupting friction/`prev_position`
+                // reconstruction and injecting a wrong impulse next frame.
+                let mut vel = (node.position - node.prev_position) / sub_dt;
+
+                node.position.y = self.thickness;
+
+                // Simple friction: damp horizontal velocity when touching ground.
+                vel.x *= 1.0 - self.friction;
+                vel.z *= 1.0 - self.friction;
+                // Aşağı yönlü hızı koru-MA: zemine doğru momentum biriktirmek
+                // titreme/enerji enjeksiyonuna yol açıyordu (yukarı serbest).
+                vel.y = vel.y.max(0.0);
+                node.prev_position = node.position - vel * sub_dt;
+            }
+        }
+    }
+
+    /// Tearing: every constraint stretched past `rest_length * tear_factor` is dropped.
+    fn tear(&mut self) {
         // cloth rips under stress. Disjoint field borrows (nodes read, constraints mutated).
         if self.tear_factor.is_finite() {
             let nodes = &self.nodes;
@@ -795,6 +803,66 @@ impl Cloth {
             });
         }
     }
+}
+
+/// Per-node collision scratch for [`Cloth::step_coupled`], reused across its sub-steps: the
+/// pre-collision impact velocity and (if the node touches a collider) the contact normal and the
+/// body. Kept out of `ClothNode` so the public particle struct — and its `PartialEq`/determinism —
+/// stays clean. Only populated when there are rigid colliders to resolve against.
+struct ContactScratch {
+    impact_vel: Vec<Vec3>,
+    contact_normal: Vec<Option<Vec3>>,
+    // …and which body that contact was with, so the reaction knows where to go.
+    contact_body: Vec<Option<BodyHandle>>,
+    // Edge-pass accumulation: corrections are summed per node and applied as an AVERAGE, so a
+    // node shared by many edges is not shoved once per incident edge (compounding).
+    edge_push: Vec<Vec3>,
+    edge_cnt: Vec<u32>,
+    /// Where each collider can touch the cloth at all (`clear_of`).
+    collider_box: Vec<(Vec3, Vec3)>,
+}
+
+impl ContactScratch {
+    fn new(nodes: usize, colliders: &[(BodyHandle, Transform, Collider)], thickness: f32) -> Self {
+    // Where each collider can touch the cloth at all: its world box, grown by the widest reach
+    // any pass below tests with (the edge gate's `2 · thickness`). A node or an edge wholly
+    // outside it cannot be within reach of the shape, so every test below would return
+    // nothing for it — skipping the pair changes no result, it only stops paying for it. The
+    // edge pass's own broad phase was a sphere round the collider's centre, which for a
+    // floor — a 24 × 1 × 24 m box under `sinama`'s cloths — was 17 m wide and let every edge
+    // through to eight samples against the floor, every sub-step: 12 of the scene's 12.5 ms.
+    let reach = Vec3::splat(thickness * 2.0 + 1e-4);
+    let collider_box: Vec<(Vec3, Vec3)> = colliders
+        .iter()
+        .map(|(_, t, c)| {
+            let b = c.compute_aabb(t.position, t.rotation);
+            (Vec3::from(b.min) - reach, Vec3::from(b.max) + reach)
+        })
+        .collect();
+        let mut scratch = ContactScratch {
+            impact_vel: Vec::new(),
+            contact_normal: Vec::new(),
+            contact_body: Vec::new(),
+            edge_push: Vec::new(),
+            edge_cnt: Vec::new(),
+            collider_box,
+        };
+        if !colliders.is_empty() {
+            scratch.impact_vel = vec![Vec3::ZERO; nodes];
+            scratch.contact_normal = vec![None; nodes];
+            scratch.contact_body = vec![None; nodes];
+            scratch.edge_push = vec![Vec3::ZERO; nodes];
+            scratch.edge_cnt = vec![0u32; nodes];
+        }
+        scratch
+    }
+}
+
+/// `false` only when the box `lo..hi` is certainly clear of collider `ci`'s box; a NaN anywhere
+/// compares false and keeps the pair.
+fn clear_of(collider_box: &[(Vec3, Vec3)], lo: Vec3, hi: Vec3, ci: usize) -> bool {
+    let (clo, chi) = collider_box[ci];
+    hi.cmplt(clo).any() || lo.cmpgt(chi).any()
 }
 
 #[cfg(feature = "ecs")]
