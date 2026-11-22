@@ -77,7 +77,7 @@ pub(crate) const HIT: f32 = 11.0;
 
 /// Draws the animation timeline for the selected entity's player.
 pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
-    let Some(entity) = state.selection.entities.iter().next().copied() else {
+    let Some(entity) = state.primary_selection() else {
         empty(ui, "Bir varlık seç — animasyon oynatıcısı olan bir varlık.");
         return;
     };

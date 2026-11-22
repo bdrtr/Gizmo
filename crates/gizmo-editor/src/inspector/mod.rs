@@ -38,10 +38,9 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         return;
     }
 
-    let primary_entity = state
-        .selection
-        .primary
-        .unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
+    let Some(primary_entity) = state.primary_selection() else {
+        return;
+    };
 
     if !world.is_alive(primary_entity) {
         return;

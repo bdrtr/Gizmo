@@ -205,7 +205,7 @@ fn transform_gizmo(ui: &mut egui::Ui, world: &World, state: &mut EditorState, re
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut transforms = unsafe { world.query_unchecked::<&mut gizmo_physics_core::Transform>() };
 
-    let primary_id = state.selection.primary.unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
+    let Some(primary_id) = state.primary_selection() else { return false };
     if transforms.get_mut(primary_id).is_none() {
         return false;
     }

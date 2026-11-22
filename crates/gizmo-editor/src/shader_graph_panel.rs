@@ -255,7 +255,7 @@ pub fn apply_to_world(world: &mut gizmo_core::World, state: &mut EditorState) {
     use gizmo_renderer::components::{Material, MaterialDesc};
     use gizmo_renderer::shader_graph::SurfaceGraph;
 
-    let primary = state.selection.primary;
+    let primary = state.primary_selection();
     let selected: Vec<gizmo_core::Entity> = state.selection.entities.iter().copied().collect();
     let panel = &mut state.shader_graph;
 

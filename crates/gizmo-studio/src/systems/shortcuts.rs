@@ -127,10 +127,8 @@ fn ctrl_shortcuts(world: &mut World, editor_state: &mut EditorState, input: &Inp
             editor_state.selection.entities.insert(e);
         }
         // The inspector shows the primary, so a selection needs one: the lowest id, for want of a
-        // last click. Ctrl+A left none, and the inspector showed nothing for a full selection.
-        if editor_state.selection.primary.is_none_or(|p| !editor_state.selection.entities.contains(&p)) {
-            editor_state.selection.primary = editor_state.selection.entities.iter().copied().min_by_key(|e| e.id());
-        }
+        // last click (`EditorState::primary_selection`). Ctrl+A left none.
+        editor_state.selection.primary = editor_state.primary_selection();
         let count = editor_state.selection.entities.len();
         editor_state.status_message = format!("✅ {} obje seçildi", count);
     }

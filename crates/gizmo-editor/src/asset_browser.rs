@@ -197,7 +197,7 @@ fn quick_actions(ui: &mut egui::Ui, state: &mut EditorState) {
 /// It took any member of the selection set, and with several selected that was whichever one the
 /// hash put first.
 fn save_selection_as_prefab(state: &mut EditorState) {
-    if let Some(selected) = state.selection.primary {
+    if let Some(selected) = state.primary_selection() {
         // From the entity's numbers: its `Display` (`Entity(3:0)`) holds a colon, which NTFS
         // takes for an alternate data stream.
         let stem = format!("prefab_{}v{}", selected.id(), selected.generation());
