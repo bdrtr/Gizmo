@@ -604,7 +604,12 @@ fn render_with_world(
                 std::f32::consts::FRAC_PI_4, 0.1, 1000.0, false),
         );
 
-        world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
+        let sun = world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
+        // Out of both cameras' view. A directional light's position lights nothing, and at the origin
+        // its icon (`render_pipeline::furniture`) sits on the cube every test here reads.
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(sun) {
+            t.position = Vec3::new(0.0, 40.0, 0.0);
+        }
         tweak_world(&mut world);
 
         let make_target = |label: &str, device: &wgpu::Device, format: wgpu::TextureFormat| {

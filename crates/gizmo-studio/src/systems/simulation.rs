@@ -268,27 +268,9 @@ pub fn handle_simulation(
         editor_state.fight_hud = gizmo::editor::editor_state::FightHudState::default();
     }
 
-    // --- NAVMESH DEBUG GIZMOS ---
-    if editor_state.open {
-        if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
-            // Draw Navmesh Obstacles
-            if let Some(grid) = world.get_resource::<gizmo::ai::pathfinding::NavGrid>() {
-                for &cell in &grid.obstacles {
-                    let center = grid.grid_to_world(cell);
-                    let half_size = gizmo::math::Vec3::new(
-                        grid.cell_size * 0.5,
-                        grid.cell_size * 0.5,
-                        grid.cell_size * 0.5,
-                    );
-                    let min = center - half_size;
-                    let max = center + half_size;
-                    gizmos.draw_box(min, max, [1.0, 0.0, 0.0, 0.5]); // Red boxes for obstacles
-                }
-            }
-
-
-        }
-    }
+    // The navmesh's obstacle cells are drawn by the render pipeline into the editor's own lines
+    // (`render_pipeline::furniture`), the Scene panel's alone. They were written into the game's
+    // `Gizmos` here, and showed in the Game panel and in play.
 }
 
 /// Should the **editor** step physics itself this frame?

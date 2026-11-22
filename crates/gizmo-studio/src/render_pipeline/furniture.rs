@@ -12,10 +12,13 @@ use gizmo::core::HierarchyExt;
 use gizmo::editor::EditorState;
 use gizmo::prelude::*;
 
-/// Everything this module draws, into `lines`: the selection boxes always, the icons only while
-/// editing.
+/// Everything this module draws, into `lines`: the selection boxes always, the navmesh's obstacle
+/// cells while the editor is open, the icons only while editing.
 pub(super) fn furniture_lines(world: &World, state: &StudioState, editor_state: &EditorState, lines: &mut gizmo::renderer::Gizmos) {
     selection_boxes(world, editor_state, lines);
+    if editor_state.open {
+        navmesh_obstacles(world, lines);
+    }
     if !editor_state.is_playing() {
         camera_icons(world, state, editor_state, lines);
         light_icons(world, editor_state, lines);
@@ -277,6 +280,23 @@ fn light_icons(world: &World, editor_state: &EditorState, lines: &mut gizmo::ren
                     prev_point = current_point;
                 }
             }
+        }
+    }
+}
+
+/// A red box at every obstacle cell of the navmesh grid.
+fn navmesh_obstacles(world: &World, lines: &mut gizmo::renderer::Gizmos) {
+    if let Some(grid) = world.get_resource::<gizmo::ai::pathfinding::NavGrid>() {
+        for &cell in &grid.obstacles {
+            let center = grid.grid_to_world(cell);
+            let half_size = gizmo::math::Vec3::new(
+                grid.cell_size * 0.5,
+                grid.cell_size * 0.5,
+                grid.cell_size * 0.5,
+            );
+            let min = center - half_size;
+            let max = center + half_size;
+            lines.draw_box(min, max, [1.0, 0.0, 0.0, 0.5]); // Red boxes for obstacles
         }
     }
 }
