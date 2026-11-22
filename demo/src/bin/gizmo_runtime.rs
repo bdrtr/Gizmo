@@ -93,6 +93,7 @@ fn print_report(report: PlayReport<'_>) {
             "error" | "warn" => eprintln!("[Lua] {message}"),
             _ => println!("[Lua] {message}"),
         },
+        PlayReport::Unanswered { call } => eprintln!("⚠ [Lua] `{call}` yok sayıldı: bu çalışma zamanında karşılığı yok."),
     }
 }
 

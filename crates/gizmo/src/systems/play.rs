@@ -83,6 +83,17 @@ pub enum PlayReport<'a> {
         /// The line itself.
         message: &'a str,
     },
+    /// A script called something nothing answered — `call` is the Lua call, `"dialogue.show"`,
+    /// `"race.start"`. Said once per call per loop, on the step after it was asked.
+    ///
+    /// The engine has no dialogue, cutscene or race subsystem and no camera-follow behaviour, and
+    /// the editor will not let a script switch or save its scene. A game that has its own takes
+    /// the commands with [`PlayLoop::take_unanswered`] before the next step, and this is never
+    /// said. Until 2026-11-23 they were dropped in silence, and nothing could take them.
+    Unanswered {
+        /// The Lua call nothing answered.
+        call: &'a str,
+    },
 }
 
 /// The edge a script's load attempt just crossed, if any.
@@ -109,7 +120,8 @@ enum ReloadEdge {
 /// takes eight of those (three audio, three vehicle, the camera's field of view, a colour). The remaining
 /// twelve are scene load/save, the camera *follow* command, dialogue, cutscenes and the race
 /// subsystem — see docs/ENGINE.md's Scripting section, which carries the enumerated list and what
-/// each one is waiting for.
+/// each one is waiting for. They are not dropped: the loop keeps them for
+/// [`PlayLoop::take_unanswered`], and says what nobody took ([`PlayReport::Unanswered`]).
 #[cfg(feature = "scripting")]
 fn apply_host_commands(
     world: &mut World,
@@ -447,6 +459,13 @@ pub struct PlayLoop {
     /// an edge rather than a stream.
     #[cfg(feature = "scripting")]
     failed_scripts: std::collections::BTreeSet<String>,
+    /// Commands the scripts asked for and the engine does not answer, kept for
+    /// [`take_unanswered`](Self::take_unanswered) until the next step.
+    #[cfg(feature = "scripting")]
+    unanswered: Vec<crate::scripting::ScriptCommand>,
+    /// The Lua calls already reported as [`PlayReport::Unanswered`], each said once.
+    #[cfg(feature = "scripting")]
+    reported_unanswered: std::collections::BTreeSet<&'static str>,
 }
 
 impl PlayLoop {
@@ -461,6 +480,26 @@ impl PlayLoop {
     /// game, and carrying a paused editor's debt into the next ▶ would spend it all in one frame.
     pub fn reset(&mut self) {
         self.accumulator = 0.0;
+    }
+
+    /// The commands the scripts asked for this step that the engine does not answer — dialogue,
+    /// cutscenes, races, a camera follow, a scene switch — in the order they were asked, for a
+    /// game that answers them itself. Take them before the next step: what is left then is
+    /// reported, once per Lua call ([`PlayReport::Unanswered`]), and dropped.
+    #[cfg(feature = "scripting")]
+    pub fn take_unanswered(&mut self) -> Vec<crate::scripting::ScriptCommand> {
+        std::mem::take(&mut self.unanswered)
+    }
+
+    /// Reports what the last step's scripts asked and nobody took, once per Lua call.
+    #[cfg(feature = "scripting")]
+    fn report_unanswered(&mut self, report: &mut dyn FnMut(PlayReport<'_>)) {
+        for cmd in std::mem::take(&mut self.unanswered) {
+            let call = cmd.lua_call();
+            if self.reported_unanswered.insert(call) {
+                report(PlayReport::Unanswered { call });
+            }
+        }
     }
 
     /// Seconds of simulation currently owed. Exposed for tests and for a profiler that wants to
@@ -500,7 +539,10 @@ impl PlayLoop {
         report: &mut dyn FnMut(PlayReport<'_>),
     ) -> u32 {
         #[cfg(feature = "scripting")]
-        self.script_pass(world, dt, input, report);
+        {
+            self.report_unanswered(report);
+            self.script_pass(world, dt, input, report);
+        }
         #[cfg(not(feature = "scripting"))]
         {
             let _ = (input, report);
@@ -548,6 +590,7 @@ impl PlayLoop {
         }
 
         let failed = &mut self.failed_scripts;
+        let unanswered = &mut self.unanswered;
         world.resource_scope(|world, engine: &mut crate::scripting::ScriptEngine| {
             if let Err(e) = engine.update(world, input, dt) {
                 report(PlayReport::ScriptError { error: &e });
@@ -562,7 +605,7 @@ impl PlayLoop {
             // from where it stands; the audio half is answered here, and scene switching is still
             // dropped on purpose — the editor must not switch scenes under the author.
             let unhandled = engine.flush_commands(world, dt);
-            let _unhandled = apply_host_commands(world, unhandled);
+            unanswered.extend(apply_host_commands(world, unhandled));
 
             // Per-entity `on_update`. The entity's own property overrides ride along: scripts are
             // cached per path, so a per-entity value cannot live in the shared Lua environment.
@@ -625,7 +668,7 @@ impl PlayLoop {
             // Draining an empty queue is a `Vec` swap, so the frame that queued nothing pays
             // nothing.
             let unhandled = engine.flush_commands(world, dt);
-            let _unhandled = apply_host_commands(world, unhandled);
+            unanswered.extend(apply_host_commands(world, unhandled));
 
             if let Ok(mut logs) = engine.log_queue.lock() {
                 for (level, message) in logs.drain(..) {

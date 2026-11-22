@@ -3876,7 +3876,11 @@ bozardı:
 
 Üçünün de testi var ve üçü de cihazsız — ses komutlarının aksine bunlar saf ECS yazımı.
 
-**Yapısal olarak açık kalan bir şey daha.** `PlayLoop::step` karşılayamadığı komutları artık
+**~~Yapısal olarak açık kalan bir şey daha.~~ Kapandı 2026-11-23:** `PlayLoop` karşılayamadığı
+komutları bir sonraki adıma kadar tutuyor ve `take_unanswered()` ile veriyor; alınmayanı Lua çağrısı
+başına bir kez `PlayReport::Unanswered { call }` ile söylüyor (editörün konsolu, çalışma zamanının
+stderr'i). Bulunduğu yer: `cam`'dan sonraki tarama. Aşağıdaki eski metin tarihçe. *(Eskiden:)*
+`PlayLoop::step` karşılayamadığı komutları artık
 yutmuyor ama **dışarı da vermiyor**: gömen bir oyunun kendi diyalog/yarış katmanını Rust'ta yazıp
 kalanları alması mümkün değil. Yani yukarıdaki on üç madde "motor göndermiyor" olmaktan çıkıp
 "kimse gönderemez"e dönüyor. Tetikleyici: bu altsistemlerden birini kendi yazmak isteyen bir oyun;

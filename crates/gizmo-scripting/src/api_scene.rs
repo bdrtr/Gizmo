@@ -238,6 +238,26 @@ mod tests {
     use super::*;
     use mlua::Lua;
 
+    /// `ScriptCommand::lua_call` names the call that queued the command: run each of this
+    /// module's calls and read the name back.
+    #[test]
+    fn each_command_is_named_for_the_lua_call_that_queued_it() {
+        let lua = mlua::Lua::new();
+        let cq = std::sync::Arc::new(crate::commands::CommandQueue::new());
+        register_scene_api(&lua, cq.clone()).unwrap();
+        for call in [
+            "scene.save('a')", "scene.load('a')", "dialogue.show('a', 'b')", "dialogue.hide()",
+            "cutscene.play('a')", "cutscene.stop()", "race.start()", "race.finish(1.0)", "race.reset()",
+            "race.add_checkpoint(1, 0, 0, 0, 1)", "race.activate_checkpoint(1)", "camera.follow(1)", "camera.set_fov(60)",
+        ] {
+            lua.load(call).exec().unwrap_or_else(|e| panic!("{call}: {e}"));
+            let cmds = cq.drain();
+            assert_eq!(cmds.len(), 1, "{call} queued {cmds:?}");
+            let name = call.split('(').next().unwrap();
+            assert_eq!(cmds[0].lua_call(), name, "{call} queued {:?}", cmds[0]);
+        }
+    }
+
     fn setup() -> (Lua, Arc<CommandQueue>) {
         let lua = Lua::new();
         let cq = Arc::new(CommandQueue::new());

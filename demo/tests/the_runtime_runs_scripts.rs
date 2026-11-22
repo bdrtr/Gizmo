@@ -792,3 +792,57 @@ fn play_breaks_explodes_and_swings_ropes() {
     let tip = world.query::<&gizmo::physics::soft_body::Rope>().get(rope).map(|r| r.nodes.last().unwrap().position).unwrap();
     assert!(tip.y < tip_before.y - 0.5, "a rope's free end swung down: {tip_before:?} → {tip:?}");
 }
+
+/// A Lua call nothing answers is said, once per call, and a game that answers it takes it first.
+/// `dialogue.show`, `race.start` and their kind queued commands the play loop dropped in silence,
+/// and could not hand to anyone: a script asked for a race and nothing happened, with no word.
+#[test]
+fn an_unanswered_lua_call_is_said_once_and_can_be_taken() {
+    use gizmo::scripting::{ScriptCommand, ScriptEngine};
+    const ASKS: &str = r#"
+function on_update(dt)
+    dialogue.show("Ece", "Merhaba", 2.0)
+    race.start()
+    entity.set_color(1, 1.0, 0.0, 0.0)
+end
+"#;
+    let world_with_script = || {
+        let mut world = World::new();
+        world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
+        let mut engine = ScriptEngine::new().expect("Lua");
+        engine.load_script_source("asks.lua", ASKS.to_string()).expect("loads");
+        world.insert_resource(engine);
+        world
+    };
+    // Nobody answers: each call is said once, on the step after it was asked.
+    let mut world = world_with_script();
+    let mut play = PlayLoop::new();
+    let mut said = Vec::new();
+    for _ in 0..5 {
+        play.step(&mut world, 1.0 / 60.0, &Input::default(), &mut |r| {
+            if let gizmo::systems::PlayReport::Unanswered { call } = r {
+                said.push(call.to_string());
+            }
+        });
+    }
+    said.sort();
+    assert_eq!(said, ["dialogue.show", "race.start"], "each unanswered call once, the answered colour never");
+
+    // A game that answers them takes them before the next step, and nothing is said.
+    let mut world = world_with_script();
+    let mut play = PlayLoop::new();
+    let mut said = 0;
+    let mut taken = Vec::new();
+    for _ in 0..5 {
+        play.step(&mut world, 1.0 / 60.0, &Input::default(), &mut |r| {
+            if matches!(r, gizmo::systems::PlayReport::Unanswered { .. }) {
+                said += 1;
+            }
+        });
+        taken.extend(play.take_unanswered());
+    }
+    assert_eq!(said, 0, "taken, so not reported");
+    assert_eq!(taken.len(), 10, "two a frame for five frames: {taken:?}");
+    assert!(matches!(&taken[0], ScriptCommand::ShowDialogue { speaker, .. } if speaker == "Ece"), "with their data: {:?}", taken[0]);
+    assert!(matches!(taken[1], ScriptCommand::StartRace));
+}

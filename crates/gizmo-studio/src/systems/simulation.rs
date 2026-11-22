@@ -29,6 +29,17 @@ fn log_play_report(editor_state: &mut EditorState, report: PlayReport<'_>) {
             "warn" => editor_state.log_warning(&format!("[Lua] {message}")),
             _ => editor_state.log_info(&format!("[Lua] {message}")),
         },
+        PlayReport::Unanswered { call } => editor_state.log_warning(&unanswered_line(call)),
+    }
+}
+
+/// The console line for a Lua call nothing answered.
+fn unanswered_line(call: &str) -> String {
+    match call {
+        "scene.load" | "scene.save" => {
+            format!("⚠ [Lua] `{call}` yok sayıldı: editör, oynayan bir betiğin sahneyi değiştirmesine ya da kaydetmesine izin vermez.")
+        }
+        _ => format!("⚠ [Lua] `{call}` yok sayıldı: motorda bunu karşılayan bir altsistem yok."),
     }
 }
 

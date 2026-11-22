@@ -245,6 +245,64 @@ pub enum ScriptCommand {
 
 
 impl ScriptCommand {
+    /// The Lua call that queues this command — `"dialogue.show"`, `"race.start"` — which is the
+    /// name to give a person when nothing answered it (`gizmo::systems::PlayReport::Unanswered`).
+    ///
+    /// Exhaustive on purpose, like [`is_finite`](Self::is_finite): a new variant does not compile
+    /// until it is named here.
+    #[must_use]
+    pub fn lua_call(&self) -> &'static str {
+        use ScriptCommand::*;
+        match self {
+            SetPosition { .. } => "entity.set_position",
+            SetRotation { .. } => "entity.set_rotation",
+            SetScale { .. } => "entity.set_scale",
+            SetVelocity { .. } => "entity.set_velocity",
+            SetAngularVelocity { .. } => "entity.set_angular_velocity",
+            ApplyForce { .. } => "physics.apply_force",
+            ApplyImpulse { .. } => "physics.apply_impulse",
+            AddRigidBody { .. } => "physics.add_rigidbody",
+            AddBoxCollider { .. } => "physics.add_box_collider",
+            AddSphereCollider { .. } => "physics.add_sphere_collider",
+            SetColliderMaterial { .. } => "physics.set_material",
+            SetVehicleEngineForce { .. } => "vehicle.set_engine_force",
+            SetVehicleSteering { .. } => "vehicle.set_steering",
+            SetVehicleBrake { .. } => "vehicle.set_brake",
+            SpawnEntity { .. } => "entity.spawn",
+            SpawnPrefab { .. } => "entity.spawn_prefab",
+            DestroyEntity { .. } => "entity.destroy",
+            SpawnReserved { .. } => "entity.spawn",
+            SetMesh { .. } => "entity.set_mesh",
+            SetColor { .. } => "entity.set_color",
+            PlaySound { .. } => "audio.play",
+            PlaySound3D { .. } => "audio.play_3d",
+            StopSound { .. } => "audio.stop",
+            LoadScene { .. } => "scene.load",
+            SaveScene { .. } => "scene.save",
+            ShowDialogue { .. } => "dialogue.show",
+            HideDialogue => "dialogue.hide",
+            TriggerCutscene { .. } => "cutscene.play",
+            EndCutscene => "cutscene.stop",
+            StartRace => "race.start",
+            AddCheckpoint { .. } => "race.add_checkpoint",
+            ActivateCheckpoint { .. } => "race.activate_checkpoint",
+            FinishRace { .. } => "race.finish",
+            ResetRace => "race.reset",
+            SetCameraTarget { .. } => "camera.follow",
+            SetCameraFov { .. } => "camera.set_fov",
+            SetEntityName { .. } => "entity.set_name",
+            PlayAnimation { .. } => "animation.play",
+            SetAnimationSpeed { .. } => "animation.set_speed",
+            AddNavAgent { .. } => "ai.add_agent",
+            SetAiTarget { .. } => "ai.set_target",
+            ClearAiTarget { .. } => "ai.clear_target",
+            SetFighterMove { .. } => "fighter.set_move",
+            SetFighterHealth { .. } => "fighter.set_health",
+            ApplyHitstop { .. } => "fighter.apply_hitstop",
+            ApplyHitstun { .. } => "fighter.apply_hitstun",
+        }
+    }
+
     /// Does every number this command carries have a finite value?
     ///
     /// # Why the queue asks

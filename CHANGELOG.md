@@ -787,6 +787,13 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A Lua call nothing answers is said, and can be answered.** `dialogue.show`, `cutscene.play`,
+  `race.*`, `camera.follow` and (in the editor) `scene.load`/`scene.save` queued commands the play
+  loop dropped in silence, and handed to no one, so not even a game with its own dialogue could
+  answer them. `PlayLoop::take_unanswered()` gives them to the game before the next step; what is
+  not taken is reported once per Lua call, `PlayReport::Unanswered { call }` (the editor's console,
+  the runtime's stderr). `ScriptCommand::lua_call()` names the call. **Breaking** for an exhaustive
+  `match` on `PlayReport`.
 - **In the editor's ▶ and every exported game, nothing broke.** `PlayLoop` ran the bare rigid step;
   fracture, the break's pieces and sound, and soft bodies were in the facade's
   `cpu_physics_step_system`, which it now runs. That step also runs explosions now: nothing in the
