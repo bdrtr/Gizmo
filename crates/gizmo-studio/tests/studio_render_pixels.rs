@@ -852,6 +852,48 @@ fn editor_furniture_is_in_the_scene_panel_and_not_the_game_panel() {
     assert_eq!(in_game, 0, "the furniture is in the Game panel ({in_game} pixels)");
 }
 
+/// **The selection's box is the Scene panel's alone**: the orange box round a selected entity is
+/// drawn where the scene is edited and not in the game's picture.
+///
+/// It was written into the game's `Gizmos` by the studio's update, with the game's `depth_test`
+/// switched off to keep it on top, and the game path draws the game's lines into the Game panel too:
+/// the editor's box (and the cameras' and lights' icons) showed in the game's own view. It is the
+/// editor's own lines now (`EditorLines`, `render_pipeline::furniture`).
+#[test]
+fn the_selection_box_is_in_the_scene_panel_and_not_the_game_panel() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) {
+        return;
+    }
+    if pollster::block_on(Renderer::headless_adapter_is_software()) {
+        return;
+    }
+    // The world's tweak runs before the editor's state is made: the cube's id goes from one to the
+    // other through a cell.
+    let render = |select: bool| {
+        let cube = std::cell::Cell::new(None);
+        render_with_world(
+            true,
+            |ed| {
+                if let (true, Some(id)) = (select, cube.get()) {
+                    ed.select_exclusive(id);
+                }
+            },
+            |world| {
+                let id = world.query::<(Entity, &gizmo::renderer::components::Mesh)>().iter().next().map(|(e, _)| e).expect("the helper's cube");
+                world.add_component(id, GlobalTransform::default());
+                cube.set(Some(id));
+            },
+        )
+    };
+    let (scene_on, game_on) = render(true);
+    let (scene_off, game_off) = render(false);
+    let changed_scene = target_difference(&scene_on, &scene_off);
+    let changed_game = target_difference(&game_on, &game_off);
+    assert!(changed_scene > 50, "the selection box is not in the Scene panel ({changed_scene} bytes changed)");
+    assert_eq!(changed_game, 0, "the selection box is in the Game panel ({changed_game} bytes changed)");
+}
+
 /// **The collider overlay draws**: with `show_colliders` on, a collider's outline is in the Scene
 /// panel, and with it off it is not. Written with the furniture test above, for the same move:
 /// nothing tested that the overlay reaches the viewport.

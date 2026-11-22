@@ -13,6 +13,7 @@ use crate::StudioState;
 use gizmo::prelude::*;
 use gizmo::systems::render::{ViewOptions, ViewShading};
 
+mod furniture;
 mod viewpoint;
 
 /// The toolbar's shading chips, as `EditorState::shading_mode` numbers them (`gizmo_editor::toolbar`).
@@ -49,12 +50,13 @@ pub fn execute_render_pipeline(
 }
 
 /// **The editor's own lines for this frame** (`EditorLines`), drawn into the Scene panel alone: the
-/// game camera's frustum, in green, while editing, and the collider overlay when the toolbar asks
-/// for it. They went into the game's `Gizmos` (the overlay) or a copy of its frame (the frustum)
+/// game camera's frustum, in green, while editing, the selection's boxes and the cameras' and lights'
+/// icons (`furniture`), and the collider overlay when the toolbar asks for it. Drawn over the scene,
+/// with no depth test, whatever the game's lines use. They went into the game's `Gizmos` (the overlay) or a copy of its frame (the frustum)
 /// while the Scene panel had a renderer of its own; the game path draws the game's lines into every
 /// view, the Game panel's included, so the editor's have a resource of their own.
 fn prepare_editor_lines(world: &mut World, state: &StudioState) {
-    let mut lines = gizmo::renderer::Gizmos::default();
+    let mut lines = gizmo::renderer::Gizmos { depth_test: false, ..Default::default() };
     let show_colliders =
         world.get_resource::<gizmo::editor::EditorState>().is_some_and(|ed| ed.show_colliders);
     if !viewpoint::is_playing(world) {
@@ -66,6 +68,9 @@ fn prepare_editor_lines(world: &mut World, state: &StudioState) {
         if let Some(view_proj) = viewpoint::game_view_proj(world, state.game_camera, aspect) {
             lines.draw_frustum(view_proj, [0.0, 1.0, 0.0, 1.0]);
         }
+    }
+    if let Some(ed) = world.get_resource::<gizmo::editor::EditorState>() {
+        furniture::furniture_lines(world, state, &ed, &mut lines);
     }
     if show_colliders {
         gizmo::systems::physics::physics_debug_lines(world, &mut lines);

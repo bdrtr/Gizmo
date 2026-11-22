@@ -74,12 +74,16 @@ pub fn record_taa_and_overlays(
     let editor = world
         .get_resource::<crate::renderer::EditorLines>()
         .filter(|_| debug_lines && renderer.draws_editor_furniture);
-    let joined;
+    let mut joined;
     let lines = match (frame.as_deref(), editor.as_deref()) {
         (Some(frame), None) => Some(frame.gizmos()),
         (None, Some(editor)) => Some(&editor.0),
         (Some(frame), Some(editor)) => {
+            // Over the game's, with the editor's depth setting: its selection boxes and icons are
+            // drawn on top, and the game's own `depth_test` is the game's, untouched, in every view
+            // that is not the editor's.
             joined = frame.gizmos().joined(&editor.0);
+            joined.depth_test = editor.0.depth_test;
             Some(&joined)
         }
         (None, None) => None,
