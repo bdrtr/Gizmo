@@ -23,7 +23,7 @@
 //! registry does not know, keyed with the wrong kind of value, or whose target lacks the component
 //! is drawn in the warning colour with the reason on hover — never hidden.
 
-use crate::animation_panel::{diamond, GUTTER, HIT, MARK, ROW};
+use crate::animation_panel::{draw_ruler, key_mark, Timeline, GUTTER, HIT, ROW};
 
 /// What a row's label leaves free at the gutter's right edge: room for the row's own ◆.
 const LABEL_RESERVE: f32 = 16.0;
@@ -54,12 +54,80 @@ pub(crate) fn ui_keyed_animation(ui: &mut egui::Ui, world: &World, state: &mut E
     let registry = world.get_resource::<PropertyRegistry>();
     let registry = registry.as_deref();
 
+    let (key_now, add_property) = header(ui, world, entity, &mut player, clip.as_deref(), duration, registry);
+    ui.separator();
+
+    if let Some(name) = add_property {
+        add_property_now(ui, world, state, entity, &mut player, registry, &name);
+        return true;
+    }
+    if key_now {
+        key_entity_now(ui, world, state, entity, &mut player, clip.as_deref(), registry);
+        return true;
+    }
+
+    let Some(clip) = clip else {
+        crate::animation_panel::empty(ui, "Henüz anahtar yok — nesneyi yerleştir, oynatma kafasını kaydır, ◆ Key.");
+        return true;
+    };
+
+    // ── Timeline ─────────────────────────────────────────────────────────────────────────────
+    let Some((timeline, painter)) = Timeline::lay_out(ui, clip.tracks.len(), duration) else {
+        return true;
+    };
+    draw_ruler(&painter, &timeline);
+
+    let mut redraw = false;
+    for (i, track) in clip.tracks.iter().enumerate() {
+        let y = timeline.rect.top() + ROW * (i as f32 + 1.0);
+        if y + ROW > timeline.rect.bottom() {
+            break;
+        }
+        redraw |= track_row(ui, &painter, &timeline, i, y, track, world, state, entity, &mut player, registry);
+    }
+
+    timeline.playhead(&painter, player.elapsed_time);
+    if let Some(time) = timeline.scrub(ui, "transform_scrub", state.anim_edit.dragging.is_some()) {
+        player.elapsed_time = time;
+        redraw = true;
+    }
+    // Delete removes the selected key, only with the pointer over the timeline (Delete is also the
+    // viewport's despawn).
+    let rect = timeline.rect;
+    let over = rect.contains(ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.max));
+    // Said out loud, for the host's own Delete (`EditorState::timeline_hovered`): it despawned the
+    // selected entity on the same press.
+    state.timeline_hovered |= over;
+    if over && ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+        if let Some(sel) = state.anim_edit.selected {
+            if remove_key(&mut player, state, entity, sel.track, sel.keyframe) {
+                redraw = true;
+            }
+        }
+    }
+    if redraw {
+        ui.ctx().request_repaint();
+    }
+    true
+}
+
+/// The header: clip name, position, ▶, ◆ Key, + Property and Loop. Returns whether ◆ Key was
+/// pressed, and the property + Property asked for.
+fn header(
+    ui: &mut egui::Ui,
+    world: &World,
+    entity: Entity,
+    player: &mut KeyedAnimationPlayer,
+    clip: Option<&AnimationClip>,
+    duration: f32,
+    registry: Option<&PropertyRegistry>,
+) -> (bool, Option<String>) {
     // ── Header ───────────────────────────────────────────────────────────────────────────────
     let mut key_now = false;
     let mut add_property: Option<String> = None;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("A N I M A T I O N").size(10.0).color(TEXT_MUTED));
-        let name = clip.as_ref().map_or("—", |c| c.name.as_str());
+        let name = clip.map_or("—", |c| c.name.as_str());
         ui.label(egui::RichText::new(name).size(11.0).color(TEXT_BRIGHT));
         ui.label(egui::RichText::new(format!("{:.2} / {:.2} s", player.elapsed_time, duration)).size(10.0).color(TEXT_DIM));
         if ui.button(if player.playing { "⏸" } else { "▶" }).clicked() {
@@ -72,7 +140,7 @@ pub(crate) fn ui_keyed_animation(ui: &mut egui::Ui, world: &World, state: &mut E
         if ui.button("◆ Key").on_hover_text("Record this entity's transform and keyed properties at the playhead").clicked() {
             key_now = true;
         }
-        let choices = registry.map(|r| property_choices(r, world, entity, clip.as_deref())).unwrap_or_default();
+        let choices = registry.map(|r| property_choices(r, world, entity, clip)).unwrap_or_default();
         if !choices.is_empty() {
             egui::ComboBox::from_id_salt(("transform_add_property", entity))
                 .selected_text("+ Property")
@@ -96,199 +164,173 @@ pub(crate) fn ui_keyed_animation(ui: &mut egui::Ui, world: &World, state: &mut E
             crate::theme::toggle(ui, &mut player.looping, "Loop");
         });
     });
-    ui.separator();
+    (key_now, add_property)
+}
 
-    if let Some(name) = add_property {
-        if let Some(value) = registry.and_then(|r| r.get(world, entity, &name)) {
-            let before = player.clip.clone();
-            if let Some(after) = add_property_track(before.as_deref(), player.elapsed_time, &name, value) {
-                player.clip = Some(Arc::new(after));
-                player.target_entities.clear();
-                state.history.push(crate::history::EditorAction::TransformClipChanged { entity, before, after: player.clip.clone() });
-                state.has_unsaved_changes = true;
-                ui.ctx().request_repaint();
-            }
-        }
-        return true;
-    }
-
-    if key_now {
-        let transform = world.query::<&Transform>().get(entity).copied();
-        // This entity's property tracks, each at the value its field holds now.
-        let values: Vec<(String, InterpolatedValue)> = clip
-            .iter()
-            .flat_map(|c| c.tracks.iter())
-            .filter(|t| t.target_name.is_empty())
-            .filter_map(|t| t.property.as_deref())
-            .filter_map(|name| Some((name.to_owned(), registry?.get(world, entity, name)?)))
-            .collect();
-        if transform.is_some() || !values.is_empty() {
-            let before = player.clip.clone();
-            let keyed = key_entity(before.as_deref(), player.elapsed_time, transform.as_ref(), &values);
-            player.clip = Some(Arc::new(keyed));
+/// + Property: a track for `name`, keyed at the playhead with the field's value now — one undo entry.
+fn add_property_now(
+    ui: &egui::Ui,
+    world: &World,
+    state: &mut EditorState,
+    entity: Entity,
+    player: &mut KeyedAnimationPlayer,
+    registry: Option<&PropertyRegistry>,
+    name: &str,
+) {
+    if let Some(value) = registry.and_then(|r| r.get(world, entity, name)) {
+        let before = player.clip.clone();
+        if let Some(after) = add_property_track(before.as_deref(), player.elapsed_time, name, value) {
+            player.clip = Some(Arc::new(after));
             player.target_entities.clear();
             state.history.push(crate::history::EditorAction::TransformClipChanged { entity, before, after: player.clip.clone() });
             state.has_unsaved_changes = true;
             ui.ctx().request_repaint();
         }
-        return true;
     }
+}
 
-    let Some(clip) = clip else {
-        crate::animation_panel::empty(ui, "Henüz anahtar yok — nesneyi yerleştir, oynatma kafasını kaydır, ◆ Key.");
-        return true;
-    };
-
-    // ── Timeline ─────────────────────────────────────────────────────────────────────────────
-    let rows = clip.tracks.len().max(1);
-    let wanted = ROW * (rows as f32 + 1.0);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), wanted.min(ui.available_height().max(ROW * 2.0))), egui::Sense::hover());
-    let painter = ui.painter_at(rect);
-    let lane = egui::Rect::from_min_max(egui::pos2(rect.left() + GUTTER + MARK, rect.top()), egui::pos2(rect.right() - MARK, rect.bottom()));
-    if lane.width() < 40.0 {
-        return true;
-    }
-    let x_of = |t: f32| lane.left() + (t / duration).clamp(0.0, 1.0) * lane.width();
-    let t_of = |x: f32| ((x - lane.left()) / lane.width()).clamp(0.0, 1.0) * duration;
-
-    painter.line_segment([egui::pos2(rect.left(), rect.top() + ROW), egui::pos2(rect.right(), rect.top() + ROW)], egui::Stroke::new(1.0_f32, BORDER));
-    painter.text(egui::pos2(rect.left() + 6.0, rect.top() + 3.0), egui::Align2::LEFT_TOP, "Tracks", egui::FontId::proportional(10.0), TEXT_MUTED);
-    for s in 0..=(duration.ceil() as i32) {
-        let x = x_of(s as f32);
-        painter.line_segment([egui::pos2(x, rect.top() + ROW - 4.0), egui::pos2(x, rect.top() + ROW)], egui::Stroke::new(1.0_f32, BORDER_HOT));
-        painter.text(egui::pos2(x + 2.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, s.to_string(), egui::FontId::proportional(9.0), TEXT_DIM);
-    }
-
-    let mut redraw = false;
-    for (i, track) in clip.tracks.iter().enumerate() {
-        let y = rect.top() + ROW * (i as f32 + 1.0);
-        if y + ROW > rect.bottom() {
-            break;
-        }
-        let row_rect = egui::Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(rect.width(), ROW));
-        if i % 2 == 1 {
-            painter.rect_filled(row_rect, 0.0, CHROME);
-        }
-        let target = if track.target_name.is_empty() { "this" } else { track.target_name.as_str() };
-        let problem = property_problem(registry, world, entity, &player.target_entities, track);
-        // The label stays in the gutter, left of the row's ◆: a long property name is cut there —
-        // the whole of it on hover — rather than drawn under the ◆ and the keys.
-        let text = format!("{target}  {}", channel_name(track));
-        let gutter = egui::Rect::from_min_max(
-            egui::pos2(rect.left(), row_rect.top()),
-            egui::pos2(rect.left() + GUTTER - LABEL_RESERVE, row_rect.bottom()),
-        );
-        let label = painter.with_clip_rect(gutter.intersect(painter.clip_rect())).text(
-            egui::pos2(rect.left() + 6.0, row_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            &text,
-            egui::FontId::proportional(10.0),
-            if problem.is_some() { WARNING } else { TEXT_BODY },
-        );
-        let cut = label.right() > gutter.right();
-        if problem.is_some() || cut {
-            let hover = match &problem {
-                Some(why) => format!("{text}\n{why}"),
-                None => text.clone(),
-            };
-            ui.interact(label.intersect(gutter), ui.id().with(("transform_row_problem", i)), egui::Sense::hover()).on_hover_text(hover);
-        }
-        // A property row's own ◆: this row alone, at the field's value now.
-        if let (Some(name), None) = (track.property.as_deref(), &problem) {
-            let owner = if track.target_name.is_empty() { Some(entity) } else { player.target_entities.get(&track.target_name).copied() };
-            let at = painter.text(
-                egui::pos2(rect.left() + GUTTER - 4.0, row_rect.center().y),
-                egui::Align2::RIGHT_CENTER,
-                "◆",
-                egui::FontId::proportional(10.0),
-                ACCENT,
-            );
-            let key = ui
-                .interact(at.expand(2.0), ui.id().with(("transform_row_key", i)), egui::Sense::click())
-                .on_hover_text("Key this property at the playhead");
-            if key.clicked() {
-                if let Some(value) = owner.and_then(|o| registry?.get(world, o, name)) {
-                    let before = player.clip.clone();
-                    let time = player.elapsed_time;
-                    if edit_clip(&mut player, |c| c.tracks.get_mut(i)?.set_key(time, value)).flatten().is_some() {
-                        state.history.push(crate::history::EditorAction::TransformClipChanged { entity, before, after: player.clip.clone() });
-                        state.has_unsaved_changes = true;
-                        redraw = true;
-                    }
-                }
-            }
-        }
-        for (k, t) in track.keyframe_timestamps.iter().enumerate() {
-            let here = KeyframeRef { channel: TrackChannel::Translation, track: i, keyframe: k };
-            let centre = egui::pos2(x_of(*t), row_rect.center().y);
-            let hit = egui::Rect::from_center_size(centre, egui::vec2(HIT, ROW));
-            let resp = ui.interact(hit, ui.id().with(("transform_key", i, k)), egui::Sense::click_and_drag());
-            if resp.drag_started() {
-                state.anim_edit.dragging = Some(here);
-                state.anim_edit.selected = Some(here);
-                state.transform_drag_original = Some(player.clip.clone());
-            }
-            if resp.clicked() {
-                state.anim_edit.selected = Some(here);
-            }
-            let dragged = state.anim_edit.dragging == Some(here);
-            let selected = state.anim_edit.selected == Some(here);
-            let colour = if dragged || resp.hovered() { TEXT_BRIGHT } else if selected { ACCENT_LIGHT } else { ACCENT };
-            diamond(&painter, centre, if selected { MARK + 1.0 } else { MARK }, colour);
-            if dragged {
-                if let Some(pos) = resp.interact_pointer_pos() {
-                    // The index follows the key: a retime can carry it past its neighbours.
-                    if let Some(landed) = edit_clip(&mut player, |c| c.tracks.get_mut(i)?.retime_key(k, t_of(pos.x))).flatten() {
-                        state.anim_edit.dragging = Some(KeyframeRef { keyframe: landed, ..here });
-                        state.anim_edit.selected = state.anim_edit.dragging;
-                        redraw = true;
-                    }
-                }
-            }
-            if resp.drag_stopped() {
-                if let Some(before) = state.transform_drag_original.take() {
-                    state.history.push(crate::history::EditorAction::TransformClipChanged { entity, before, after: player.clip.clone() });
-                    state.has_unsaved_changes = true;
-                }
-                state.anim_edit.dragging = None;
-            }
-            resp.context_menu(|ui| {
-                if ui.button("🗑 Keyframe'i sil").clicked() {
-                    if remove_key(&mut player, state, entity, i, k) {
-                        redraw = true;
-                    }
-                    ui.close();
-                }
-            });
-        }
-    }
-
-    let head = x_of(player.elapsed_time);
-    painter.line_segment([egui::pos2(head, rect.top()), egui::pos2(head, rect.bottom())], egui::Stroke::new(1.0_f32, TEXT_BRIGHT));
-    let scrub = ui.interact(lane, ui.id().with("transform_scrub"), egui::Sense::click_and_drag());
-    if state.anim_edit.dragging.is_none() && (scrub.dragged() || scrub.clicked()) {
-        if let Some(pos) = scrub.interact_pointer_pos() {
-            player.elapsed_time = t_of(pos.x);
-            redraw = true;
-        }
-    }
-    // Delete removes the selected key, only with the pointer over the timeline (Delete is also the
-    // viewport's despawn).
-    let over = rect.contains(ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.max));
-    // Said out loud, for the host's own Delete (`EditorState::timeline_hovered`): it despawned the
-    // selected entity on the same press.
-    state.timeline_hovered |= over;
-    if over && ui.input(|i| i.key_pressed(egui::Key::Delete)) {
-        if let Some(sel) = state.anim_edit.selected {
-            if remove_key(&mut player, state, entity, sel.track, sel.keyframe) {
-                redraw = true;
-            }
-        }
-    }
-    if redraw {
+/// ◆ Key: the entity's transform and every property track of its own, at the playhead — one undo
+/// entry.
+fn key_entity_now(
+    ui: &egui::Ui,
+    world: &World,
+    state: &mut EditorState,
+    entity: Entity,
+    player: &mut KeyedAnimationPlayer,
+    clip: Option<&AnimationClip>,
+    registry: Option<&PropertyRegistry>,
+) {
+    let transform = world.query::<&Transform>().get(entity).copied();
+    // This entity's property tracks, each at the value its field holds now.
+    let values: Vec<(String, InterpolatedValue)> = clip
+        .iter()
+        .flat_map(|c| c.tracks.iter())
+        .filter(|t| t.target_name.is_empty())
+        .filter_map(|t| t.property.as_deref())
+        .filter_map(|name| Some((name.to_owned(), registry?.get(world, entity, name)?)))
+        .collect();
+    if transform.is_some() || !values.is_empty() {
+        let before = player.clip.clone();
+        let keyed = key_entity(before.as_deref(), player.elapsed_time, transform.as_ref(), &values);
+        player.clip = Some(Arc::new(keyed));
+        player.target_entities.clear();
+        state.history.push(crate::history::EditorAction::TransformClipChanged { entity, before, after: player.clip.clone() });
+        state.has_unsaved_changes = true;
         ui.ctx().request_repaint();
     }
-    true
+}
+
+/// Track `i` at `y`: its label (in the warning colour with the reason when it cannot play), a
+/// property row's own ◆, and its keyframes — selectable, draggable in time, deletable from their
+/// menu. Whether an edit asks for a redraw.
+#[allow(clippy::too_many_arguments)]
+fn track_row(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    timeline: &Timeline,
+    i: usize,
+    y: f32,
+    track: &Track,
+    world: &World,
+    state: &mut EditorState,
+    entity: Entity,
+    player: &mut KeyedAnimationPlayer,
+    registry: Option<&PropertyRegistry>,
+) -> bool {
+    let rect = timeline.rect;
+    let mut redraw = false;
+    let row_rect = timeline.row(painter, i, y);
+    let target = if track.target_name.is_empty() { "this" } else { track.target_name.as_str() };
+    let problem = property_problem(registry, world, entity, &player.target_entities, track);
+    // The label stays in the gutter, left of the row's ◆: a long property name is cut there —
+    // the whole of it on hover — rather than drawn under the ◆ and the keys.
+    let text = format!("{target}  {}", channel_name(track));
+    let gutter = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), row_rect.top()),
+        egui::pos2(rect.left() + GUTTER - LABEL_RESERVE, row_rect.bottom()),
+    );
+    let label = painter.with_clip_rect(gutter.intersect(painter.clip_rect())).text(
+        egui::pos2(rect.left() + 6.0, row_rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        &text,
+        egui::FontId::proportional(10.0),
+        if problem.is_some() { WARNING } else { TEXT_BODY },
+    );
+    let cut = label.right() > gutter.right();
+    if problem.is_some() || cut {
+        let hover = match &problem {
+            Some(why) => format!("{text}\n{why}"),
+            None => text.clone(),
+        };
+        ui.interact(label.intersect(gutter), ui.id().with(("transform_row_problem", i)), egui::Sense::hover()).on_hover_text(hover);
+    }
+    // A property row's own ◆: this row alone, at the field's value now.
+    if let (Some(name), None) = (track.property.as_deref(), &problem) {
+        let owner = if track.target_name.is_empty() { Some(entity) } else { player.target_entities.get(&track.target_name).copied() };
+        let at = painter.text(
+            egui::pos2(rect.left() + GUTTER - 4.0, row_rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            "◆",
+            egui::FontId::proportional(10.0),
+            ACCENT,
+        );
+        let key = ui
+            .interact(at.expand(2.0), ui.id().with(("transform_row_key", i)), egui::Sense::click())
+            .on_hover_text("Key this property at the playhead");
+        if key.clicked() {
+            if let Some(value) = owner.and_then(|o| registry?.get(world, o, name)) {
+                let before = player.clip.clone();
+                let time = player.elapsed_time;
+                if edit_clip(player, |c| c.tracks.get_mut(i)?.set_key(time, value)).flatten().is_some() {
+                    state.history.push(crate::history::EditorAction::TransformClipChanged { entity, before, after: player.clip.clone() });
+                    state.has_unsaved_changes = true;
+                    redraw = true;
+                }
+            }
+        }
+    }
+    for (k, t) in track.keyframe_timestamps.iter().enumerate() {
+        let here = KeyframeRef { channel: TrackChannel::Translation, track: i, keyframe: k };
+        let centre = egui::pos2(timeline.x_of(*t), row_rect.center().y);
+        let hit = egui::Rect::from_center_size(centre, egui::vec2(HIT, ROW));
+        let resp = ui.interact(hit, ui.id().with(("transform_key", i, k)), egui::Sense::click_and_drag());
+        if resp.drag_started() {
+            state.anim_edit.dragging = Some(here);
+            state.anim_edit.selected = Some(here);
+            state.transform_drag_original = Some(player.clip.clone());
+        }
+        if resp.clicked() {
+            state.anim_edit.selected = Some(here);
+        }
+        let dragged = state.anim_edit.dragging == Some(here);
+        key_mark(painter, centre, dragged, resp.hovered(), state.anim_edit.selected == Some(here));
+        if dragged {
+            if let Some(pos) = resp.interact_pointer_pos() {
+                // The index follows the key: a retime can carry it past its neighbours.
+                if let Some(landed) = edit_clip(player, |c| c.tracks.get_mut(i)?.retime_key(k, timeline.time_at(pos.x))).flatten() {
+                    state.anim_edit.dragging = Some(KeyframeRef { keyframe: landed, ..here });
+                    state.anim_edit.selected = state.anim_edit.dragging;
+                    redraw = true;
+                }
+            }
+        }
+        if resp.drag_stopped() {
+            if let Some(before) = state.transform_drag_original.take() {
+                state.history.push(crate::history::EditorAction::TransformClipChanged { entity, before, after: player.clip.clone() });
+                state.has_unsaved_changes = true;
+            }
+            state.anim_edit.dragging = None;
+        }
+        resp.context_menu(|ui| {
+            if ui.button("🗑 Keyframe'i sil").clicked() {
+                if remove_key(player, state, entity, i, k) {
+                    redraw = true;
+                }
+                ui.close();
+            }
+        });
+    }
+    redraw
 }
 
 /// What a track keys: its channel, or the property it names.

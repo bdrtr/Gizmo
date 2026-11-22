@@ -112,25 +112,10 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     let rows = clip_rows(&clip);
 
     // ── Timeline ─────────────────────────────────────────────────────────────────────────────
-    let visible_rows = rows.len().max(1);
-    let wanted = ROW * (visible_rows as f32 + 1.0); // +1 for the ruler
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), wanted.min(ui.available_height().max(ROW * 2.0))),
-        egui::Sense::hover(),
-    );
-    let painter = ui.painter_at(rect);
-
-    // Inset by the marker radius at both ends: a keyframe at t=0 or t=duration otherwise lands
-    // exactly on the lane edge and gets clipped in half by the panel — which reads as a rendering
-    // glitch rather than as the last key of the clip.
-    let lane = egui::Rect::from_min_max(
-        egui::pos2(rect.left() + GUTTER + MARK, rect.top()),
-        egui::pos2(rect.right() - MARK, rect.bottom()),
-    );
-    if lane.width() < 40.0 {
+    let Some((timeline, painter)) = Timeline::lay_out(ui, rows.len(), duration) else {
         return; // panel too narrow for a timeline to mean anything
-    }
-    let timeline = Timeline { rect, lane, duration };
+    };
+    let rect = timeline.rect;
     draw_ruler(&painter, &timeline);
 
     // Editing rebuilds the player's `Arc<[AnimationClip]>`, and the rows above were laid out from
@@ -231,27 +216,93 @@ fn clip_rows(clip: &gizmo_renderer::AnimationClip) -> Vec<Row> {
     rows
 }
 
-/// Where the timeline is: the whole of it, the lane the keys sit in, and the clip's length.
-struct Timeline {
-    rect: egui::Rect,
-    lane: egui::Rect,
-    duration: f32,
+/// Where a timeline is: the whole of it, the lane the keys sit in, and the clip's length. Both
+/// timelines — this one and the keyed transforms' (`crate::keyed_timeline`) — are laid out, ruled,
+/// rowed, keyed and scrubbed through it; each wrote all of it out for itself.
+pub(crate) struct Timeline {
+    pub(crate) rect: egui::Rect,
+    pub(crate) lane: egui::Rect,
+    pub(crate) duration: f32,
 }
 
 impl Timeline {
+    /// Room for `rows` tracks and the ruler, and its painter; `None` when the panel is too narrow for
+    /// a timeline to mean anything.
+    pub(crate) fn lay_out(ui: &mut egui::Ui, rows: usize, duration: f32) -> Option<(Timeline, egui::Painter)> {
+        let visible_rows = rows.max(1);
+        let wanted = ROW * (visible_rows as f32 + 1.0); // +1 for the ruler
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), wanted.min(ui.available_height().max(ROW * 2.0))),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter_at(rect);
+
+        // Inset by the marker radius at both ends: a keyframe at t=0 or t=duration otherwise lands
+        // exactly on the lane edge and gets clipped in half by the panel — which reads as a rendering
+        // glitch rather than as the last key of the clip.
+        let lane = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + GUTTER + MARK, rect.top()),
+            egui::pos2(rect.right() - MARK, rect.bottom()),
+        );
+        (lane.width() >= 40.0).then_some((Timeline { rect, lane, duration }, painter))
+    }
+
     /// The lane's x for time `t`, held inside the lane.
-    fn x_of(&self, t: f32) -> f32 {
+    pub(crate) fn x_of(&self, t: f32) -> f32 {
         self.lane.left() + (t / self.duration).clamp(0.0, 1.0) * self.lane.width()
     }
 
     /// The time at the lane's x `x`, held inside the clip.
-    fn time_at(&self, x: f32) -> f32 {
+    pub(crate) fn time_at(&self, x: f32) -> f32 {
         ((x - self.lane.left()) / self.lane.width()).clamp(0.0, 1.0) * self.duration
+    }
+
+    /// Row `i`'s rect at `y`, the odd rows shaded.
+    pub(crate) fn row(&self, painter: &egui::Painter, i: usize, y: f32) -> egui::Rect {
+        let row_rect =
+            egui::Rect::from_min_size(egui::pos2(self.rect.left(), y), egui::vec2(self.rect.width(), ROW));
+        if i % 2 == 1 {
+            painter.rect_filled(row_rect, 0.0, CHROME);
+        }
+        row_rect
+    }
+
+    /// The playhead at `time`.
+    pub(crate) fn playhead(&self, painter: &egui::Painter, time: f32) {
+        let head_x = self.x_of(time);
+        painter.line_segment(
+            [egui::pos2(head_x, self.rect.top()), egui::pos2(head_x, self.rect.bottom())],
+            egui::Stroke::new(1.0_f32, TEXT_BRIGHT),
+        );
+    }
+
+    /// The time the lane is being scrubbed to, if it is. Scrubbing owns the lane's background, but a
+    /// keyframe's own rect is registered first and wins the pointer — so dragging a key retimes it
+    /// instead of also dragging the playhead — and no scrub starts while a key is being dragged.
+    pub(crate) fn scrub(&self, ui: &mut egui::Ui, salt: &str, dragging_a_key: bool) -> Option<f32> {
+        let scrub = ui.interact(self.lane, ui.id().with(salt), egui::Sense::click_and_drag());
+        if !dragging_a_key && (scrub.dragged() || scrub.clicked()) {
+            scrub.interact_pointer_pos().map(|pos| self.time_at(pos.x))
+        } else {
+            None
+        }
     }
 }
 
+/// A keyframe's mark: bright while dragged or under the pointer, light and larger while selected.
+pub(crate) fn key_mark(painter: &egui::Painter, centre: egui::Pos2, dragged: bool, hovered: bool, selected: bool) {
+    let colour = if dragged || hovered {
+        TEXT_BRIGHT
+    } else if selected {
+        ACCENT_LIGHT
+    } else {
+        ACCENT
+    };
+    diamond(painter, centre, if selected { MARK + 1.0 } else { MARK }, colour);
+}
+
 /// The ruler: a tick per second, labelled.
-fn draw_ruler(painter: &egui::Painter, timeline: &Timeline) {
+pub(crate) fn draw_ruler(painter: &egui::Painter, timeline: &Timeline) {
     let rect = timeline.rect;
     painter.line_segment(
         [
@@ -299,11 +350,7 @@ fn track_row(
 ) -> bool {
     let rect = timeline.rect;
     let mut pending_redraw = false;
-    let row_rect =
-        egui::Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(rect.width(), ROW));
-    if i % 2 == 1 {
-        painter.rect_filled(row_rect, 0.0, CHROME);
-    }
+    let row_rect = timeline.row(painter, i, y);
     painter.text(
         egui::pos2(rect.left() + 6.0, row_rect.center().y),
         egui::Align2::LEFT_CENTER,
@@ -334,15 +381,7 @@ fn track_row(
         }
 
         let is_dragged = state.anim_edit.dragging == Some(here);
-        let is_selected = state.anim_edit.selected == Some(here);
-        let colour = if is_dragged || resp.hovered() {
-            TEXT_BRIGHT
-        } else if is_selected {
-            ACCENT_LIGHT
-        } else {
-            ACCENT
-        };
-        diamond(painter, centre, if is_selected { MARK + 1.0 } else { MARK }, colour);
+        key_mark(painter, centre, is_dragged, resp.hovered(), state.anim_edit.selected == Some(here));
 
         if is_dragged {
             if let Some(pos) = resp.interact_pointer_pos() {
@@ -390,20 +429,9 @@ fn playhead_and_scrub(
     player: &mut gizmo_renderer::components::AnimationPlayer,
     state: &EditorState,
 ) {
-    let rect = timeline.rect;
-    let head_x = timeline.x_of(player.current_time);
-    painter.line_segment(
-        [egui::pos2(head_x, rect.top()), egui::pos2(head_x, rect.bottom())],
-        egui::Stroke::new(1.0_f32, TEXT_BRIGHT),
-    );
-
-    // Scrubbing owns the lane's background, but a keyframe's own rect is registered first and
-    // wins the pointer — so dragging a key retimes it instead of also dragging the playhead.
-    let scrub = ui.interact(timeline.lane, ui.id().with("anim_scrub"), egui::Sense::click_and_drag());
-    if state.anim_edit.dragging.is_none() && (scrub.dragged() || scrub.clicked()) {
-        if let Some(pos) = scrub.interact_pointer_pos() {
-            player.current_time = timeline.time_at(pos.x);
-        }
+    timeline.playhead(painter, player.current_time);
+    if let Some(time) = timeline.scrub(ui, "anim_scrub", state.anim_edit.dragging.is_some()) {
+        player.current_time = time;
     }
 }
 
