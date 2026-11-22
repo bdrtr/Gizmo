@@ -652,6 +652,33 @@ fn heuristic(a: GridPos, b: GridPos) -> u32 {
 }
 
 impl NavGrid {
+    /// How far, in cells, a search whose start is blocked looks for an open cell to start from.
+    pub const START_SNAP_CELLS: i32 = 4;
+
+    /// The open cell nearest `pos` on its layer, ring by ring out to `max_rings` cells (Chebyshev
+    /// distance); within a ring the nearest in a straight line, the first in scan order on a tie.
+    pub fn nearest_walkable(&self, pos: GridPos, max_rings: i32) -> Option<GridPos> {
+        for r in 1..=max_rings {
+            let mut best: Option<(i32, GridPos)> = None;
+            for dz in -r..=r {
+                for dx in -r..=r {
+                    if dx.abs() != r && dz.abs() != r {
+                        continue;
+                    }
+                    let p = GridPos::new(pos.x + dx, pos.y, pos.z + dz);
+                    let d = dx * dx + dz * dz;
+                    if self.is_walkable(p) && best.is_none_or(|(bd, _)| d < bd) {
+                        best = Some((d, p));
+                    }
+                }
+            }
+            if let Some((_, p)) = best {
+                return Some(p);
+            }
+        }
+        None
+    }
+
     /// A* Pathfinding Function
     ///
     /// Returns the world-space centre of every cell to step onto, in order. The start cell
@@ -671,8 +698,12 @@ impl NavGrid {
     /// applied, and the path is not clamped to the grid bounds any tighter than
     /// [`NavGrid::is_walkable`] already does.
     ///
-    /// Returns `None` when the start or destination cell is blocked or out of bounds, when
-    /// no connected route exists, or when the search exceeds its hard cap of 25 000 queue
+    /// A start in a blocked cell searches from the nearest open cell instead, within
+    /// [`START_SNAP_CELLS`](Self::START_SNAP_CELLS), and the route begins there: an agent a wall was
+    /// placed on, or a crowd pushed into one, is led out.
+    ///
+    /// Returns `None` when the destination cell is blocked or out of bounds, when the start is and no
+    /// open cell lies near it, when no connected route exists, or when the search exceeds its hard cap of 25 000 queue
     /// POPS — the cap makes a huge or heavily fragmented map fail fast instead of stalling the
     /// frame, and is reported at warn level.
     ///
@@ -685,6 +716,14 @@ impl NavGrid {
     pub fn find_path(&self, start_world: Vec3, end_world: Vec3) -> Option<Vec<Vec3>> {
         let start = self.world_to_grid(start_world);
         let end = self.world_to_grid(end_world);
+        // From inside a blocked cell, from the nearest open one. Until 2026-11-22 there was no route
+        // at all: in `karinca` the ants a wall was put down on failed every search while it stood,
+        // walking straight through it, with a warning on every frame.
+        let start = if self.is_walkable(start) {
+            start
+        } else {
+            self.nearest_walkable(start, Self::START_SNAP_CELLS).unwrap_or(start)
+        };
 
         if !self.is_walkable(end) || !self.is_walkable(start) {
             tracing::debug!(
@@ -998,6 +1037,34 @@ impl NavGrid {
 mod tests {
     use super::*;
 
+    /// An agent a wall was put down on still finds its way: the search starts from the nearest
+    /// open cell, and the route's first waypoint is that cell, out of the wall. It had no route.
+    #[test]
+    fn a_start_inside_an_obstacle_searches_from_the_nearest_open_cell() {
+        let mut grid = NavGrid::new(1.0, 12, 12);
+        grid.needs_rebuild = false;
+        for z in 2..10 {
+            grid.add_obstacle_world(Vec3::new(5.5, 0.0, z as f32 + 0.5));
+        }
+        let inside = Vec3::new(5.5, 0.0, 5.5);
+        assert!(!grid.is_walkable(grid.world_to_grid(inside)));
+        let path = grid.find_path(inside, Vec3::new(10.5, 0.0, 5.5)).expect("a route out of the wall");
+        let first = grid.world_to_grid(path[0]);
+        assert!(grid.is_walkable(first), "the route starts in the wall: {first:?}");
+        assert!((first.x - 5).abs() <= 1 && (first.z - 5).abs() <= 1, "the route does not start next to the agent: {first:?}");
+        // Enclosed beyond the snap: still no route, rather than a jump across the map.
+        let mut sealed = NavGrid::new(1.0, 20, 20);
+        sealed.needs_rebuild = false;
+        for x in 0..20i32 {
+            for z in 0..20i32 {
+                if (x - 10).abs() <= NavGrid::START_SNAP_CELLS + 1 && (z - 10).abs() <= NavGrid::START_SNAP_CELLS + 1 {
+                    sealed.add_obstacle_world(Vec3::new(x as f32 + 0.5, 0.0, z as f32 + 0.5));
+                }
+            }
+        }
+        assert!(sealed.find_path(Vec3::new(10.5, 0.0, 10.5), Vec3::new(0.5, 0.0, 0.5)).is_none());
+    }
+
     /// The dense-array A* returns exactly the HashMap A*'s routes — same cells, same order, same
     /// failures — on cluttered grids, with a query to the same cell, one into a wall, one off the
     /// grid, and one to another layer, and with the scratch reused across all of them.
@@ -1024,7 +1091,14 @@ mod tests {
             queries.push((Vec3::ZERO, Vec3::new(500.0, 0.0, 0.0)));
             queries.push((Vec3::ZERO, Vec3::new(5.0, 3.0, 5.0)));
             for (a, b) in queries {
-                assert_eq!(g.find_path(a, b), g.find_path_reference(a, b), "{a:?} → {b:?} at density {density}");
+                // The reference has no start snap: it is handed the cell the search starts from.
+                let start = g.world_to_grid(a);
+                let from = if g.is_walkable(start) {
+                    a
+                } else {
+                    g.nearest_walkable(start, NavGrid::START_SNAP_CELLS).map_or(a, |p| g.grid_to_world(p))
+                };
+                assert_eq!(g.find_path(a, b), g.find_path_reference(from, b), "{a:?} → {b:?} at density {density}");
                 compared += 1;
             }
         }
@@ -1142,11 +1216,14 @@ mod tests {
     }
 
     #[test]
-    fn start_or_end_in_obstacle_returns_none() {
+    fn an_end_in_an_obstacle_returns_none_and_a_start_in_one_is_led_out() {
         let mut grid = NavGrid::new(1.0, 20, 20);
         grid.obstacles.insert(GridPos::new(5, 0, 5));
         assert!(grid.find_path(center(0, 0), center(5, 5)).is_none(), "end in wall");
-        assert!(grid.find_path(center(5, 5), center(0, 0)).is_none(), "start in wall");
+        // A start in a wall searches from the nearest open cell (`START_SNAP_CELLS`), and the route
+        // begins there.
+        let out = grid.find_path(center(5, 5), center(0, 0)).expect("a start in a wall is led out");
+        assert!(grid.is_walkable(grid.world_to_grid(out[0])), "start in wall");
         // Out-of-bounds target too.
         assert!(grid.find_path(center(0, 0), center(50, 50)).is_none(), "end out of bounds");
     }
@@ -1157,8 +1234,8 @@ mod tests {
     /// rebuild used to rasterise it: ~8·10¹² cell insertions at a 1 m cell, so this test did not
     /// fail against the old code, it never returned (measured with a timeout — see the commit).
     /// And had it returned, every cell of every layer would have been an obstacle: `find_path`
-    /// returns `None` for a blocked start, so a single ground plane made the whole scene
-    /// unnavigable.
+    /// returns `None` for a blocked start with no open cell near it, so a single ground plane made
+    /// the whole scene unnavigable.
     #[test]
     fn a_ground_plane_does_not_swallow_the_entire_grid() {
         let physics = static_world(Collider::plane(Vec3::new(0.0, 1.0, 0.0), 0.0), Vec3::ZERO);
