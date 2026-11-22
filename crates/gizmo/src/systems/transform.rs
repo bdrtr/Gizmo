@@ -233,6 +233,71 @@ pub fn world_position(world: &gizmo_core::world::World, entity: gizmo_core::enti
     world_matrix(world, entity).map(|m| m.w_axis.truncate())
 }
 
+/// Makes `child` a child of `parent` — a root when `None` — **where it is now**: its `Transform` is
+/// rewritten local to its new parent, so its world pose does not change. What a parenting drag in
+/// an editor is expected to do (Unity's `SetParent(parent, worldPositionStays: true)`).
+///
+/// [`HierarchyExt::add_child`] and `remove_child` link and unlink and leave the `Transform` as it
+/// is — right when it was written local to the new parent — and a `Transform` is read local to its
+/// parent, so an entity linked that way moves by its new parent's pose. The studio's hierarchy drag
+/// went through them: an object dropped onto a parent at (10, 0, 0) jumped ten metres, and taken
+/// back out to the root, it jumped again.
+///
+/// The world pose is kept exactly under uniform scales. A non-uniform scale with a rotation above
+/// the child makes a shear no `Transform` can hold, and the nearest scale, rotation and translation
+/// is kept. A child with no `Transform` has no pose to keep and is linked as it is. Returns `false`
+/// and changes nothing when the link would make a cycle, or when a child with a `Transform` cannot
+/// keep its pose: it or its new parent has no world pose ([`world_matrix`]), or the new parent's is
+/// singular (a zero scale).
+///
+/// [`HierarchyExt::add_child`]: gizmo_core::hierarchy::HierarchyExt::add_child
+pub fn set_parent_keeping_world_pose(
+    world: &mut gizmo_core::world::World,
+    child: gizmo_core::entity::Entity,
+    parent: Option<gizmo_core::entity::Entity>,
+) -> bool {
+    use gizmo_core::hierarchy::HierarchyExt;
+    if parent.is_some_and(|p| p == child || world.is_ancestor(child, p)) {
+        return false;
+    }
+    let link = |world: &mut gizmo_core::world::World| match parent {
+        Some(p) => world.add_child(p, child),
+        None => {
+            if let Some(old) = world.get::<gizmo_core::component::Parent>(child).map(|p| p.0) {
+                world.remove_child(old, child);
+            }
+        }
+    };
+    if world.get::<gizmo_physics_core::Transform>(child).is_none() {
+        link(world);
+        return true;
+    }
+    let Some(child_world) = world_matrix(world, child) else {
+        return false;
+    };
+    let parent_world = match parent {
+        Some(p) => match world_matrix(world, p) {
+            Some(m) => m,
+            None => return false,
+        },
+        None => crate::math::Mat4::IDENTITY,
+    };
+    if parent_world.determinant().abs() < 1e-12 {
+        return false;
+    }
+    let (scale, rotation, position) = (parent_world.inverse() * child_world).to_scale_rotation_translation();
+    if !(scale.is_finite() && rotation.is_finite() && position.is_finite()) {
+        return false;
+    }
+    link(world);
+    if let Some(mut t) = world.query_mut::<&mut gizmo_physics_core::Transform>().get_mut(child) {
+        t.set_position(position);
+        t.set_rotation(rotation.normalize());
+        t.set_scale(scale);
+    }
+    true
+}
+
 /// Drives entities that follow a skeleton bone.
 ///
 /// Gated on `render`: `BoneAttachment`/`Skeleton` are renderer components (skinning lives on
@@ -339,6 +404,54 @@ mod tests {
     use gizmo_core::world::World;
     use gizmo_physics_core::components::GlobalTransform;
     use gizmo_physics_core::Transform;
+
+    /// Parenting keeps the world pose: dropped under a turned, scaled parent ten metres away, a child
+    /// stays where it was, and taken back out to the root it stays there too.
+    #[test]
+    fn a_child_parented_and_unparented_stays_where_it_was() {
+        use crate::math::{Quat, Vec3};
+        let mut world = World::new();
+        let parent = world.spawn();
+        world.add_component(
+            parent,
+            Transform::new(Vec3::new(10.0, 0.0, 0.0))
+                .with_rotation(Quat::from_rotation_y(0.7))
+                .with_scale(Vec3::splat(2.0)),
+        );
+        let child = world.spawn();
+        let at = Vec3::new(3.0, 1.0, -2.0);
+        world.add_component(child, Transform::new(at).with_rotation(Quat::from_rotation_x(0.3)));
+        let before = world_matrix(&world, child).unwrap();
+
+        assert!(set_parent_keeping_world_pose(&mut world, child, Some(parent)));
+        assert_eq!(world.get::<gizmo_core::component::Parent>(child).map(|p| p.0), Some(parent));
+        let under = world_matrix(&world, child).unwrap();
+        assert!(under.abs_diff_eq(before, 1e-4), "parented, the child moved:\n{before}\n→ {under}");
+
+        assert!(set_parent_keeping_world_pose(&mut world, child, None));
+        assert!(world.get::<gizmo_core::component::Parent>(child).is_none());
+        let t = *world.get::<Transform>(child).unwrap();
+        assert!(t.position.abs_diff_eq(at, 1e-4) && t.scale.abs_diff_eq(Vec3::ONE, 1e-4), "back at the root: {t:?}");
+    }
+
+    /// A link that would make a cycle, or a parent with a zero scale, changes nothing.
+    #[test]
+    fn a_parenting_that_cannot_keep_the_pose_changes_nothing() {
+        use crate::math::Vec3;
+        let mut world = World::new();
+        let a = world.spawn();
+        world.add_component(a, Transform::new(Vec3::X));
+        let b = world.spawn();
+        world.add_component(b, Transform::new(Vec3::Y));
+        assert!(set_parent_keeping_world_pose(&mut world, b, Some(a)));
+        assert!(!set_parent_keeping_world_pose(&mut world, a, Some(b)), "a under its own child");
+        let flat = world.spawn();
+        world.add_component(flat, Transform::new(Vec3::Z).with_scale(Vec3::ZERO));
+        let t_before = *world.get::<Transform>(b).unwrap();
+        assert!(!set_parent_keeping_world_pose(&mut world, b, Some(flat)), "under a zero scale");
+        assert_eq!(*world.get::<Transform>(b).unwrap(), t_before);
+        assert_eq!(world.get::<gizmo_core::component::Parent>(b).map(|p| p.0), Some(a));
+    }
 
     /// **An attachment is drawn where its bone is this frame.** The attachment system runs after
     /// the animation, which is after the frame's propagation; it now writes the attached entity's

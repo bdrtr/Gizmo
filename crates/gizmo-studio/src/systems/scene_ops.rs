@@ -569,11 +569,14 @@ fn finish_spawn(world: &mut World, editor_state: &mut EditorState, e: Entity, ki
         if member.id() == e.id() {
             continue;
         }
+        // Each member stays where it stands: one nested under another parent has a `Transform`
+        // local to that parent, and moved under the group as it was, it jumped.
         if let (Some(child), Some(parent)) =
             (world.live(member), world.live(e))
         {
-            world.add_child(parent, child);
-            grouped += 1;
+            if gizmo::systems::set_parent_keeping_world_pose(world, child, Some(parent)) {
+                grouped += 1;
+            }
         }
     }
     if grouped > 0 {
@@ -622,11 +625,19 @@ fn reparent_requested(world: &mut World, editor_state: &mut EditorState, child_i
         world.live(child_id),
         world.live(new_parent_id),
     ) {
-        world.add_child(parent, child);
-        editor_state.log_info(&format!(
-            "Entity {} parent {} olarak ayarlandı.",
-            child_id, new_parent_id
-        ));
+        // Where it is: its `Transform` rewritten local to the new parent. `add_child` alone left it
+        // as it was, which is then read local to the parent, and the object jumped by the
+        // parent's pose.
+        if gizmo::systems::set_parent_keeping_world_pose(world, child, Some(parent)) {
+            editor_state.log_info(&format!(
+                "Entity {} parent {} olarak ayarlandı.",
+                child_id, new_parent_id
+            ));
+        } else {
+            editor_state.log_warning(&format!(
+                "Reparent yapılamadı: {child_id} veya {new_parent_id} dünyada bir yere oturmuyor (Transform yok ya da ölçek sıfır)."
+            ));
+        }
     }
 }
 
@@ -641,7 +652,11 @@ fn unparent_requested(world: &mut World, editor_state: &mut EditorState, child_i
 
     if let (Some(old_pid), Some(child)) = (old_parent_id, world.live(child_id)) {
         if world.is_alive(old_pid) {
-            world.remove_child(old_pid, child);
+            // Where it is, as in `reparent_requested`; without a world pose it is unlinked as it
+            // stands.
+            if !gizmo::systems::set_parent_keeping_world_pose(world, child, None) {
+                world.remove_child(old_pid, child);
+            }
             editor_state.log_info(&format!("Entity {} kök (root) yapıldı.", child_id));
         }
     }
@@ -716,6 +731,32 @@ mod tests {
                 panic!("the worker panicked before answering; its own message is above")
             }
         }
+    }
+
+    /// A drag in the hierarchy parents an object where it stands, and taking it out to the root
+    /// leaves it there too. It jumped by the parent's pose both ways: `add_child` kept the
+    /// `Transform`, which is read local to the parent.
+    #[test]
+    fn a_hierarchy_drag_keeps_the_object_where_it_is() {
+        use gizmo::physics::components::Transform;
+        let mut world = World::new();
+        let parent = world.spawn();
+        world.add_component(parent, Transform::new(Vec3::new(10.0, 0.0, 0.0)));
+        let child = world.spawn();
+        world.add_component(child, Transform::new(Vec3::new(3.0, 1.0, 0.0)));
+        let mut ed = EditorState::default();
+
+        ed.reparent_request = Some((child, parent));
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+        assert_eq!(world.get::<Parent>(child).map(|p| p.0), Some(parent));
+        let placed = gizmo::systems::world_position(&world, child).unwrap();
+        assert!(placed.abs_diff_eq(Vec3::new(3.0, 1.0, 0.0), 1e-4), "parented, it moved to {placed}");
+
+        ed.unparent_request = Some(child);
+        handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+        assert!(world.get::<Parent>(child).is_none());
+        let back = world.get::<Transform>(child).unwrap().position;
+        assert!(back.abs_diff_eq(Vec3::new(3.0, 1.0, 0.0), 1e-4), "back at the root, it is at {back}");
     }
 
     /// A Delete keypress on an entity inside a `Children` cycle must not take the editor down.
