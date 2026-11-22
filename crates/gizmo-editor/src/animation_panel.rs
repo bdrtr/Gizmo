@@ -105,6 +105,55 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // by it would put every keyframe on top of the playhead.
     let duration = clip.duration.max(f32::EPSILON);
 
+    header(ui, &clip, &mut player, duration);
+    ui.separator();
+
+    let rows = clip_rows(&clip);
+
+    // ── Timeline ─────────────────────────────────────────────────────────────────────────────
+    let visible_rows = rows.len().max(1);
+    let wanted = ROW * (visible_rows as f32 + 1.0); // +1 for the ruler
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), wanted.min(ui.available_height().max(ROW * 2.0))),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter_at(rect);
+
+    // Inset by the marker radius at both ends: a keyframe at t=0 or t=duration otherwise lands
+    // exactly on the lane edge and gets clipped in half by the panel — which reads as a rendering
+    // glitch rather than as the last key of the clip.
+    let lane = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + GUTTER + MARK, rect.top()),
+        egui::pos2(rect.right() - MARK, rect.bottom()),
+    );
+    if lane.width() < 40.0 {
+        return; // panel too narrow for a timeline to mean anything
+    }
+    let timeline = Timeline { rect, lane, duration };
+    draw_ruler(&painter, &timeline);
+
+    // Editing rebuilds the player's `Arc<[AnimationClip]>`, and the rows above were laid out from
+    // the copy taken before that. Rather than draw a frame from stale rows, ask for one more.
+    let mut pending_redraw = false;
+
+    for (i, row) in rows.iter().enumerate() {
+        let y = rect.top() + ROW * (i as f32 + 1.0);
+        if y + ROW > rect.bottom() {
+            break; // out of panel; the scroll story belongs to a later pass
+        }
+        pending_redraw |= track_row(ui, &painter, &timeline, i, y, row, &mut player, state, entity);
+    }
+
+    playhead_and_scrub(ui, &painter, &timeline, &mut player, state);
+    pending_redraw |= delete_selected_key(ui, &timeline, &mut player, state, entity);
+
+    if pending_redraw {
+        ui.ctx().request_repaint();
+    }
+}
+
+/// The header: clip name, position, and the loop toggle.
+fn header(ui: &mut egui::Ui, clip: &gizmo_renderer::AnimationClip, player: &mut gizmo_renderer::components::AnimationPlayer, duration: f32) {
     // ── Header: clip name, position, transport ───────────────────────────────────────────────
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("A N I M A T I O N").size(10.0).color(TEXT_MUTED));
@@ -118,17 +167,20 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
             crate::theme::toggle(ui, &mut player.loop_anim, "Loop");
         });
     });
-    ui.separator();
+}
 
-    // Rows: every track of the clip, in the prototype's order. Each row remembers which of the
-    // three channel lists it came from and its index in it — a row index alone cannot address a
-    // track, since the three lists are separate `Vec`s.
-    struct Row {
-        label: String,
-        channel: TrackChannel,
-        track: usize,
-        times: Vec<f32>,
-    }
+/// One track of the clip, as a row. Each row remembers which of the three channel lists it came
+/// from and its index in it — a row index alone cannot address a track, since the three lists are
+/// separate `Vec`s.
+struct Row {
+    label: String,
+    channel: TrackChannel,
+    track: usize,
+    times: Vec<f32>,
+}
+
+/// Every track of the clip, in the prototype's order: positions, rotations, scales.
+fn clip_rows(clip: &gizmo_renderer::AnimationClip) -> Vec<Row> {
     let mut rows: Vec<Row> = Vec::new();
     for (i, t) in clip.translations.iter().enumerate() {
         let values: Vec<gizmo_math::Vec3> = t.keyframes.iter().map(|k| k.value).collect();
@@ -175,29 +227,31 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
             times: t.keyframes.iter().map(|k| k.time).collect(),
         });
     }
+    rows
+}
 
-    // ── Timeline ─────────────────────────────────────────────────────────────────────────────
-    let visible_rows = rows.len().max(1);
-    let wanted = ROW * (visible_rows as f32 + 1.0); // +1 for the ruler
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), wanted.min(ui.available_height().max(ROW * 2.0))),
-        egui::Sense::hover(),
-    );
-    let painter = ui.painter_at(rect);
+/// Where the timeline is: the whole of it, the lane the keys sit in, and the clip's length.
+struct Timeline {
+    rect: egui::Rect,
+    lane: egui::Rect,
+    duration: f32,
+}
 
-    // Inset by the marker radius at both ends: a keyframe at t=0 or t=duration otherwise lands
-    // exactly on the lane edge and gets clipped in half by the panel — which reads as a rendering
-    // glitch rather than as the last key of the clip.
-    let lane = egui::Rect::from_min_max(
-        egui::pos2(rect.left() + GUTTER + MARK, rect.top()),
-        egui::pos2(rect.right() - MARK, rect.bottom()),
-    );
-    if lane.width() < 40.0 {
-        return; // panel too narrow for a timeline to mean anything
+impl Timeline {
+    /// The lane's x for time `t`, held inside the lane.
+    fn x_of(&self, t: f32) -> f32 {
+        self.lane.left() + (t / self.duration).clamp(0.0, 1.0) * self.lane.width()
     }
-    let x_of = |t: f32| lane.left() + (t / duration).clamp(0.0, 1.0) * lane.width();
 
-    // Ruler: a tick per second, labelled.
+    /// The time at the lane's x `x`, held inside the clip.
+    fn time_at(&self, x: f32) -> f32 {
+        ((x - self.lane.left()) / self.lane.width()).clamp(0.0, 1.0) * self.duration
+    }
+}
+
+/// The ruler: a tick per second, labelled.
+fn draw_ruler(painter: &egui::Painter, timeline: &Timeline) {
+    let rect = timeline.rect;
     painter.line_segment(
         [
             egui::pos2(rect.left(), rect.top() + ROW),
@@ -212,8 +266,8 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         egui::FontId::proportional(10.0),
         TEXT_MUTED,
     );
-    for s in 0..=(duration.ceil() as i32) {
-        let x = x_of(s as f32);
+    for s in 0..=(timeline.duration.ceil() as i32) {
+        let x = timeline.x_of(s as f32);
         painter.line_segment(
             [egui::pos2(x, rect.top() + ROW - 4.0), egui::pos2(x, rect.top() + ROW)],
             egui::Stroke::new(1.0_f32, BORDER_HOT),
@@ -226,111 +280,117 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
             TEXT_DIM,
         );
     }
+}
 
-    // Editing rebuilds the player's `Arc<[AnimationClip]>`, and the rows above were laid out from
-    // the copy taken before that. Rather than draw a frame from stale rows, ask for one more.
+/// Row `i` at `y`: its label and its keyframes, each one selectable, draggable to a new time and
+/// deletable from its menu. Whether an edit asks for a redraw.
+#[allow(clippy::too_many_arguments)]
+fn track_row(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    timeline: &Timeline,
+    i: usize,
+    y: f32,
+    row: &Row,
+    player: &mut gizmo_renderer::components::AnimationPlayer,
+    state: &mut EditorState,
+    entity: gizmo_core::entity::Entity,
+) -> bool {
+    let rect = timeline.rect;
     let mut pending_redraw = false;
-
-    for (i, row) in rows.iter().enumerate() {
-        let y = rect.top() + ROW * (i as f32 + 1.0);
-        if y + ROW > rect.bottom() {
-            break; // out of panel; the scroll story belongs to a later pass
-        }
-        let row_rect =
-            egui::Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(rect.width(), ROW));
-        if i % 2 == 1 {
-            painter.rect_filled(row_rect, 0.0, CHROME);
-        }
-        painter.text(
-            egui::pos2(rect.left() + 6.0, row_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            &row.label,
-            egui::FontId::proportional(10.0),
-            TEXT_BODY,
-        );
-        for (k, t) in row.times.iter().enumerate() {
-            let here = KeyframeRef { channel: row.channel, track: row.track, keyframe: k };
-            let centre = egui::pos2(x_of(*t), row_rect.center().y);
-            // A diamond is 7 px across; a hit area that small is a dexterity test, so the
-            // interactive rect is deliberately larger than the mark it stands for.
-            let hit = egui::Rect::from_center_size(centre, egui::vec2(HIT, ROW));
-            let resp = ui.interact(
-                hit,
-                ui.id().with(("anim_key", row.channel as u8, row.track, k)),
-                egui::Sense::click_and_drag(),
-            );
-
-            if resp.drag_started() {
-                // One undo entry per drag: snapshot before the first mutation.
-                state.anim_drag_original = Some(player.animations.clone());
-                state.anim_edit.dragging = Some(here);
-                state.anim_edit.selected = Some(here);
-            }
-            if resp.clicked() {
-                state.anim_edit.selected = Some(here);
-            }
-
-            let is_dragged = state.anim_edit.dragging == Some(here);
-            let is_selected = state.anim_edit.selected == Some(here);
-            let colour = if is_dragged || resp.hovered() {
-                TEXT_BRIGHT
-            } else if is_selected {
-                ACCENT_LIGHT
-            } else {
-                ACCENT
-            };
-            diamond(&painter, centre, if is_selected { MARK + 1.0 } else { MARK }, colour);
-
-            if is_dragged {
-                if let Some(pos) = resp.interact_pointer_pos() {
-                    let t_new =
-                        ((pos.x - lane.left()) / lane.width()).clamp(0.0, 1.0) * duration;
-                    // The index follows the key. A retime can push it past its neighbours, and
-                    // holding the old index would grab a DIFFERENT keyframe on the next frame of
-                    // the same drag — the key you are holding would swap under the cursor.
-                    if let Some(landed) = retime(&mut player, row.channel, row.track, k, t_new) {
-                        state.anim_edit.dragging = Some(KeyframeRef { keyframe: landed, ..here });
-                        state.anim_edit.selected = state.anim_edit.dragging;
-                        pending_redraw = true;
-                    }
-                }
-            }
-            if resp.drag_stopped() {
-                if let Some(before) = state.anim_drag_original.take() {
-                    let after = player.animations.clone();
-                    state.history.push(crate::history::EditorAction::AnimationClipsChanged {
-                        entity,
-                        before,
-                        after,
-                    });
-                    state.has_unsaved_changes = true;
-                }
-                state.anim_edit.dragging = None;
-            }
-
-            resp.context_menu(|ui| {
-                if ui.button("🗑 Keyframe'i sil").clicked() {
-                    let before = player.animations.clone();
-                    if remove(&mut player, row.channel, row.track, k) {
-                        state.history.push(
-                            crate::history::EditorAction::AnimationClipsChanged {
-                                entity,
-                                before,
-                                after: player.animations.clone(),
-                            },
-                        );
-                        state.has_unsaved_changes = true;
-                        state.anim_edit.selected = None;
-                        pending_redraw = true;
-                    }
-                    ui.close();
-                }
-            });
-        }
+    let row_rect =
+        egui::Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(rect.width(), ROW));
+    if i % 2 == 1 {
+        painter.rect_filled(row_rect, 0.0, CHROME);
     }
+    painter.text(
+        egui::pos2(rect.left() + 6.0, row_rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        &row.label,
+        egui::FontId::proportional(10.0),
+        TEXT_BODY,
+    );
+    for (k, t) in row.times.iter().enumerate() {
+        let here = KeyframeRef { channel: row.channel, track: row.track, keyframe: k };
+        let centre = egui::pos2(timeline.x_of(*t), row_rect.center().y);
+        // A diamond is 7 px across; a hit area that small is a dexterity test, so the
+        // interactive rect is deliberately larger than the mark it stands for.
+        let hit = egui::Rect::from_center_size(centre, egui::vec2(HIT, ROW));
+        let resp = ui.interact(
+            hit,
+            ui.id().with(("anim_key", row.channel as u8, row.track, k)),
+            egui::Sense::click_and_drag(),
+        );
 
-    // Playhead, and scrubbing.
-    let head_x = x_of(player.current_time);
+        if resp.drag_started() {
+            // One undo entry per drag: snapshot before the first mutation.
+            state.anim_drag_original = Some(player.animations.clone());
+            state.anim_edit.dragging = Some(here);
+            state.anim_edit.selected = Some(here);
+        }
+        if resp.clicked() {
+            state.anim_edit.selected = Some(here);
+        }
+
+        let is_dragged = state.anim_edit.dragging == Some(here);
+        let is_selected = state.anim_edit.selected == Some(here);
+        let colour = if is_dragged || resp.hovered() {
+            TEXT_BRIGHT
+        } else if is_selected {
+            ACCENT_LIGHT
+        } else {
+            ACCENT
+        };
+        diamond(painter, centre, if is_selected { MARK + 1.0 } else { MARK }, colour);
+
+        if is_dragged {
+            if let Some(pos) = resp.interact_pointer_pos() {
+                let t_new = timeline.time_at(pos.x);
+                // The index follows the key. A retime can push it past its neighbours, and
+                // holding the old index would grab a DIFFERENT keyframe on the next frame of
+                // the same drag — the key you are holding would swap under the cursor.
+                if let Some(landed) = retime(player, row.channel, row.track, k, t_new) {
+                    state.anim_edit.dragging = Some(KeyframeRef { keyframe: landed, ..here });
+                    state.anim_edit.selected = state.anim_edit.dragging;
+                    pending_redraw = true;
+                }
+            }
+        }
+        if resp.drag_stopped() {
+            if let Some(before) = state.anim_drag_original.take() {
+                let after = player.animations.clone();
+                state.history.push(crate::history::EditorAction::AnimationClipsChanged {
+                    entity,
+                    before,
+                    after,
+                });
+                state.has_unsaved_changes = true;
+            }
+            state.anim_edit.dragging = None;
+        }
+
+        resp.context_menu(|ui| {
+            if ui.button("🗑 Keyframe'i sil").clicked() {
+                if delete_key(player, state, entity, row.channel, row.track, k) {
+                    pending_redraw = true;
+                }
+                ui.close();
+            }
+        });
+    }
+    pending_redraw
+}
+
+/// The playhead, and scrubbing it along the lane.
+fn playhead_and_scrub(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    timeline: &Timeline,
+    player: &mut gizmo_renderer::components::AnimationPlayer,
+    state: &EditorState,
+) {
+    let rect = timeline.rect;
+    let head_x = timeline.x_of(player.current_time);
     painter.line_segment(
         [egui::pos2(head_x, rect.top()), egui::pos2(head_x, rect.bottom())],
         egui::Stroke::new(1.0_f32, TEXT_BRIGHT),
@@ -338,14 +398,23 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
     // Scrubbing owns the lane's background, but a keyframe's own rect is registered first and
     // wins the pointer — so dragging a key retimes it instead of also dragging the playhead.
-    let scrub = ui.interact(lane, ui.id().with("anim_scrub"), egui::Sense::click_and_drag());
+    let scrub = ui.interact(timeline.lane, ui.id().with("anim_scrub"), egui::Sense::click_and_drag());
     if state.anim_edit.dragging.is_none() && (scrub.dragged() || scrub.clicked()) {
         if let Some(pos) = scrub.interact_pointer_pos() {
-            player.current_time =
-                ((pos.x - lane.left()) / lane.width()).clamp(0.0, 1.0) * duration;
+            player.current_time = timeline.time_at(pos.x);
         }
     }
+}
 
+/// Delete removes the selected keyframe, with the pointer over the timeline. Whether it did.
+fn delete_selected_key(
+    ui: &mut egui::Ui,
+    timeline: &Timeline,
+    player: &mut gizmo_renderer::components::AnimationPlayer,
+    state: &mut EditorState,
+    entity: gizmo_core::entity::Entity,
+) -> bool {
+    let rect = timeline.rect;
     // Delete removes the selected keyframe. Gated on the panel actually having the pointer:
     // Delete is also "despawn the selected entity" in the viewport, and a global key that means
     // two things depending on where you last clicked is how you lose an object.
@@ -357,23 +426,35 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     let delete_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete));
     if delete_pressed && over {
         if let Some(sel) = state.anim_edit.selected {
-            let before = player.animations.clone();
-            if remove(&mut player, sel.channel, sel.track, sel.keyframe) {
-                state.history.push(crate::history::EditorAction::AnimationClipsChanged {
-                    entity,
-                    before,
-                    after: player.animations.clone(),
-                });
-                state.has_unsaved_changes = true;
-                state.anim_edit.selected = None;
-                pending_redraw = true;
-            }
+            return delete_key(player, state, entity, sel.channel, sel.track, sel.keyframe);
         }
     }
+    false
+}
 
-    if pending_redraw {
-        ui.ctx().request_repaint();
+/// Removes one keyframe, as one undo entry; the selection goes with it. Whether there was one.
+///
+/// The context menu and the Delete key wrote this out twice.
+fn delete_key(
+    player: &mut gizmo_renderer::components::AnimationPlayer,
+    state: &mut EditorState,
+    entity: gizmo_core::entity::Entity,
+    channel: TrackChannel,
+    track: usize,
+    keyframe: usize,
+) -> bool {
+    let before = player.animations.clone();
+    if !remove(player, channel, track, keyframe) {
+        return false;
     }
+    state.history.push(crate::history::EditorAction::AnimationClipsChanged {
+        entity,
+        before,
+        after: player.animations.clone(),
+    });
+    state.has_unsaved_changes = true;
+    state.anim_edit.selected = None;
+    true
 }
 
 /// Rebuild the player's clip set with `edit` applied to one track of the active clip, and return
