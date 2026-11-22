@@ -22,6 +22,10 @@ rustdoc-args = ["--cfg", "docsrs"]
 gizmo = { package = "gizmo-engine", path = "../gizmo", features = ["editor", "scene", "audio", "scripting", "tracing-layer"] , version = "0.11.0" }
 mimalloc = { workspace = true }
 tracing = "0.1.44"
+# The export reads cargo's JSON messages to find the runtime it built (`systems::build::compile`).
+# Already in the graph through the engine, at this version. The tests build game components' JSON
+# edits with `json!` from it too.
+serde_json = "1.0"
 
 [dev-dependencies]
 # The window-icon test decodes the embedded logo the same way the runtime does. `image` is not a
@@ -32,10 +36,8 @@ image = "0.25"
 # is async and there is no runtime in a test binary.
 pollster = "1.0"
 # A game component in a test has to derive `Serialize`/`Deserialize` to be registered with the
-# editor, and its JSON edit is built with `json!` — the same two crates the engine's own registry
-# is written against. Test-only, like the two above.
+# editor — the crate the engine's own registry is written against. Test-only, like the two above.
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 # Tests that build a `Mesh` (wgpu buffers) with no GPU, on the noop backend — they run in CI. The
 # engine's `wgpu` with one more backend turned on; the shipped binary's graph is unchanged.
 wgpu = { version = "30", default-features = false, features = ["noop", "wgsl"] }

@@ -268,15 +268,24 @@ fn spawn_completed_gltfs(world: &mut World, renderer: &mut gizmo::renderer::Rend
     }
 }
 
+/// Writes `world` to `path` as a scene file, through `registry` and with the asset identities the
+/// world's `AssetManager` knows. The one writer of a scene: the editor's save and the export's
+/// staging (`systems::build`) both, so the scene a game is exported with is the scene the editor
+/// saves.
+pub(crate) fn write_scene(world: &mut World, path: &str, registry: &gizmo::scene::registry::SceneRegistry) -> Result<(), String> {
+    with_asset_identity(world, |world, identity| match identity {
+        Some(identity) => gizmo::scene::SceneData::save_with_identity(world, path, registry, identity),
+        None => gizmo::scene::SceneData::save(world, path, registry),
+    })
+    .map_err(|e| e.to_string())
+}
+
 /// Saves the scene to `path`, WITH identity: each asset reference also records the UUID of the
 /// file it names, so a later load can find that file if it has since moved. The path is written
 /// exactly as before — see `gizmo::asset_identity` for what that does and does not survive.
 fn save_scene(world: &mut World, path: String, scene_registry: &gizmo::scene::registry::SceneRegistry) {
     warn_undescribed_meshes(world, "Kaydetme");
-    let save = with_asset_identity(world, |world, identity| match identity {
-        Some(identity) => gizmo::scene::SceneData::save_with_identity(world, &path, scene_registry, identity),
-        None => gizmo::scene::SceneData::save(world, &path, scene_registry),
-    });
+    let save = write_scene(world, &path, scene_registry);
     if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
         match save {
             Ok(_) => {

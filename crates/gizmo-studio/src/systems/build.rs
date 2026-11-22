@@ -151,6 +151,8 @@ fn cargo_args(plan: &BuildPlan) -> Vec<String> {
     let mut args = vec![
         "build".to_string(),
         "--release".to_string(),
+        // Where the runtime lands, from cargo itself — see `compile`.
+        "--message-format=json-render-diagnostics".to_string(),
         "-p".to_string(),
         "demo".to_string(),
         "--bin".to_string(),
@@ -170,16 +172,23 @@ fn cargo_args(plan: &BuildPlan) -> Vec<String> {
 /// not what the user is looking at, and an export that silently ships an older scene is the same
 /// class of lie this whole path was fixed for. **A temp file, not `scenes/main.scene`:** exporting
 /// must not write into the project tree, least of all over a file the user may already keep there.
-fn stage_scene_for_export(world: &World) -> Result<std::path::PathBuf, String> {
+fn stage_scene_for_export(world: &mut World) -> Result<std::path::PathBuf, String> {
+    // One name per staging, not per process: two in one process — a test beside another — wrote
+    // and deleted the same file under each other.
+    static STAGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let path = std::env::temp_dir().join(format!(
-        "gizmo_export_scene_{}_{}.scene",
+        "gizmo_export_scene_{}_{}_{}.scene",
         std::process::id(),
+        STAGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         EXPORT_SCENE_NAME
     ));
     let as_str = path.to_string_lossy().to_string();
-    gizmo::scene::SceneData::save(world, &as_str, &gizmo::full_scene_registry())
-        .map(|()| path)
-        .map_err(|e| e.to_string())
+    // The same writer as the editor's own save (`crate::render::write_scene`): the game's own
+    // components with the engine's, and the assets' identities. This saved through the engine's
+    // registry alone, so a component the game registered for the editor was edited there, saved
+    // with the scene — and left out of the scene the exported game opened.
+    let registry = gizmo::scene_registry_for(world);
+    crate::render::write_scene(world, &as_str, &registry).map(|()| path)
 }
 
 /// An asset the scene names that the exported game will not find.
@@ -457,282 +466,367 @@ fn ship_referenced_file(
 
 /// Acts on a build request from the toolbar: packages the current scene and the runtime for the
 /// chosen target, and reports the result back into the editor state.
-pub fn handle_build_requests(world: &World, editor_state: &mut EditorState) {
+///
+/// Refused while a build is running — a second one would delete the first's package while it was
+/// being written — and under ▶ (`playing`): the current world is then the play world, and the
+/// export would ship the running game's state as the scene.
+pub fn handle_build_requests(world: &mut World, editor_state: &mut EditorState, playing: bool) {
     // --- BUILD SİSTEMİ (STANDALONE EXPORTER) ---
-    if editor_state.build.request {
-        editor_state.build.request = false;
-        editor_state
-            .build
-            .is_building
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        editor_state.build.cached_logs.clear();
+    if !std::mem::take(&mut editor_state.build.request) {
+        return;
+    }
+    if editor_state.build.is_building.load(std::sync::atomic::Ordering::SeqCst) {
+        editor_state.log_warning("Bir build zaten sürüyor — bitmesini bekleyin.");
+        return;
+    }
+    if playing {
+        editor_state.log_warning(
+            "Play sırasında build alınmaz: paketlenecek dünya çalışan oyun olurdu, düzenlenen sahne değil — önce ⏹ ile durdurun.",
+        );
+        return;
+    }
+    editor_state
+        .build
+        .is_building
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    editor_state.build.cached_logs.clear();
 
-        let is_building_flag = editor_state.build.is_building.clone();
+    let is_building_flag = editor_state.build.is_building.clone();
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        editor_state.build.logs_rx = Some(std::sync::Mutex::new(rx));
-        let build_target = editor_state.build.target;
-        // Captured before the thread starts — see `stage_scene_for_export`. The audit is captured
-        // here for the same reason: it reads the live world, which the build thread cannot borrow.
-        let staged_scene = stage_scene_for_export(world);
-        let missing_assets = audit_scene_assets(world, std::path::Path::new("."));
+    let (tx, rx) = std::sync::mpsc::channel();
+    editor_state.build.logs_rx = Some(std::sync::Mutex::new(rx));
+    let build_target = editor_state.build.target;
+    // Captured before the thread starts — see `stage_scene_for_export`. The audit is captured
+    // here for the same reason: it reads the live world, which the build thread cannot borrow.
+    let staged_scene = stage_scene_for_export(world);
+    let missing_assets = audit_scene_assets(world, std::path::Path::new("."));
 
+    std::thread::spawn(move || {
+        run_build(build_target, &staged_scene, &missing_assets, &tx);
+        // The staged scene is a temporary file, whatever became of the build: it was removed on the
+        // one path that shipped it, and every failed build left one behind.
+        if let Ok(src) = &staged_scene {
+            let _ = std::fs::remove_file(src);
+        }
+        is_building_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
+}
+
+/// The build thread's work: compile (step 1), package (steps 2 and 3), and say what came of it.
+fn run_build(
+    target: BuildTarget,
+    staged_scene: &Result<std::path::PathBuf, String>,
+    missing_assets: &[MissingAsset],
+    tx: &std::sync::mpsc::Sender<String>,
+) {
+    let log = |msg: &str| {
+        let _ = tx.send(msg.to_string());
+    };
+    let plan = build_plan(target);
+    log(&format!(
+        "== [Adım 1/3] Gizmo Build Başlıyor — Hedef: {} ==",
+        plan.label
+    ));
+    let Some(built) = compile(&plan, tx) else {
+        return;
+    };
+    log("\n== [Adım 2/3] Derleme Başarılı! Dosyalar Kopyalanıyor ==");
+    let export_dir = std::path::Path::new("export/gizmo_game");
+    if let Some(package) = package(&plan, built.as_deref(), staged_scene, missing_assets, export_dir, &log) {
+        for line in verdict(&package, plan.exe) {
+            log(&line);
+        }
+    }
+}
+
+/// Step 1: cargo, its messages streamed into the log. `None` when it did not succeed; otherwise
+/// where cargo says it wrote the runtime, when it said.
+///
+/// Cargo is asked for its artifacts as JSON on stdout (`--message-format=json-render-diagnostics`,
+/// which keeps the diagnostics rendered, on stderr), and the runtime is taken from the path cargo
+/// reports. It was looked for under `target/release`, and a build with `CARGO_TARGET_DIR` set, or a
+/// `target-dir` in a cargo config, wrote it somewhere else: the copy failed, and the build said it
+/// was done.
+fn compile(plan: &BuildPlan, tx: &std::sync::mpsc::Sender<String>) -> Option<Option<std::path::PathBuf>> {
+    let log = |msg: &str| {
+        let _ = tx.send(msg.to_string());
+    };
+    // One line, echoing the arguments actually about to run: the two branches used to
+    // print different things and the no-target branch printed a command it was not
+    // running.
+    let args = cargo_args(plan);
+    log(&format!("> cargo {}", args.join(" ")));
+
+    let mut command = std::process::Command::new("cargo");
+    command
+        .args(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            log(&format!("HATA: Cargo işlemi başlatılamadı: {}", e));
+            return None;
+        }
+    };
+    // Graceful: piped stdout/stderr normalde Some'dur; yine de panik yerine
+    // eksik handle'i atlayıp build thread'inin canlı kalmasını sağlıyoruz.
+    let stderr_thread = child.stderr.take().map(|stderr| {
+        let tx_err = tx.clone();
         std::thread::spawn(move || {
-            let log = |msg: &str| {
-                let _ = tx.send(msg.to_string());
-            };
-
-            let plan = build_plan(build_target);
-            let (target_triple, exe_name, target_label) = (plan.triple, plan.exe, plan.label);
-
-            log(&format!(
-                "== [Adım 1/3] Gizmo Build Başlıyor — Hedef: {} ==",
-                target_label
-            ));
-
-            // One line, echoing the arguments actually about to run: the two branches used to
-            // print different things and the no-target branch printed a command it was not
-            // running.
-            let args = cargo_args(&plan);
-            log(&format!("> cargo {}", args.join(" ")));
-
-            let mut command = std::process::Command::new("cargo");
-            command
-                .args(&args)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-
-            match command.spawn() {
-                Ok(mut child) => {
-                    // Graceful: piped stdout/stderr normalde Some'dur; yine de panik yerine
-                    // eksik handle'i atlayıp build thread'inin canlı kalmasını sağlıyoruz.
-                    let mut stderr_thread = None;
-                    let mut stdout_thread = None;
-
-                    if let Some(stderr) = child.stderr.take() {
-                        let tx_err = tx.clone();
-                        stderr_thread = Some(std::thread::spawn(move || {
-                            use std::io::{BufRead, BufReader};
-                            let reader = BufReader::new(stderr);
-                            for l in reader.lines().map_while(Result::ok) {
-                                let _ = tx_err.send(l);
-                            }
-                        }));
+            use std::io::{BufRead, BufReader};
+            for l in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let _ = tx_err.send(l);
+            }
+        })
+    });
+    let stdout_thread = child.stdout.take().map(|stdout| {
+        let tx_out = tx.clone();
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            let mut built = None;
+            for l in BufReader::new(stdout).lines().map_while(Result::ok) {
+                match runtime_artifact(&l) {
+                    Some(Some(path)) => built = Some(path),
+                    Some(None) => {}
+                    None => {
+                        let _ = tx_out.send(l);
                     }
-
-                    if let Some(stdout) = child.stdout.take() {
-                        let tx_out = tx.clone();
-                        stdout_thread = Some(std::thread::spawn(move || {
-                            use std::io::{BufRead, BufReader};
-                            let reader = BufReader::new(stdout);
-                            for l in reader.lines().map_while(Result::ok) {
-                                let _ = tx_out.send(l);
-                            }
-                        }));
-                    }
-
-                    // child.wait() hata verirse panik yerine başarısız-durum gibi davran.
-                    let status = match child.wait() {
-                        Ok(s) => s,
-                        Err(e) => {
-                            log(&format!("\n!! Derleme süreci beklenirken hata: {} !!", e));
-                            is_building_flag.store(false, std::sync::atomic::Ordering::SeqCst);
-                            return;
-                        }
-                    };
-                    if let Some(t) = stderr_thread {
-                        let _ = t.join();
-                    }
-                    if let Some(t) = stdout_thread {
-                        let _ = t.join();
-                    }
-
-                    if status.success() {
-                        log("\n== [Adım 2/3] Derleme Başarılı! Dosyalar Kopyalanıyor ==");
-                        let export_dir = std::path::Path::new("export/gizmo_game");
-                        // `remove_dir_all` may legitimately fail (nothing there yet), so its result
-                        // is dropped. `create_dir_all` may not: without the directory every copy
-                        // below fails, and the run has nothing left to do but say so.
-                        let _ = std::fs::remove_dir_all(export_dir);
-                        if let Err(e) = std::fs::create_dir_all(export_dir) {
-                            log(&format!(
-                                "HATA: Çıktı dizini oluşturulamadı ({}): {}",
-                                export_dir.display(),
-                                e
-                            ));
-                            is_building_flag
-                                .store(false, std::sync::atomic::Ordering::SeqCst);
-                            return;
-                        }
-
-                        // Hedef triple varsa output target/TRIPLE/release/ altında olur
-                        let src_base = if let Some(triple) = target_triple {
-                            std::path::PathBuf::from("target")
-                                .join(triple)
-                                .join("release")
-                        } else {
-                            std::path::PathBuf::from("target/release")
-                        };
-                        let src_exe = src_base.join(exe_name);
-                        let dst_exe = export_dir.join(exe_name);
-
-                        if let Err(e) = std::fs::copy(&src_exe, &dst_exe) {
-                            log(&format!(
-                                "HATA: Executable kopyalanamadı ({:?}): {}",
-                                src_exe, e
-                            ));
-                        } else {
-                            log(&format!("Kopyalandı -> {:?}", dst_exe));
-                            // On unix the copy does not carry the executable bit, so an export the
-                            // user cannot run is exactly one silent `set_permissions` away.
-                            #[cfg(unix)]
-                            {
-                                use std::os::unix::fs::PermissionsExt;
-                                let marked = std::fs::metadata(&dst_exe).and_then(|meta| {
-                                    let mut perms = meta.permissions();
-                                    perms.set_mode(0o755);
-                                    std::fs::set_permissions(&dst_exe, perms)
-                                });
-                                if let Err(e) = marked {
-                                    log(&format!(
-                                        "UYARI: Çalıştırma izni verilemedi ({:?}): {} — \
-                                         `chmod +x` gerekebilir",
-                                        dst_exe, e
-                                    ));
-                                }
-                            }
-                        }
-
-                        log("\n== [Adım 3/3] Assetler Taşınıyor ==");
-                        // Every one of these used to be `let _ = copy_dir_all(..)` followed by an
-                        // unconditional "Kopyalandı ->", so the log reported four successes it had
-                        // thrown the results of away. Two of the four sources did not even exist.
-                        for (label, src) in EXPORT_DIRS {
-                            log(&describe_copy(
-                                label,
-                                src,
-                                copy_export_dir(src, export_dir.join(label)),
-                            ));
-                        }
-
-                        // The scene the editor was showing, under the name the runtime opens with
-                        // no argument. After the directory copies on purpose: `scenes/` may ship a
-                        // project's other scenes, and this is the one the game starts in.
-                        let scene_dst = export_dir.join("scenes").join(EXPORT_SCENE_NAME);
-                        let scene_shipped = match &staged_scene {
-                            Ok(src) => {
-                                let placed = std::fs::create_dir_all(export_dir.join("scenes"))
-                                    .and_then(|()| std::fs::copy(src, &scene_dst));
-                                let _ = std::fs::remove_file(src);
-                                match placed {
-                                    Ok(_) => {
-                                        log(&format!("Sahne yazıldı -> scenes/{EXPORT_SCENE_NAME}"));
-                                        true
-                                    }
-                                    Err(e) => {
-                                        log(&format!("HATA: sahne yazılamadı ({scene_dst:?}): {e}"));
-                                        false
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                log(&format!("HATA: açık sahne kaydedilemedi: {e}"));
-                                false
-                            }
-                        };
-
-                        // The assets the scene names from outside the four shipped trees. Each one
-                        // that CAN travel is taken at the path the scene already stores for it —
-                        // no rewriting, which is where every hazard in this area lives — and what
-                        // is left is said out loud rather than left for the player to discover.
-                        let mut unshipped: Vec<(&MissingAsset, String)> = Vec::new();
-                        let mut taken = 0usize;
-                        for m in &missing_assets {
-                            match m.reason {
-                                MissingReason::Unresolved => unshipped.push((
-                                    m,
-                                    "bu yolda dosya yok; sahne bunu editörde de açamıyor".into(),
-                                )),
-                                MissingReason::WillNotShip => {
-                                    match ship_referenced_file(
-                                        &m.path,
-                                        std::path::Path::new("."),
-                                        export_dir,
-                                    ) {
-                                        ShipOutcome::Copied => taken += 1,
-                                        ShipOutcome::Skipped(why) => {
-                                            unshipped.push((m, why.to_string()))
-                                        }
-                                        ShipOutcome::Failed(e) => {
-                                            unshipped.push((m, format!("kopyalanamadı: {e}")))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if taken > 0 {
-                            log(&format!(
-                                "Sahnenin adlandırdığı {taken} varlık, ihraç edilen ağaçların \
-                                 dışındaydı ve kendi göreli yoluyla pakete alındı"
-                            ));
-                        }
-
-                        if !unshipped.is_empty() {
-                            log(&format!(
-                                "\n== UYARI: {} varlık pakete giremedi ==",
-                                unshipped.len()
-                            ));
-                            for (m, why) in &unshipped {
-                                log(&format!("  {} '{}' — {why}", m.what, m.path));
-                            }
-                            log(
-                                "  Çözüm: bu dosyaları projenin ihraç edilen dizinlerinden birine \
-                                 (demo/assets, scenes, scripts, media) taşıyıp sahnede yeniden \
-                                 atayın.",
-                            );
-                        }
-
-                        // The claim is made only where it is true. An export whose scene did not
-                        // land still produces a runnable binary — it just opens an empty window,
-                        // and saying "Oyununuz hazır" over that is the defect this path had. The
-                        // same rule now covers a package whose assets are incomplete: it runs, and
-                        // saying nothing about the missing ones is the same lie one size smaller.
-                        if scene_shipped && !unshipped.is_empty() {
-                            log(&format!(
-                                "\n⚠ BUILD TAMAMLANDI — {} varlık eksik",
-                                unshipped.len()
-                            ));
-                            log(&format!(
-                                "Oyun 'export/gizmo_game/' dizininde çalışır ama yukarıdaki \
-                                 varlıklar olmadan — çalıştır: ./{}",
-                                exe_name
-                            ));
-                        } else if scene_shipped {
-                            log("\n🎉 BUILD TAMAMLANDI! 🎉");
-                            log(&format!(
-                                "Oyununuz 'export/gizmo_game/' dizininde hazır — çalıştır: ./{}",
-                                exe_name
-                            ));
-                        } else {
-                            log("\n⚠ BUILD BİTTİ, AMA SAHNE GİTMEDİ.");
-                            log(&format!(
-                                "'export/gizmo_game/{}' çalışır durumda, ancak açacağı sahne yok: \
-                                 boş pencere gelir.",
-                                exe_name
-                            ));
-                        }
-                    } else {
-                        log("\n❌ HATA: Cargo derlemesi başarısız oldu.");
-                    }
-                }
-                Err(e) => {
-                    log(&format!("HATA: Cargo işlemi başlatılamadı: {}", e));
                 }
             }
+            built
+        })
+    });
 
-            is_building_flag.store(false, std::sync::atomic::Ordering::SeqCst);
-        });
+    // child.wait() hata verirse panik yerine başarısız-durum gibi davran.
+    let status = match child.wait() {
+        Ok(s) => s,
+        Err(e) => {
+            log(&format!("\n!! Derleme süreci beklenirken hata: {} !!", e));
+            return None;
+        }
+    };
+    if let Some(t) = stderr_thread {
+        let _ = t.join();
     }
+    let built = stdout_thread.and_then(|t| t.join().ok()).flatten();
+    if status.success() {
+        Some(built)
+    } else {
+        log("\n❌ HATA: Cargo derlemesi başarısız oldu.");
+        None
+    }
+}
+
+/// One line of cargo's JSON stdout: `None` when it is not a JSON message (forward it to the log),
+/// `Some(None)` for a message that is not the runtime's artifact, `Some(Some(path))` for the
+/// runtime's executable.
+fn runtime_artifact(line: &str) -> Option<Option<std::path::PathBuf>> {
+    let message: serde_json::Value = serde_json::from_str(line).ok()?;
+    let is_runtime = message["reason"] == "compiler-artifact" && message["target"]["name"] == RUNTIME_BIN;
+    Some(
+        message["executable"]
+            .as_str()
+            .filter(|_| is_runtime)
+            .map(std::path::PathBuf::from),
+    )
+}
+
+/// What reached the package.
+struct Package {
+    /// The runtime's executable.
+    exe: bool,
+    /// The scene it opens.
+    scene: bool,
+    /// The assets the scene names that did not, and why.
+    unshipped: Vec<(MissingAsset, String)>,
+}
+
+/// Steps 2 and 3: the runtime (`built`, where cargo wrote it), the shipped trees, the scene and the
+/// assets it names, into `export_dir`. `None` when the directory cannot be made, which leaves
+/// nothing to do but say so.
+fn package(
+    plan: &BuildPlan,
+    built: Option<&std::path::Path>,
+    staged_scene: &Result<std::path::PathBuf, String>,
+    missing_assets: &[MissingAsset],
+    export_dir: &std::path::Path,
+    log: &dyn Fn(&str),
+) -> Option<Package> {
+    // `remove_dir_all` may legitimately fail (nothing there yet), so its result
+    // is dropped. `create_dir_all` may not: without the directory every copy
+    // below fails, and the run has nothing left to do but say so.
+    let _ = std::fs::remove_dir_all(export_dir);
+    if let Err(e) = std::fs::create_dir_all(export_dir) {
+        log(&format!(
+            "HATA: Çıktı dizini oluşturulamadı ({}): {}",
+            export_dir.display(),
+            e
+        ));
+        return None;
+    }
+
+    let exe = ship_runtime(plan, built, export_dir, log);
+
+    log("\n== [Adım 3/3] Assetler Taşınıyor ==");
+    // Every one of these used to be `let _ = copy_dir_all(..)` followed by an
+    // unconditional "Kopyalandı ->", so the log reported four successes it had
+    // thrown the results of away. Two of the four sources did not even exist.
+    for (label, src) in EXPORT_DIRS {
+        log(&describe_copy(
+            label,
+            src,
+            copy_export_dir(src, export_dir.join(label)),
+        ));
+    }
+
+    let scene = ship_scene(staged_scene, export_dir, log);
+    let unshipped = ship_named_assets(missing_assets, export_dir, log);
+    Some(Package { exe, scene, unshipped })
+}
+
+/// The runtime into the package, executable. Whether it got there.
+fn ship_runtime(plan: &BuildPlan, built: Option<&std::path::Path>, export_dir: &std::path::Path, log: &dyn Fn(&str)) -> bool {
+    let Some(src_exe) = built else {
+        log(&format!("HATA: Cargo, '{}' için bir çalıştırılabilir dosya bildirmedi", RUNTIME_BIN));
+        return false;
+    };
+    let dst_exe = export_dir.join(plan.exe);
+    if let Err(e) = std::fs::copy(src_exe, &dst_exe) {
+        log(&format!(
+            "HATA: Executable kopyalanamadı ({:?}): {}",
+            src_exe, e
+        ));
+        return false;
+    }
+    log(&format!("Kopyalandı -> {:?}", dst_exe));
+    // On unix the copy does not carry the executable bit, so an export the
+    // user cannot run is exactly one silent `set_permissions` away.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let marked = std::fs::metadata(&dst_exe).and_then(|meta| {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&dst_exe, perms)
+        });
+        if let Err(e) = marked {
+            log(&format!(
+                "UYARI: Çalıştırma izni verilemedi ({:?}): {} — \
+                 `chmod +x` gerekebilir",
+                dst_exe, e
+            ));
+        }
+    }
+    true
+}
+
+/// The scene the editor was showing, under the name the runtime opens with no argument. After the
+/// directory copies on purpose: `scenes/` may ship a project's other scenes, and this is the one the
+/// game starts in. Whether it got there.
+fn ship_scene(staged_scene: &Result<std::path::PathBuf, String>, export_dir: &std::path::Path, log: &dyn Fn(&str)) -> bool {
+    let scene_dst = export_dir.join("scenes").join(EXPORT_SCENE_NAME);
+    match staged_scene {
+        Ok(src) => {
+            let placed = std::fs::create_dir_all(export_dir.join("scenes"))
+                .and_then(|()| std::fs::copy(src, &scene_dst));
+            match placed {
+                Ok(_) => {
+                    log(&format!("Sahne yazıldı -> scenes/{EXPORT_SCENE_NAME}"));
+                    true
+                }
+                Err(e) => {
+                    log(&format!("HATA: sahne yazılamadı ({scene_dst:?}): {e}"));
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            log(&format!("HATA: açık sahne kaydedilemedi: {e}"));
+            false
+        }
+    }
+}
+
+/// The assets the scene names from outside the four shipped trees. Each one that CAN travel is
+/// taken at the path the scene already stores for it — no rewriting, which is where every hazard in
+/// this area lives — and what is left is returned, to be said out loud rather than left for the
+/// player to discover.
+fn ship_named_assets(missing_assets: &[MissingAsset], export_dir: &std::path::Path, log: &dyn Fn(&str)) -> Vec<(MissingAsset, String)> {
+    let mut unshipped = Vec::new();
+    let mut taken = 0usize;
+    for m in missing_assets {
+        match m.reason {
+            MissingReason::Unresolved => unshipped.push((
+                m.clone(),
+                "bu yolda dosya yok; sahne bunu editörde de açamıyor".into(),
+            )),
+            MissingReason::WillNotShip => {
+                match ship_referenced_file(&m.path, std::path::Path::new("."), export_dir) {
+                    ShipOutcome::Copied => taken += 1,
+                    ShipOutcome::Skipped(why) => unshipped.push((m.clone(), why.to_string())),
+                    ShipOutcome::Failed(e) => unshipped.push((m.clone(), format!("kopyalanamadı: {e}"))),
+                }
+            }
+        }
+    }
+    if taken > 0 {
+        log(&format!(
+            "Sahnenin adlandırdığı {taken} varlık, ihraç edilen ağaçların \
+             dışındaydı ve kendi göreli yoluyla pakete alındı"
+        ));
+    }
+    unshipped
+}
+
+/// What the build says it made, for the last lines of its log.
+///
+/// The claim is made only where it is true. An export whose scene did not land still produces a
+/// runnable binary — it just opens an empty window, and saying "Oyununuz hazır" over that is the
+/// defect this path had. The same rule covers a package whose assets are incomplete: it runs, and
+/// saying nothing about the missing ones is the same lie one size smaller. And a package without the
+/// runtime runs nothing at all: the copy's error went to the log and the last lines said the game
+/// was ready.
+fn verdict(package: &Package, exe_name: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !package.unshipped.is_empty() {
+        lines.push(format!("\n== UYARI: {} varlık pakete giremedi ==", package.unshipped.len()));
+        for (m, why) in &package.unshipped {
+            lines.push(format!("  {} '{}' — {why}", m.what, m.path));
+        }
+        lines.push(
+            "  Çözüm: bu dosyaları projenin ihraç edilen dizinlerinden birine \
+             (demo/assets, scenes, scripts, media) taşıyıp sahnede yeniden \
+             atayın."
+                .to_string(),
+        );
+    }
+    if !package.exe {
+        lines.push("\n❌ BUILD TAMAMLANAMADI: oyunun çalıştırılabilir dosyası pakete girmedi.".to_string());
+        lines.push("'export/gizmo_game/' içinde çalıştırılacak bir şey yok — yukarıdaki HATA satırına bakın.".to_string());
+    } else if package.scene && !package.unshipped.is_empty() {
+        lines.push(format!("\n⚠ BUILD TAMAMLANDI — {} varlık eksik", package.unshipped.len()));
+        lines.push(format!(
+            "Oyun 'export/gizmo_game/' dizininde çalışır ama yukarıdaki \
+             varlıklar olmadan — çalıştır: ./{}",
+            exe_name
+        ));
+    } else if package.scene {
+        lines.push("\n🎉 BUILD TAMAMLANDI! 🎉".to_string());
+        lines.push(format!(
+            "Oyununuz 'export/gizmo_game/' dizininde hazır — çalıştır: ./{}",
+            exe_name
+        ));
+    } else {
+        lines.push("\n⚠ BUILD BİTTİ, AMA SAHNE GİTMEDİ.".to_string());
+        lines.push(format!(
+            "'export/gizmo_game/{}' çalışır durumda, ancak açacağı sahne yok: \
+             boş pencere gelir.",
+            exe_name
+        ));
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -1185,7 +1279,7 @@ mod export_copy_tests {
         world.add_component(e, EntityName::new("Sahnedeki Kutu"));
         world.add_component(e, Transform::new(Vec3::new(1.0, 2.0, 3.0)));
 
-        let staged = stage_scene_for_export(&world).expect("açık sahne kaydedilebilmeli");
+        let staged = stage_scene_for_export(&mut world).expect("açık sahne kaydedilebilmeli");
         assert!(staged.is_file(), "staged scene {staged:?} yazılmadı");
         assert!(
             staged.starts_with(std::env::temp_dir()),
@@ -1206,6 +1300,86 @@ mod export_copy_tests {
             names.iter().any(|n| n.0 == "Sahnedeki Kutu"),
             "the world the editor was showing is not what got staged"
         );
+    }
+
+    /// The exported scene carries the game's own components: it is written by the editor's own
+    /// writer, through the world's registry. Through the engine's alone, a component the game
+    /// registered was edited and saved in the editor and missing from the game it was exported as.
+    #[test]
+    fn the_exported_scene_carries_the_games_own_components() {
+        #[derive(Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+        struct Fuel {
+            litres: f32,
+        }
+        gizmo::core::impl_component!(Fuel);
+        let mut world = World::new();
+        gizmo::register_editor_component::<Fuel>(&mut world, "Fuel").unwrap();
+        let tank = world.spawn();
+        world.add_component(tank, Fuel { litres: 40.0 });
+
+        let staged = stage_scene_for_export(&mut world).expect("the open scene stages");
+        let mut loaded = World::new();
+        gizmo::register_editor_component::<Fuel>(&mut loaded, "Fuel").unwrap();
+        let registry = gizmo::scene_registry_for(&loaded);
+        gizmo::scene::SceneData::load_into(&staged.to_string_lossy(), &mut loaded, &registry).expect("it loads back");
+        let _ = std::fs::remove_file(&staged);
+        assert_eq!(loaded.query::<&Fuel>().iter().next().cloned(), Some(Fuel { litres: 40.0 }));
+    }
+
+    /// The runtime is taken from where cargo says it wrote it — not looked for under
+    /// `target/release`, which a `CARGO_TARGET_DIR` or a cargo config's `target-dir` moves.
+    #[test]
+    fn the_runtime_is_taken_from_where_cargo_says_it_wrote_it() {
+        assert!(cargo_args(&build_plan(BuildTarget::Native)).iter().any(|a| a == "--message-format=json-render-diagnostics"));
+        let artifact = format!(
+            r#"{{"reason":"compiler-artifact","target":{{"name":"{RUNTIME_BIN}","kind":["bin"]}},"executable":"/elsewhere/release/{RUNTIME_BIN}","fresh":true}}"#
+        );
+        assert_eq!(runtime_artifact(&artifact), Some(Some(std::path::PathBuf::from(format!("/elsewhere/release/{RUNTIME_BIN}")))));
+        let a_library = r#"{"reason":"compiler-artifact","target":{"name":"gizmo_core","kind":["lib"]},"executable":null}"#;
+        assert_eq!(runtime_artifact(a_library), Some(None), "another artifact is not the runtime");
+        assert_eq!(runtime_artifact(r#"{"reason":"build-finished","success":true}"#), Some(None));
+        assert_eq!(runtime_artifact("   Compiling demo v0.11.0"), None, "a plain line goes to the log");
+    }
+
+    /// A package without the runtime never says it is ready. The copy's error went to the log and
+    /// the last lines said "Oyununuz hazır" over a package with nothing to run.
+    #[test]
+    fn a_package_without_the_runtime_never_says_it_is_ready() {
+        let without = verdict(&Package { exe: false, scene: true, unshipped: Vec::new() }, RUNTIME_BIN);
+        assert!(without.iter().any(|l| l.contains("TAMAMLANAMADI")), "{without:?}");
+        assert!(!without.iter().any(|l| l.contains("hazır") || l.contains("🎉")), "{without:?}");
+        let with = verdict(&Package { exe: true, scene: true, unshipped: Vec::new() }, RUNTIME_BIN);
+        assert!(with.iter().any(|l| l.contains("hazır")), "{with:?}");
+
+        // And the packaging step reports the missing runtime when cargo named none.
+        let dir = std::env::temp_dir().join(format!("gizmo_export_test_{}", std::process::id()));
+        let lines = std::cell::RefCell::new(Vec::new());
+        let package = package(&build_plan(BuildTarget::Native), None, &Err("no scene".into()), &[], &dir, &|l: &str| {
+            lines.borrow_mut().push(l.to_string())
+        })
+        .expect("the export directory is made");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!package.exe && !package.scene);
+        assert!(lines.borrow().iter().any(|l| l.contains("çalıştırılabilir dosya bildirmedi")), "{:?}", lines.borrow());
+    }
+
+    /// A build request under ▶ is refused — the export would ship the running game — and so is one
+    /// made while a build runs, whose package the second would delete as it was written. Neither
+    /// starts a thread.
+    #[test]
+    fn a_build_is_refused_in_play_and_while_one_runs() {
+        let mut world = World::new();
+        let mut ed = EditorState::default();
+        ed.build.request = true;
+        handle_build_requests(&mut world, &mut ed, true);
+        assert!(!ed.build.request, "the request is taken");
+        assert!(ed.build.logs_rx.is_none(), "a build was started in play");
+        assert!(!ed.build.is_building.load(std::sync::atomic::Ordering::SeqCst));
+
+        ed.build.request = true;
+        ed.build.is_building.store(true, std::sync::atomic::Ordering::SeqCst);
+        handle_build_requests(&mut world, &mut ed, false);
+        assert!(ed.build.logs_rx.is_none(), "a second build was started beside the first");
     }
 
     /// The export ships the paths the runtime reads, not paths nobody writes.

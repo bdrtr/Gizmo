@@ -294,8 +294,12 @@ fn draw_build_menu(ui: &mut egui::Ui, state: &mut EditorState) {
         ui.separator();
 
         let building = state.build.is_building.load(std::sync::atomic::Ordering::Acquire);
+        // Not under ▶: the export packages the edited scene, and the current world is the game's
+        // (the studio refuses it too, `handle_build_requests`).
+        let in_play = state.is_in_play_session();
         if ui
-            .add_enabled(!building, egui::Button::new("Build Et"))
+            .add_enabled(!building && !in_play, egui::Button::new("Build Et"))
+            .on_disabled_hover_text(if in_play { "Play sırasında build alınmaz — önce ⏹" } else { "Bir build sürüyor" })
             .clicked()
         {
             state.build.request = true;
