@@ -185,13 +185,32 @@ pub fn tilemap_collider(
     solid: impl Fn(u32) -> bool,
 ) -> Option<components::Collider> {
     let (width, height) = map.size();
-    let rects = merge_solid_cells(width, height, |x, y| map.get(x, y).is_some_and(&solid));
-    rects_to_collider(&rects, map.tile_size, depth)
+    grid_collider(width, height, map.tile_size, depth, |x, y| map.get(x, y).is_some_and(&solid))
+}
+
+/// The collider of a `width × height` grid of `tile_size` cells whose cell `(x, y)` is solid when
+/// `solid(x, y)` says so — [`tilemap_collider`] without the tilemap, for a level the physics needs
+/// and nothing draws: a server, a headless test, a grid a game keeps as data.
+///
+/// The same frame and the same merging as [`tilemap_collider`]: origin at the grid's top-left,
+/// rows going down (−Y), `depth` along Z, runs of solid cells merged into as few boxes as the grid
+/// allows. `None` when no cell is solid or `tile_size` is not positive.
+///
+/// The grid was reachable only through a `Tilemap`, a render component — so a build without the
+/// `render` feature (`headless`) could not make a tile level's collision at all, and a headless
+/// test had to build a sprite map with an image id it could not load.
+pub fn grid_collider(
+    width: u32,
+    height: u32,
+    tile_size: gizmo_math::Vec2,
+    depth: f32,
+    solid: impl Fn(u32, u32) -> bool,
+) -> Option<components::Collider> {
+    rects_to_collider(&merge_solid_cells(width, height, solid), tile_size, depth)
 }
 
 /// Covers the solid cells of a `width × height` grid with rectangles `(x0, y0, x1, y1)`, ends
 /// exclusive: horizontal runs per row, then runs with equal columns in consecutive rows merged.
-#[cfg(feature = "render")]
 fn merge_solid_cells(width: u32, height: u32, solid: impl Fn(u32, u32) -> bool) -> Vec<[u32; 4]> {
     let mut done: Vec<[u32; 4]> = Vec::new();
     // Rectangles that reached the previous row and may still grow downward.
@@ -230,7 +249,6 @@ fn merge_solid_cells(width: u32, height: u32, solid: impl Fn(u32, u32) -> bool) 
     done
 }
 
-#[cfg(feature = "render")]
 fn rects_to_collider(rects: &[[u32; 4]], tile: gizmo_math::Vec2, depth: f32) -> Option<components::Collider> {
     use gizmo_math::Vec3;
     if rects.is_empty() || !(tile.x > 0.0 && tile.y > 0.0 && tile.is_finite()) {
@@ -252,7 +270,7 @@ fn rects_to_collider(rects: &[[u32; 4]], tile: gizmo_math::Vec2, depth: f32) -> 
     Some(components::Collider::compound(parts))
 }
 
-#[cfg(all(test, feature = "render"))]
+#[cfg(test)]
 mod tilemap_collider_tests {
     use super::*;
     use gizmo_math::{Vec2, Vec3};
@@ -300,14 +318,14 @@ mod tilemap_collider_tests {
     }
 
     /// End to end: a ball dropped on a tile floor comes to rest on top of it — the floor's top
-    /// is the map's origin row, so it lands at `origin.y + radius`.
+    /// is the map's origin row, so it lands at `origin.y + radius`. Through `grid_collider`, which
+    /// needs no `Tilemap` and no renderer: this test went around `tilemap_collider` because a map
+    /// needs an image id only a renderer hands out, and so did every headless game.
     #[test]
     fn a_ball_lands_on_a_tile_floor() {
-        // `Tilemap` needs an image id, which only a renderer hands out; the map's geometry does
-        // not depend on it, so the rows go through the same merge directly.
-        let rects = grid(&["##########", "##########"]);
-        assert_eq!(rects.len(), 1);
-        let floor = rects_to_collider(&rects, Vec2::ONE, 1.0).unwrap();
+        let floor = grid_collider(10, 2, Vec2::ONE, 1.0, |_, _| true).unwrap();
+        let components::ColliderShape::Compound(parts) = &floor.shape else { panic!("compound") };
+        assert_eq!(parts.len(), 1, "a full grid is one box");
 
         let mut world = crate::core::World::new();
         world.insert_resource(world::PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
