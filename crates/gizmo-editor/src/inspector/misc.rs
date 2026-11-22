@@ -625,6 +625,14 @@ pub fn draw_hurtbox_section(
 }
 
 
+/// The entity a bone attachment typed as id `id` points at: the live one on that id, generation and
+/// all. It was `Entity::new(id, 0)`, which is a dead entity's handle once the id has been reused, and
+/// the attachment then followed nothing. An id nobody holds keeps the number, so the field can be
+/// scrolled through ids that are not in use.
+fn attachment_target(world: &World, id: u32) -> gizmo_core::entity::Entity {
+    world.entity(id).unwrap_or(gizmo_core::entity::Entity::new(id, 0))
+}
+
 /// The bone-attachment rows: which skeleton bone the entity rides.
 pub fn draw_bone_attachment_section(
     ui: &mut egui::Ui,
@@ -642,7 +650,7 @@ pub fn draw_bone_attachment_section(
                     ui.label("Target Entity ID:");
                     let mut tid = attachment.target_entity.id();
                     if ui.add(egui::DragValue::new(&mut tid)).changed() {
-                        attachment.target_entity = gizmo_core::entity::Entity::new(tid, 0);
+                        attachment.target_entity = attachment_target(world, tid);
                     }
                 });
                 ui.horizontal(|ui| {
@@ -902,6 +910,18 @@ pub fn draw_mesh_renderer_section(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bone attachment's target typed as an id is the live entity on it, generation and all.
+    #[test]
+    fn an_attachment_typed_as_an_id_points_at_the_live_entity() {
+        let mut world = World::new();
+        let gone = world.spawn();
+        world.despawn(gone);
+        let reused = world.spawn();
+        assert!(reused.generation() > 0);
+        assert_eq!(attachment_target(&world, reused.id()), reused);
+        assert_eq!(attachment_target(&world, 77).id(), 77, "an unused id keeps its number");
+    }
     use gizmo_physics_core::components::fighter::{CombatMove, FighterController, FrameData};
 
     /// Every string the frame painted, flattened out of the nested `Shape::Vec`s.

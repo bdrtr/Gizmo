@@ -191,10 +191,8 @@ fn toggle_grid(
 
     let draw_plane = grid.visible && grid.use_engine_material;
     for (entity, ..) in planes.iter() {
-        // `Entity::new(id, 0)`: sorgular ham `u32` veriyor ve geri çevirmek `&World` istiyor —
-        // C1'de yazılı bir boşluk. Burada güvenli, çünkü bu varlık kurulumda doğuruldu ve hiç
-        // silinmedi, yani kuşağı sıfır.
-        let e = gizmo::core::entity::Entity::new(entity.id(), 0);
+        // The query hands the entity itself, generation and all: it is used as it is.
+        let e = entity;
         if draw_plane {
             commands.entity(e).remove::<gizmo::core::component::IsHidden>();
         } else {
