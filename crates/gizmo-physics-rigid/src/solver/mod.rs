@@ -1284,10 +1284,9 @@ impl ConstraintSolver {
         }
     }
 
-    /// ── Split Impulse: Pozisyon Düzeltme Pass ────────────────────────────
-    /// Asıl velocity'den bağımsız olarak pseudo-velocity hesaplar.
-    /// Bu pass penetrasyon düzeltmesini velocity kanalından ayırır.
-    /// Birikimli pseudo-impulse takibi ile over-correction engellenir.
+    /// Split impulse: the position-correction pass. It computes pseudo-velocities independent of
+    /// the real velocity, so penetration is corrected outside the velocity channel, and tracking
+    /// the accumulated pseudo-impulse keeps it from over-correcting.
     ///
     /// The pseudo-velocities are this pass's own, one per body of the world (`n_bodies`, as the
     /// velocities), and start at zero: what it writes out is `pos_corrections`, which the caller

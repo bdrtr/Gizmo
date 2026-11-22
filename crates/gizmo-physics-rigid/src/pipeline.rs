@@ -733,11 +733,11 @@ impl PhysicsWorld {
         manifold
     }
 
-    /// ── Dormant çiftlerin cache'ini KORU ──────────────────────────────
-    /// Narrowphase atlandı (her iki cisim dormant). Önceki cache girdisini current_cache'e
-    /// taşı ki aşağıdaki ended-collision döngüsü bunları "bitti" sanıp UYANDIRMASIN.
-    /// Manifold solver'a EKLENMEZ (iki cisim de dormant → island zaten çözülmez); bu yalnız
-    /// temas-cache sürekliliği. Bir cisim uyanınca çift "aktif" olur → narrowphase döner.
+    /// Keeps the dormant pairs' cache entries. The narrowphase skipped them (both bodies are
+    /// dormant), so their previous entries move to `current_cache`; otherwise the ended-collision
+    /// loop would take them for ended and WAKE them. No manifold goes to the solver (both bodies
+    /// are dormant, so the island is not solved anyway): this is the contact cache's continuity
+    /// only. Once a body wakes, the pair is active again and the narrowphase tests it.
     fn keep_dormant_cache(&mut self, dormant_pairs: &[(BodyHandle, BodyHandle)], current_cache: &mut FxHashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>) {
         for &pair in dormant_pairs {
             if current_cache.contains_key(&pair) {
@@ -1229,26 +1229,25 @@ impl PhysicsWorld {
         counts
     }
 
-    /// Joint-coupled uyandırma: joint_solver `&[RigidBody]` alır → uyuyan bir cismi
-    /// uyandıramaz; ucu hareketli bir eklemin diğer (uyuyan) ucunun hızını sessizce
-    /// değiştirir ama is_sleeping'i bırakır → position_integration onu atlar, eklem
-    /// düzeltmesi YUTULUR (mekanizma kopuk görünür).
+    /// Joint-coupled waking. The joint solver takes `&[RigidBody]` and cannot wake a sleeping
+    /// body: a joint with a moving end silently changes the velocity of its other, sleeping end
+    /// but leaves `is_sleeping` set, position integration skips that end, and the joint's
+    /// correction is SWALLOWED (the mechanism looks broken apart).
     ///
-    /// Bu, eklemlerle bağlı cisim BİLEŞENİ üzerinde çalışır, tek tek eklemler üzerinde
-    /// değil. Eskiden `self.joints` üzerinde TEK GEÇİŞ vardı ve yayılım dizi sırasına
-    /// bağlıydı: 12 halkalı bir zincirin DERİN ucu sarsıldığında bir adımda yalnız 5
-    /// halka uyanıyordu (substep başına bir halka), kalan 7'si hiç entegre etmedikleri
-    /// eklem düzeltmelerini yutmaya devam ediyordu — zincir yarısından çivilenmiş gibi
-    /// davranıyordu. Fiziksel olarak incelik değil: uzamaz bir zincirin alt halkasını
-    /// rahatsız etmek üstündeki HER halkayı aynı anda yükler.
+    /// This works on the COMPONENT of bodies the joints connect, not joint by joint. There used
+    /// to be a SINGLE PASS over `self.joints`, and the wake spread in array order: shaking the
+    /// DEEP end of a 12-link chain woke only 5 links in a step (one link per substep), and the
+    /// other 7 went on swallowing joint corrections they never integrated — the chain behaved as
+    /// if it were pinned halfway. Not a nicety, physically: disturbing the bottom link of an
+    /// inextensible chain loads EVERY link above it at once.
     ///
-    /// Temaslarda bunu island'lar çözüyor (`island.rs` manifoldları union-find'lar,
-    /// yığın topluca uyanır); eklemler island kurulumuna hiç girmiyordu. Aynı yapı,
-    /// eklem grafı üzerinde: bileşende TEK BİR mover varsa bileşenin tamamı uyanır.
-    /// İki uç da uykudaysa mekanizma dinlenmededir → dokunma.
+    /// For contacts the islands do this (`island.rs` union-finds the manifolds, and a stack wakes
+    /// together); joints never entered the island build. The same structure, over the joint
+    /// graph: ONE mover in a component wakes the whole component. With both ends asleep the
+    /// mechanism is at rest, and nothing is touched.
     ///
-    /// Maliyet eklem sayısına bağlı, cisim sayısına değil: yalnız eklemlerin DOKUNDUĞU
-    /// cisimler yerel bir indeks uzayına toplanır.
+    /// The cost scales with the joints, not the bodies: only the bodies joints TOUCH are gathered
+    /// into a local index space.
     fn wake_joint_components(&mut self) {
         let mut local: FxHashMap<usize, usize> = FxHashMap::default();
         let mut members: Vec<usize> = Vec::new();
