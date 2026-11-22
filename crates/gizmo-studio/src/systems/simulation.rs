@@ -55,33 +55,42 @@ pub fn handle_simulation(
     hot_reload(world, editor_state, state);
 
     // --- OYUN / SİMÜLASYON DÖNGÜSÜ ---
-    // A game hooked into the studio runs its own frame — the one its binary runs — once its setup
-    // has run on the play world (`crate::pie::GameSetupPending`, the render hook's).
-    if editor_state.is_playing() && step_hooked_game(world, state, dt, input) {
-        return;
-    }
     if editor_state.is_playing() {
-    // The frame of a running game is the ENGINE's, not the editor's: `PlayLoop::step` is the
-    // same call an exported game makes (`demo/src/bin/gizmo_runtime.rs`). That is what lets
-    // Build/Export promise the shipped game behaves like the one you just pressed ▶ on — a
-    // promise that was prose here and a second implementation over there, until the two were
-    // merged. What stays on this side is the console.
-    //
-    // The default `ActionMap` below is the one thing the editor adds and the runtime does
-    // not. It was written for the fighter system deleted in `592bd6f`, which read these
-    // eight names straight out of it and both filled the input buffer and picked the move.
-    // The clock has since come back (`fighter_frame_system`, on `PlayLoop`'s fixed step) but
-    // deliberately without those two halves: which button is a jab is the game's, and so is
-    // which action names its combos are spelled in. So this stays scaffolding — bindings a
-    // game actually needs belong in the scene, and then both paths get them.
-        insert_default_action_map(world);
+        // The game is drawn into the Game panel, so for its step it sees the panel: its window is
+        // the panel's render target, and its pointer the one over the panel, in that target's
+        // pixels (`game_view_input`, `GameWindow`).
+        let input = game_view_input(input, editor_state.game_view_pointer.map(|p| (p.x, p.y)));
+        let window = GameWindow::enter(world);
+        // A game hooked into the studio runs its own frame — the one its binary runs — once its
+        // setup has run on the play world (`crate::pie::GameSetupPending`, the render hook's).
+        let hooked = step_hooked_game(world, state, dt, &input);
+        if !hooked {
+            // The frame of a running game is the ENGINE's, not the editor's: `PlayLoop::step` is
+            // the same call an exported game makes (`demo/src/bin/gizmo_runtime.rs`). That is what
+            // lets Build/Export promise the shipped game behaves like the one you just pressed ▶
+            // on — a promise that was prose here and a second implementation over there, until the
+            // two were merged. What stays on this side is the console.
+            //
+            // The default `ActionMap` below is the one thing the editor adds and the runtime does
+            // not. It was written for the fighter system deleted in `592bd6f`, which read these
+            // eight names straight out of it and both filled the input buffer and picked the move.
+            // The clock has since come back (`fighter_frame_system`, on `PlayLoop`'s fixed step)
+            // but deliberately without those two halves: which button is a jab is the game's, and
+            // so is which action names its combos are spelled in. So this stays scaffolding —
+            // bindings a game actually needs belong in the scene, and then both paths get them.
+            insert_default_action_map(world);
 
-        // `editor_state` and `state` are separate bindings, so the console can be written
-        // from inside the callback: the step borrows `state.play`, the reporter borrows the
-        // editor, and neither is the other.
-        state
-            .play
-            .step(world, dt, input, &mut |r| log_play_report(editor_state, r));
+            // `editor_state` and `state` are separate bindings, so the console can be written
+            // from inside the callback: the step borrows `state.play`, the reporter borrows the
+            // editor, and neither is the other.
+            state
+                .play
+                .step(world, dt, &input, &mut |r| log_play_report(editor_state, r));
+        }
+        window.leave(world);
+        if hooked {
+            return;
+        }
     } else {
         // Time does not pass in a stopped game; carrying the debt into the next ▶ would spend it
         // all in one frame.
@@ -155,6 +164,45 @@ fn step_hooked_game(world: &mut World, state: &mut StudioState, dt: f32, input: 
         }
     }
     true
+}
+
+/// The input a game sees in the Game panel: the window's, its pointer moved into the panel's frame
+/// (`EditorState::game_view_pointer`, the panel's render-target pixels), or far outside it when the
+/// pointer is not over the panel — so a game's UI is neither hovered nor clicked through another
+/// panel.
+///
+/// The pointer used to be the window's: a game's UI, laid out to the window, was hit by a pointer
+/// in window pixels while drawn into a panel of another size and place, so a button in the Game
+/// panel answered a click somewhere else on screen, or nowhere.
+fn game_view_input(input: &Input, pointer: Option<(f32, f32)>) -> Input {
+    let mut game = input.clone();
+    let (x, y) = pointer.unwrap_or((-1.0e6, -1.0e6));
+    game.set_mouse_position(x, y);
+    game
+}
+
+/// The play world's `WindowInfo` for the length of a game's step: the Game panel's render target —
+/// the window the game is drawn into, which its UI is laid out to. [`GameWindow::leave`] puts the
+/// window's own back: `WindowInfo` goes back to the edited world at ⏹, and the editor's views read
+/// it.
+struct GameWindow {
+    window: Option<WindowInfo>,
+}
+
+impl GameWindow {
+    fn enter(world: &mut World) -> Self {
+        let window = world.get_resource::<WindowInfo>().map(|w| *w);
+        if let Some((w, h)) = world.get_resource::<gizmo::renderer::components::GameRenderTarget>().map(|t| (t.0.width, t.0.height)) {
+            world.insert_resource(WindowInfo::new(w as f32, h as f32));
+        }
+        Self { window }
+    }
+
+    fn leave(self, world: &mut World) {
+        if let Some(window) = self.window {
+            world.insert_resource(window);
+        }
+    }
 }
 
 /// The editor's default bindings, into a play world that has none: arrows and WASD, and J K L U.
@@ -304,8 +352,59 @@ struct ShaderRebuild;
 
 #[cfg(test)]
 mod tests {
+    use super::{game_view_input, GameWindow};
 
     use gizmo::math::Vec3;
+
+    /// A game in the Game panel is hit by the pointer over the panel, in the panel's own frame, and
+    /// by none when the pointer is elsewhere — so its UI is neither clicked from another panel nor
+    /// missed because the window's pointer is in window pixels.
+    #[test]
+    fn the_game_sees_the_pointer_over_its_panel_and_only_that() {
+        let mut input = Input::default();
+        input.set_mouse_position(812.0, 433.0);
+        input.on_mouse_button_pressed(0);
+        let over = game_view_input(&input, Some((30.0, 20.0)));
+        assert_eq!(over.mouse_position(), (30.0, 20.0));
+        assert!(over.is_mouse_button_pressed(0), "the buttons are the window's");
+        let elsewhere = game_view_input(&input, None);
+        let (x, y) = elsewhere.mouse_position();
+        assert!(x < -1.0e5 && y < -1.0e5, "far off any UI: {x}, {y}");
+    }
+
+    /// For its step the play world's window is the Game panel's render target — what its UI is laid
+    /// out to — and the window's own comes back after, since ⏹ moves it to the edited world.
+    #[test]
+    fn the_game_steps_in_its_panel_window_and_the_window_comes_back() {
+        let instance = gizmo::wgpu::Instance::new(gizmo::wgpu::InstanceDescriptor {
+            backends: gizmo::wgpu::Backends::NOOP,
+            backend_options: gizmo::wgpu::BackendOptions {
+                noop: gizmo::wgpu::NoopBackendOptions { enable: true, ..Default::default() },
+                ..Default::default()
+            },
+            ..gizmo::wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&gizmo::wgpu::RequestAdapterOptions::default())).expect("the noop adapter");
+        let (device, _queue) = pollster::block_on(adapter.request_device(&gizmo::wgpu::DeviceDescriptor::default())).expect("a noop device");
+        let texture = device.create_texture(&gizmo::wgpu::TextureDescriptor {
+            label: None,
+            size: gizmo::wgpu::Extent3d { width: 640, height: 360, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: gizmo::wgpu::TextureDimension::D2,
+            format: gizmo::wgpu::TextureFormat::Rgba8Unorm,
+            usage: gizmo::wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = std::sync::Arc::new(texture.create_view(&Default::default()));
+        let mut world = World::new();
+        world.insert_resource(WindowInfo::new(1920.0, 1080.0));
+        world.insert_resource(gizmo::renderer::components::GameRenderTarget(gizmo::renderer::components::RenderTarget { view, width: 640, height: 360 }));
+        let window = GameWindow::enter(&mut world);
+        assert_eq!(world.get_resource::<WindowInfo>().map(|w| w.size()), Some((640.0, 360.0)), "the panel's target");
+        window.leave(&mut world);
+        assert_eq!(world.get_resource::<WindowInfo>().map(|w| w.size()), Some((1920.0, 1080.0)), "and the window's own back");
+    }
 
     /// **The play frame is the engine's, and this file must not grow another one.**
     ///

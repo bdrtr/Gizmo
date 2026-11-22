@@ -787,6 +787,17 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A scene's UI works in the editor's ▶ and in an exported game.** `gizmo_ui`'s systems (layout,
+  clicks, sliders, toggles, drags, scrolling, tweens, text input, touch controls) come with
+  `UiPlugin`, which a game adds to its own app; `PlayLoop` ran none of them. Measured: a 100 × 40 px
+  button stayed at size zero and a click on it never set `Clicked`; a UI loaded from a file drew at
+  the boxes the editor had last saved and answered nothing. The loop now runs them (`ui` feature),
+  once the world has any UI, with the step's input as the world's `Input`. In the editor the game
+  sees its Game panel: for its step its `WindowInfo` is the panel's render target, put back after,
+  and its pointer is the one over the panel in that target's pixels
+  (`EditorState::game_view_pointer`), or far off any UI when it is elsewhere — the game's UI was laid
+  out to the window and hit in window pixels while drawn into a panel of another size and place.
+  `a_scene_ui_is_laid_out_and_clicked_in_play`, and three studio/editor tests of the panel mapping.
 - **A Lua call nothing answers is said, and can be answered.** `dialogue.show`, `cutscene.play`,
   `race.*`, `camera.follow` and (in the editor) `scene.load`/`scene.save` queued commands the play
   loop dropped in silence, and handed to no one, so not even a game with its own dialogue could

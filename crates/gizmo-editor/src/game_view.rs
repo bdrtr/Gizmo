@@ -3,6 +3,7 @@ use crate::EditorState;
 /// Draws the game view tab: what the game camera renders, with the fighting HUD over it.
 pub fn ui_game_view(ui: &mut egui::Ui, state: &mut EditorState) {
     state.game_view_visible = true;
+    state.game_view_pointer = None;
     let is_playing = state.is_playing();
     let is_paused = state.mode == crate::editor_state::EditorMode::Paused;
 
@@ -24,6 +25,12 @@ pub fn ui_game_view(ui: &mut egui::Ui, state: &mut EditorState) {
         let rect = ui.available_rect_before_wrap();
         state.game_view_rect = Some(rect);
         state.game_view_size = Some(ui.available_size());
+        // The pointer in the panel's own frame: the game's UI is laid out to this panel (its
+        // render target is sized in points), so this is the pointer it is hit with.
+        state.game_view_pointer = ui
+            .input(|i| i.pointer.hover_pos())
+            .filter(|p| rect.contains(*p))
+            .map(|p| p - rect.min);
         if let Some(tex_id) = state.game_texture_id {
             let mut mesh = egui::Mesh::with_texture(tex_id);
             mesh.add_rect_with_uv(

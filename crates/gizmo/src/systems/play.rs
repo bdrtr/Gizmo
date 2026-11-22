@@ -466,6 +466,20 @@ pub struct PlayLoop {
     /// The Lua calls already reported as [`PlayReport::Unanswered`], each said once.
     #[cfg(feature = "scripting")]
     reported_unanswered: std::collections::BTreeSet<&'static str>,
+    /// The scene's UI systems (`gizmo_ui::register`): built on the first step the world has a UI.
+    #[cfg(feature = "ui")]
+    ui: Option<UiPass>,
+}
+
+/// `gizmo_ui`'s layout and interaction systems on a schedule of their own, the play loop's.
+#[cfg(feature = "ui")]
+struct UiPass(gizmo_core::system::Schedule);
+
+#[cfg(feature = "ui")]
+impl std::fmt::Debug for UiPass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("UiPass")
+    }
 }
 
 impl PlayLoop {
@@ -564,6 +578,8 @@ impl PlayLoop {
         // device, resolves the sounds a scene names and starts its flat sources — no camera, no
         // transform, so an audio-only or headless build gets all of that. `systems::audio` is
         // gated on `audio+render+physics` because the listener reads a `Camera`.
+        #[cfg(feature = "ui")]
+        self.ui_pass(world, dt, input);
         #[cfg(feature = "audio")]
         gizmo_audio::host::host_frame(world);
         #[cfg(all(feature = "audio", feature = "render", feature = "physics"))]
@@ -679,6 +695,31 @@ impl PlayLoop {
                 }
             }
         });
+    }
+
+    /// The UI half: a scene's UI laid out against the window and answering the pointer.
+    ///
+    /// `gizmo_ui`'s systems — layout, scrolling, tweens, clicks, sliders, toggles, drags, text
+    /// input, touch controls — are registered by `UiPlugin`, which a game adds to its own app. The
+    /// editor's ▶ and the exported runtime run this loop, which added nothing, so a scene's UI was
+    /// never laid out there: measured, a 100 × 40 px button stayed at size zero and a click on it
+    /// never set `Clicked`. A file-loaded UI drew at the boxes the editor last saved, and answered
+    /// nothing. The loop now runs those systems itself, once a world has any UI (`Style`), with
+    /// this step's input as the world's `Input`.
+    #[cfg(feature = "ui")]
+    fn ui_pass(&mut self, world: &mut World, dt: f32, input: &crate::core::input::Input) {
+        if self.ui.is_none() {
+            if world.query::<&crate::ui::Style>().is_empty() {
+                return;
+            }
+            let mut schedule = gizmo_core::system::Schedule::new();
+            crate::ui::register(world, &mut schedule);
+            self.ui = Some(UiPass(schedule));
+        }
+        world.insert_resource(input.clone());
+        if let Some(UiPass(schedule)) = self.ui.as_mut() {
+            schedule.run(world, dt);
+        }
     }
 
     /// The physics half: spend the debt in fixed steps.

@@ -749,6 +749,39 @@ mod panel_visibility_tests {
     /// The frame runs in Edit mode — the mode the old condition rejected — and the assertion
     /// looks for the texture in the shapes the frame actually emitted, not for the state that was
     /// supposed to lead there.
+    /// The Game panel measures the pointer in its own frame — what the play world's UI is hit
+    /// with — and says nothing when the pointer is elsewhere.
+    #[test]
+    fn the_game_panel_measures_the_pointer_from_its_corner() {
+        let world = World::new();
+        let mut state = EditorState {
+            dock_state: editor_state::create_default_dock_state(),
+            mode: EditorMode::Play,
+            game_texture_id: Some(egui::TextureId::User(0x6112_0001)),
+            ..Default::default()
+        };
+        let found = state.dock_state.find_tab(&EditorTab::GameView).expect("the Game tab is in the default layout");
+        state.dock_state.set_active_tab(found).expect("addressable");
+        let ctx = egui::Context::default();
+        let frame = |ctx: &egui::Context, state: &mut EditorState, at: Option<egui::Pos2>| {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0))),
+                ..Default::default()
+            };
+            if let Some(at) = at {
+                input.events.push(egui::Event::PointerMoved(at));
+            }
+            ctx.run_ui(input, |ui| draw_editor(ui, &world, state)).drop_without_applying_deltas();
+        };
+        frame(&ctx, &mut state, None);
+        let rect = state.game_view_rect.expect("the panel was laid out");
+        let inside = rect.min + egui::vec2(30.0, 20.0);
+        frame(&ctx, &mut state, Some(inside));
+        assert_eq!(state.game_view_pointer, Some(egui::vec2(30.0, 20.0)), "from the panel's corner");
+        frame(&ctx, &mut state, Some(rect.max + egui::vec2(5.0, 5.0)));
+        assert_eq!(state.game_view_pointer, None, "nothing when the pointer is outside it");
+    }
+
     #[test]
     fn the_game_panel_paints_the_texture_it_was_given() {
         /// Shapes nest: a `Shape::Vec` holds more shapes, so a flat scan would miss the mesh.

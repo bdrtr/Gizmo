@@ -846,3 +846,41 @@ end
     assert!(matches!(&taken[0], ScriptCommand::ShowDialogue { speaker, .. } if speaker == "Ece"), "with their data: {:?}", taken[0]);
     assert!(matches!(taken[1], ScriptCommand::StartRace));
 }
+
+/// A scene's UI is laid out and answers the pointer in the play loop — the editor's ▶ and every
+/// exported game. `gizmo_ui`'s systems come with `UiPlugin`, which a game adds to its own app; this
+/// loop ran none of them, so a button stayed at size zero and a click on it never registered.
+#[test]
+fn a_scene_ui_is_laid_out_and_clicked_in_play() {
+    use gizmo::ui::{ButtonBundle, Clicked, Node, PositionType, Style, UiRect, UiRoot, Val};
+    let mut world = World::new();
+    world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
+    world.spawn_bundle((UiRoot,));
+    let button = world.spawn_bundle(ButtonBundle {
+        style: Style {
+            position_type: PositionType::Absolute,
+            inset: UiRect { left: Val::Px(10.0), top: Val::Px(10.0), right: Val::Auto, bottom: Val::Auto },
+            width: Val::Px(100.0),
+            height: Val::Px(40.0),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let mut play = PlayLoop::new();
+    let mut input = Input::default();
+    let mut clicked = false;
+    for frame in 0..6 {
+        input.begin_frame();
+        input.set_mouse_position(50.0, 30.0);
+        match frame {
+            3 => input.on_mouse_button_pressed(0),
+            4 => input.on_mouse_button_released(0),
+            _ => {}
+        }
+        play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+        clicked |= world.query::<&Clicked>().get(button).is_some_and(|c| c.0);
+    }
+    let node = world.query::<&Node>().get(button).map(|n| (n.size, n.position)).expect("a node");
+    assert_eq!(node, (Vec2::new(100.0, 40.0), Vec2::new(10.0, 10.0)), "laid out");
+    assert!(clicked, "and a press and release over it is a click");
+}

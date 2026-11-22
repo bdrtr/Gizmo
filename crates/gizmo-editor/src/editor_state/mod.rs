@@ -183,6 +183,10 @@ pub struct EditorState {
     pub scene_view_size: Option<egui::Vec2>,
     /// The game view's size in points.
     pub game_view_size: Option<egui::Vec2>,
+    /// Where the pointer is over the game view, from its top-left corner, in points — which is
+    /// the game's render target's pixels (it is sized in points). `None` when the pointer is not
+    /// over the panel. The play world's UI is hit against this, not the window's pointer.
+    pub game_view_pointer: Option<egui::Vec2>,
     /// The egui texture the scene view paints — the render target's other end.
     pub scene_texture_id: Option<egui::TextureId>,
     /// The egui texture the game view paints.
@@ -402,6 +406,7 @@ impl EditorState {
             game_view_rect: None,
             scene_view_size: None,
             game_view_size: None,
+            game_view_pointer: None,
             scene_texture_id: None,
             game_texture_id: None,
 
