@@ -82,33 +82,30 @@ fn body_collider(
     // The same `visited.insert` also keeps a DIAMOND from adding the same child
     // collider to the compound body twice, which is the quieter half: it terminates
     // on its own and just builds a body nobody authored.
+    //
+    // **A child's `Transform` is local to its parent**, as everywhere else in the engine — the
+    // render draws a child at `parent · local` (`TransformPropagateSystem`), and the editor writes
+    // children that way. This walk read it as a world pose and subtracted the body's position from
+    // it: a floor parented one metre under a body at (10, 3, 0) was simulated ten metres off, and
+    // as a compound body moved its children's shapes slid the other way. Each child is now placed
+    // by its parent's pose relative to the body, composed with its own: the position through the
+    // parent's rotation and scale, as the render does; the shapes themselves are not scaled.
     let mut visited = std::collections::HashSet::new();
     visited.insert(id);
-    let mut stack = vec![id];
-    while let Some(curr_id) = stack.pop() {
-        {
-            if let Some(children) = children_query.get(curr_id) {
-                for &child in &children.0 {
-                    let child_id = child;
-                    if !world.is_alive(child) || !visited.insert(child) {
-                        continue;
-                    }
-                    stack.push(child);
-                    {
-                        let (tq, cq) = (&trans_query, &col_query);
-                        if let (Some(child_trans), Some(child_col)) = (tq.get(child_id), cq.get(child_id)) {
-                            let inv_rot = transform.rotation.inverse();
-                            let local_pos =
-                                inv_rot.mul_vec3(child_trans.position - transform.position);
-                            let local_rot = inv_rot * child_trans.rotation;
-
-                            let local_t = gizmo_physics_core::Transform::new(local_pos)
-                                .with_rotation(local_rot);
-                            compound_shapes
-                                .push((local_t, Box::new(child_col.shape.clone())));
-                        }
-                    }
+    let mut stack = vec![(id, Relative { position: gizmo_math::Vec3::ZERO, rotation: gizmo_math::Quat::IDENTITY, scale: transform.scale })];
+    while let Some((curr_id, curr)) = stack.pop() {
+        if let Some(children) = children_query.get(curr_id) {
+            for &child in &children.0 {
+                if !world.is_alive(child) || !visited.insert(child) {
+                    continue;
                 }
+                let local = trans_query.get(child);
+                let rel = curr.then(&local.copied().unwrap_or_default());
+                if let (Some(_), Some(child_col)) = (local, col_query.get(child)) {
+                    let local_t = gizmo_physics_core::Transform::new(rel.position).with_rotation(rel.rotation);
+                    compound_shapes.push((local_t, Box::new(child_col.shape.clone())));
+                }
+                stack.push((child, rel));
             }
         }
     }
@@ -153,6 +150,27 @@ fn body_collider(
 
     final_collider.material = col.material_with(material);
     final_collider
+}
+
+/// A descendant's pose in its body's frame, for the compound walk in [`body_collider`]: where it
+/// is and how it is turned relative to the body, and the scale its own children's offsets go
+/// through.
+#[derive(Clone, Copy)]
+struct Relative {
+    position: gizmo_math::Vec3,
+    rotation: gizmo_math::Quat,
+    scale: gizmo_math::Vec3,
+}
+
+impl Relative {
+    /// The pose of a child at `local` under this one.
+    fn then(&self, local: &Transform) -> Relative {
+        Relative {
+            position: self.position + self.rotation * (self.scale * local.position),
+            rotation: self.rotation * local.rotation,
+            scale: self.scale * local.scale,
+        }
+    }
 }
 
 /// What the ECS bridge knows about what it brought over last time, so that the next step reads

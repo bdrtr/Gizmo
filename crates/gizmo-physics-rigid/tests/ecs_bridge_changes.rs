@@ -89,7 +89,7 @@ fn the_ecs_mirrors_the_physics_world_after_every_step() {
     world.add_component(ball, PhysicsMaterial::RUBBER);
     let parent = body(&mut world, RigidBody::new(6.0, true), Vec3::new(6.0, 4.0, 4.0), Collider::box_collider(Vec3::new(0.6, 0.2, 0.6)), true);
     let child = world.spawn();
-    world.add_component(child, Transform::new(Vec3::new(6.0, 4.6, 4.0)));
+    world.add_component(child, Transform::new(Vec3::new(0.0, 0.6, 0.0))); // local to the parent
     world.add_component(child, Collider::sphere(0.3));
     world.add_component(parent, Children(vec![child]));
     let lift = body(&mut world, RigidBody::new_kinematic(), Vec3::new(-6.0, 0.5, -6.0), Collider::box_collider(Vec3::new(1.0, 0.2, 1.0)), true);
