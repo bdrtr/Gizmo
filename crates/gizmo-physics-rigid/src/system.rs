@@ -310,24 +310,30 @@ fn assert_clean(physics_world: &PhysicsWorld, id: Entity, rb: &RigidBody, transf
 /// and writes the transformed positions and velocities back to the ECS.
 #[tracing::instrument(skip_all, name = "physics_step_system")]
 pub fn physics_step_system(world: &World, dt: f32) {
-    // Record profiler scope (if FrameProfiler resource is available)
-    if let Ok(mut profiler) = world.try_get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
-        profiler.begin_scope("physics_total");
-    }
-
     // 1. Acquire PhysicsWorld Resource
     let mut physics_world = match world.try_get_resource_mut::<PhysicsWorld>() {
         Ok(res) => res,
         Err(e) => {
-            // Physics cannot run without its world resource. Recoverable (skip the frame),
-            // but a real per-frame functional failure → warn, not info.
-            tracing::warn!(
-                error = ?e,
-                "[Physics] PhysicsWorld resource unavailable — skipping physics this frame"
-            );
+            // No physics world is physics not in use here, which is no failure in a world with no
+            // `RigidBody` — a puzzle on a grid, a menu. Bodies that cannot be simulated are one: they
+            // stand still, and that is the warning, and only that. A game without physics used to
+            // log it on every fixed step (`yilan --test`: 1 690 times).
+            if world.query::<&RigidBody>().iter().next().is_some() {
+                tracing::warn!(
+                    error = ?e,
+                    "[Physics] PhysicsWorld resource unavailable — the RigidBodies in this world are not simulated"
+                );
+            } else {
+                tracing::trace!("[Physics] no PhysicsWorld and no RigidBody — nothing to simulate");
+            }
             return;
         }
     };
+    // Record profiler scope (if FrameProfiler resource is available). After the world is found: a
+    // scope opened before an early return here was never closed.
+    if let Ok(mut profiler) = world.try_get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+        profiler.begin_scope("physics_total");
+    }
 
     note_bodies_without_collider(world, &mut physics_world);
 

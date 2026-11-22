@@ -628,6 +628,7 @@ impl PlayLoop {
     /// ends, a move that reaches its active window) hangs off this line, in the editor's ▶ and in
     /// every exported game alike.
     fn physics_pass(&mut self, world: &mut World, dt: f32) -> u32 {
+        ensure_physics_world(world);
         let (steps, remaining) = plan_steps(self.accumulator, dt);
         for _ in 0..steps {
             #[cfg(feature = "physics-dynamics")]
@@ -642,6 +643,23 @@ impl PlayLoop {
         register_event_queues(world);
         steps
     }
+}
+
+/// Gives the world a `PhysicsWorld` with Earth gravity when it has bodies to simulate and nothing
+/// supplied one: what `SimpleApp` does for its scenes (`insert_scene_defaults`), here for the loop
+/// the editor's ▶ and every exported game run on. Bodies in a world without one stood still, with a
+/// warning on every step. A world with no `RigidBody` gets none, so a game without physics carries
+/// no physics world.
+fn ensure_physics_world(world: &mut World) {
+    use crate::physics::world::PhysicsWorld;
+    if world.get_resource::<PhysicsWorld>().is_some() {
+        return;
+    }
+    if world.query::<&crate::physics::components::RigidBody>().iter().next().is_none() {
+        return;
+    }
+    tracing::info!("[Play] the world has RigidBodies and no PhysicsWorld — one with Earth gravity is added");
+    world.insert_resource(PhysicsWorld::new().with_gravity(crate::math::Vec3::new(0.0, -9.81, 0.0)));
 }
 
 /// The event queue this loop's own systems fill and nothing else creates: `HitEvent`.
@@ -683,6 +701,38 @@ fn plan_steps(accumulator: f32, dt: f32) -> (u32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A world with bodies and no `PhysicsWorld` gets one, and its bodies fall. They stood still,
+    /// with a warning on every fixed step.
+    #[test]
+    fn bodies_in_a_world_without_a_physics_world_are_simulated() {
+        use crate::physics::components::{RigidBody, Transform, Velocity};
+        let mut world = World::new();
+        let ball = world.spawn();
+        world.add_component(ball, Transform::new(crate::math::Vec3::new(0.0, 10.0, 0.0)));
+        world.add_component(ball, RigidBody::new(1.0, true));
+        world.add_component(ball, Velocity::default());
+        world.add_component(ball, crate::physics::Collider::sphere(0.5));
+        let mut play = PlayLoop::new();
+        for _ in 0..30 {
+            play.step(&mut world, FIXED_DT, &crate::core::input::Input::default(), &mut |_| {});
+        }
+        assert!(world.get_resource::<crate::physics::world::PhysicsWorld>().is_some());
+        let y = world.query::<&Transform>().get(ball).unwrap().position.y;
+        assert!(y < 9.5, "the body did not fall: y = {y}");
+    }
+
+    /// A world with no body gets no physics world: a game without physics carries none.
+    #[test]
+    fn a_world_without_bodies_gets_no_physics_world() {
+        let mut world = World::new();
+        world.spawn();
+        let mut play = PlayLoop::new();
+        for _ in 0..5 {
+            play.step(&mut world, FIXED_DT, &crate::core::input::Input::default(), &mut |_| {});
+        }
+        assert!(world.get_resource::<crate::physics::world::PhysicsWorld>().is_none());
+    }
 
     /// `entity.set_color` reaches the entity as a `MaterialDesc` (made if missing, edited if
     /// there), and leaves the unhandled pile.
