@@ -18,6 +18,56 @@ pub fn setup_studio_scene(
         &renderer.scene.texture_bind_group_layout,
     );
 
+    spawn_sun(world, renderer, &white_tex);
+    spawn_guidelines(world, renderer, &white_tex);
+    spawn_default_cube(world, renderer, &white_tex);
+
+    // Fizik sistemleri
+    world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
+
+    register_asset_identities(&mut asset_manager);
+
+    // Custom Skybox or proper horizon color
+    world.insert_resource(asset_manager);
+    world.insert_resource(gizmo::core::asset::Assets::<gizmo::renderer::components::Mesh>::default());
+
+    let cam = spawn_editor_camera(world);
+    let game_cam = spawn_game_camera(world);
+
+    let mut editor_state = EditorState::new();
+    editor_state.open = true; // Always open in Studio!
+    world.insert_resource(editor_state);
+
+    insert_debug_assets(world, renderer, &white_tex);
+    world.insert_resource(gizmo::renderer::Gizmos::default());
+    world.insert_resource(gizmo::core::FrameProfiler::new());
+    world.insert_resource(component_registry());
+    insert_script_engine(world);
+
+    StudioState {
+        current_fps: 0.0,
+        actual_dt: 0.0,
+        editor_camera: cam,
+        game_camera: game_cam,
+        do_raycast: false,
+        play: gizmo::systems::PlayLoop::new(),
+        // The asset browser's root, which the identity scan above reads too: three places that had
+        // to agree on one directory, and this one was the string written out again.
+        asset_watcher: gizmo::renderer::hot_reload::AssetWatcher::new(&[
+            gizmo::editor::editor_state::AssetBrowserState::DEFAULT_WORKSPACE_ROOT,
+            "scripts",
+        ]),
+        gc_timer: 0.0,
+        autosave_timer: 0.0,
+        visible_entity_count: 0,
+        draw_call_count: 0,
+        session: None,
+        game: None,
+    }
+}
+
+/// The default sun, with its icon: three crossed bars, editor furniture under it.
+fn spawn_sun(world: &mut World, renderer: &gizmo::renderer::Renderer, white_tex: &std::sync::Arc<gizmo::wgpu::BindGroup>) {
     // Light (Güneş objesini görselleştir)
     let light = world.spawn();
     world.add_component(
@@ -42,77 +92,31 @@ pub fn setup_studio_scene(
     );
 
     // Light Icon (Kesişen prizmalar ile yıldız/güneş imgesi)
-    let icon1 = world.spawn();
-    world.add_component(
-        icon1,
-        gizmo::core::component::EntityName("Editor Light Icon 1".to_string()),
-    );
-    world.add_component(
-        icon1,
-        Transform::new(Vec3::ZERO).with_scale(Vec3::new(0.04, 0.6, 0.04)),
-    );
-    world.add_component(icon1, gizmo::physics::components::GlobalTransform::default());
-    world.add_component(
-        icon1,
-        gizmo::renderer::asset::AssetManager::create_cube(&renderer.device),
-    );
-    world.add_component(
-        icon1,
-        gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(1.0, 0.8, 0.1, 1.0)),
-    );
-    world.add_component(icon1, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(icon1, gizmo::core::component::Parent(light));
-    world.add_component(icon1, gizmo::core::component::EditorOnly);
+    let icons = [Vec3::new(0.04, 0.6, 0.04), Vec3::new(0.6, 0.04, 0.04), Vec3::new(0.04, 0.04, 0.6)]
+        .into_iter()
+        .zip(1..)
+        .map(|(scale, n)| {
+            let icon = world.spawn();
+            world.add_component(icon, gizmo::core::component::EntityName(format!("Editor Light Icon {n}")));
+            world.add_component(icon, Transform::new(Vec3::ZERO).with_scale(scale));
+            world.add_component(icon, gizmo::physics::components::GlobalTransform::default());
+            world.add_component(icon, gizmo::renderer::asset::AssetManager::create_cube(&renderer.device));
+            world.add_component(
+                icon,
+                gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(1.0, 0.8, 0.1, 1.0)),
+            );
+            world.add_component(icon, gizmo::renderer::components::MeshRenderer::new());
+            world.add_component(icon, gizmo::core::component::Parent(light));
+            world.add_component(icon, gizmo::core::component::EditorOnly);
+            icon
+        })
+        .collect();
 
-    let icon2 = world.spawn();
-    world.add_component(
-        icon2,
-        gizmo::core::component::EntityName("Editor Light Icon 2".to_string()),
-    );
-    world.add_component(
-        icon2,
-        Transform::new(Vec3::ZERO).with_scale(Vec3::new(0.6, 0.04, 0.04)),
-    );
-    world.add_component(icon2, gizmo::physics::components::GlobalTransform::default());
-    world.add_component(
-        icon2,
-        gizmo::renderer::asset::AssetManager::create_cube(&renderer.device),
-    );
-    world.add_component(
-        icon2,
-        gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(1.0, 0.8, 0.1, 1.0)),
-    );
-    world.add_component(icon2, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(icon2, gizmo::core::component::Parent(light));
-    world.add_component(icon2, gizmo::core::component::EditorOnly);
+    world.add_component(light, gizmo::core::component::Children(icons));
+}
 
-    let icon3 = world.spawn();
-    world.add_component(
-        icon3,
-        gizmo::core::component::EntityName("Editor Light Icon 3".to_string()),
-    );
-    world.add_component(
-        icon3,
-        Transform::new(Vec3::ZERO).with_scale(Vec3::new(0.04, 0.04, 0.6)),
-    );
-    world.add_component(icon3, gizmo::physics::components::GlobalTransform::default());
-    world.add_component(
-        icon3,
-        gizmo::renderer::asset::AssetManager::create_cube(&renderer.device),
-    );
-    world.add_component(
-        icon3,
-        gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(1.0, 0.8, 0.1, 1.0)),
-    );
-    world.add_component(icon3, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(icon3, gizmo::core::component::Parent(light));
-    world.add_component(icon3, gizmo::core::component::EditorOnly);
-
-    world.add_component(
-        light,
-        gizmo::core::component::Children(vec![icon1, icon2, icon3]),
-    );
-
+/// The editor's guidelines: a root, and under it the grid.
+fn spawn_guidelines(world: &mut World, renderer: &gizmo::renderer::Renderer, white_tex: &std::sync::Arc<gizmo::wgpu::BindGroup>) {
     // Editor Gizmos Root Node
     let gizmo_root = world.spawn();
     world.add_component(
@@ -124,7 +128,6 @@ pub fn setup_studio_scene(
     // Everything under this root is editor furniture. The marker is per-entity rather than
     // inherited because batching sees components, not ancestry — see `EditorOnly`.
     world.add_component(gizmo_root, gizmo::core::component::EditorOnly);
-    let mut gizmo_children = Vec::new();
 
     // Procedural 3D Grid Lines and Infinite Axes
     // HDR uyumlu, hafif transparan çok şık ve ferah bir Grid materyali
@@ -153,15 +156,17 @@ pub fn setup_studio_scene(
         gizmo::renderer::components::MeshRenderer::new(),
     );
     world.add_component(grid_entity, gizmo::core::component::EditorOnly);
-    gizmo_children.push(grid_entity);
 
     // Merkez Eksenler (Kırmızı/Mavi Çizgiler) artık Grid Shader (grid.wgsl) tarafından
     // tam kalbinde 0 GPU sızıntısı ile çizilmektedir! Bu yüzden gereksiz Transform küplerini sildik.
 
     // Attach all children to root
-    world.add_component(gizmo_root, gizmo::core::component::Children(gizmo_children));
+    world.add_component(gizmo_root, gizmo::core::component::Children(vec![grid_entity]));
+}
 
-    // Default Object (To have something to interact with)
+/// The default cube, to have something to interact with: solid, since a collider on its own is
+/// static geometry.
+fn spawn_default_cube(world: &mut World, renderer: &gizmo::renderer::Renderer, white_tex: &std::sync::Arc<gizmo::wgpu::BindGroup>) {
     let cube1 = world.spawn();
     world.add_component(
         cube1,
@@ -186,21 +191,20 @@ pub fn setup_studio_scene(
         cube1,
         Collider::box_collider(gizmo::math::Vec3::new(1.0, 1.0, 1.0)),
     ); // Visual mesh is 2x2x2 (from -1 to +1)
+}
 
-    // Fizik sistemleri
-    world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
-
-    // Register the identity of every asset in the project that already has one.
-    //
-    // Read-only on purpose: `scan_assets_directory` skips an asset with no `.meta` sidecar rather
-    // than stamping one, because writing into somebody's asset tree is an import action, not a
-    // side effect of opening the editor (see `AssetManager::import_assets_directory`). Until this
-    // call existed nothing anywhere populated the registry, so the path↔UUID machinery — the
-    // scanner, the resolver, the sidecars on disk — was wired to nothing, and a scene could not
-    // have been repaired by identity even in principle.
-    //
-    // The directory is the asset browser's own root, so the editor cannot end up scanning one tree
-    // while showing another.
+/// Registers the identity of every asset in the project that already has one.
+///
+/// Read-only on purpose: `scan_assets_directory` skips an asset with no `.meta` sidecar rather
+/// than stamping one, because writing into somebody's asset tree is an import action, not a
+/// side effect of opening the editor (see `AssetManager::import_assets_directory`). Until this
+/// call existed nothing anywhere populated the registry, so the path↔UUID machinery — the
+/// scanner, the resolver, the sidecars on disk — was wired to nothing, and a scene could not
+/// have been repaired by identity even in principle.
+///
+/// The directory is the asset browser's own root, so the editor cannot end up scanning one tree
+/// while showing another.
+fn register_asset_identities(asset_manager: &mut gizmo::renderer::asset::AssetManager) {
     let workspace_root = gizmo::editor::editor_state::AssetBrowserState::DEFAULT_WORKSPACE_ROOT;
     asset_manager.scan_assets_directory(std::path::Path::new(workspace_root));
     tracing::info!(
@@ -208,12 +212,10 @@ pub fn setup_studio_scene(
         registered = asset_manager.path_to_uuid.len(),
         "[Studio] varlık kimlik kaydı tarandı"
     );
+}
 
-    // Custom Skybox or proper horizon color
-    world.insert_resource(asset_manager);
-    world.insert_resource(gizmo::core::asset::Assets::<gizmo::renderer::components::Mesh>::default());
-
-    // Editor Camera
+/// The editor's own camera, the one the Scene panel draws through.
+fn spawn_editor_camera(world: &mut World) -> Entity {
     let cam = world.spawn();
     world.add_component(
         cam,
@@ -233,16 +235,18 @@ pub fn setup_studio_scene(
             1000.0,
             true),
     );
+    cam
+}
 
-    // --- GIZMO HANDLES (TRANSLATE) EGUI-GIZMO İÇİN İPTAL EDİLDİ ---
-
+/// The game's camera, the one play mode draws through: twelve metres back, looking slightly down
+/// at the origin.
+fn spawn_game_camera(world: &mut World) -> Entity {
     // Game Camera (Play modunda kullanılacak oyun kamerası)
     let game_cam = world.spawn();
     world.add_component(
         game_cam,
         gizmo::core::component::EntityName("Game Camera".to_string()),
     );
-    // Dövüş oyunu için yan görünüm: Z ekseninde 12 birim uzakta, hafif yukarıdan bakıyor
     let game_cam_pos = Vec3::new(0.0, 3.0, 12.0);
     let look_target = Vec3::new(0.0, 1.0, 0.0);
     let game_cam_forward = look_target - game_cam_pos;
@@ -264,12 +268,11 @@ pub fn setup_studio_scene(
             false, // Editör kamerası DEĞİL
         ),
     );
+    game_cam
+}
 
-    let mut editor_state = EditorState::new();
-    editor_state.open = true; // Always open in Studio!
-
-world.insert_resource(editor_state);
-
+/// The meshes the ➕ menu's primitives are spawned with.
+fn insert_debug_assets(world: &mut World, renderer: &gizmo::renderer::Renderer, white_tex: &std::sync::Arc<gizmo::wgpu::BindGroup>) {
     // Every dimension here comes from `PrimitiveSize`, which the spawned colliders read too —
     // see the type's own note for what happened when they were two separate numbers.
     use crate::state::PrimitiveSize as PS;
@@ -293,10 +296,10 @@ world.insert_resource(editor_state);
         ),
         white_tex: white_tex.clone(),
     });
-    world.insert_resource(gizmo::renderer::Gizmos::default());
-    world.insert_resource(gizmo::core::FrameProfiler::new());
+}
 
-// Register ComponentRegistry so Editor can list components
+/// The components the editor can list, add and edit.
+fn component_registry() -> gizmo::core::ComponentRegistry {
     let mut component_registry = gizmo::core::ComponentRegistry::new();
     let _ = component_registry.register::<gizmo::physics::components::Transform>("Transform");
     let _ = component_registry.register::<gizmo::physics::Velocity>("Velocity");
@@ -343,31 +346,19 @@ world.insert_resource(editor_state);
     // Keyed transforms and fields — a door, a platform, a camera move, a pulsing lamp — which the
     // ANIMATION tab keys.
     let _ = component_registry.register::<gizmo::renderer::keyed_animation::KeyedAnimationPlayer>("KeyedAnimationPlayer");
-    world.insert_resource(component_registry);
+    component_registry
+}
 
+/// The Lua engine the scripts run on. A failure to start it is an error, with its cause: it was
+/// logged as `info` and the cause thrown away.
+fn insert_script_engine(world: &mut World) {
     // --- SCRIPT ENGINE & ASSET WATCHER BİRLEŞİMİ ---
-    if let Ok(engine) = gizmo::scripting::ScriptEngine::new() {
-        tracing::info!("🚀 Gizmo Studio Script Motoru Başlatıldı.");
-        // Olası scriptleri preload yapabiliriz
-        world.insert_resource(engine);
-    } else {
-        tracing::info!("❌ HATA: Gizmo Studio Script Motoru Başlatılamadı!");
-    }
-
-    StudioState {
-        current_fps: 0.0,
-        actual_dt: 0.0,
-        editor_camera: cam,
-        game_camera: game_cam,
-        do_raycast: false,
-        play: gizmo::systems::PlayLoop::new(),
-        asset_watcher: gizmo::renderer::hot_reload::AssetWatcher::new(&["demo/assets", "scripts"]),
-        gc_timer: 0.0,
-        autosave_timer: 0.0,
-        visible_entity_count: 0,
-        draw_call_count: 0,
-        session: None,
-        game: None,
+    match gizmo::scripting::ScriptEngine::new() {
+        Ok(engine) => {
+            tracing::info!("🚀 Gizmo Studio Script Motoru Başlatıldı.");
+            world.insert_resource(engine);
+        }
+        Err(error) => tracing::error!(?error, "❌ Gizmo Studio Script Motoru Başlatılamadı — scriptler çalışmayacak"),
     }
 }
 
