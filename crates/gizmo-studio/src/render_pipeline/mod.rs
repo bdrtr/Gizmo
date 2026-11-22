@@ -777,7 +777,14 @@ fn draw_game_view(world: &World, renderer: &mut gizmo::renderer::Renderer, game_
     if world.query::<&gizmo::renderer::components::Camera>().get(game_camera).is_none() {
         return false;
     }
-    gizmo::systems::render::draw_camera_into(world, renderer, game_camera, &target.view, (target.width, target.height), true);
+    gizmo::systems::render::draw_camera_into(
+        world,
+        renderer,
+        game_camera,
+        &target.view,
+        (target.width, target.height),
+        gizmo::systems::render::ViewOptions::default().with_hud(),
+    );
     true
 }
 

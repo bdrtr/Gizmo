@@ -20290,3 +20290,130 @@ async fn render_hidden_scene(case: HiddenCase) -> Vec<u8> {
 
     render_world(&mut renderer, &mut world).await
 }
+
+/// **An editor's view draws its furniture, and no other view does** (`ViewOptions::furniture`,
+/// which `collect_draw_items` reads as `Renderer::draws_editor_furniture`). A green unlit
+/// `EditorOnly` cube in front of a camera, drawn into a texture three times: without the option it
+/// is not there — as for the texture cameras, the probes and the editor's Game panel — with it, it
+/// is, and without it again it is gone: the flag is the one view's.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn editor_furniture_is_drawn_only_into_an_editors_view() {
+    use crate::systems::render::{draw_camera_into, ViewOptions};
+    use gizmo_renderer::components::CameraTarget;
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        renderer.taa = None;
+        let mut world = World::new();
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let icon = world.spawn();
+        world.add_component(icon, Transform::new(Vec3::ZERO));
+        world.add_component(icon, AssetManager::create_cube(&renderer.device));
+        world.add_component(icon, Material::new(tex).with_unlit(Vec4::new(0.0, 4.0, 0.0, 1.0)));
+        world.add_component(icon, MeshRenderer::new());
+        world.add_component(icon, crate::core::component::EditorOnly);
+        let camera = world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 5.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+        let target = CameraTarget::new(&renderer.gpu_context(), 64, 64);
+
+        super::prepare_frame(&mut world, &mut renderer);
+        let draw = |renderer: &mut Renderer, options: ViewOptions| {
+            draw_camera_into(&world, renderer, camera, target.view(), target.size(), options);
+            let bytes = super::frame_split_tests::texture_bytes(renderer, target.texture());
+            // Green in either channel order (the target is the output format, RGBA or BGRA).
+            bytes.chunks(4).filter(|p| p[1] > 200 && p[0] < 80 && p[2] < 80).count()
+        };
+        let before = draw(&mut renderer, ViewOptions::default());
+        let editors = draw(&mut renderer, ViewOptions::default().with_furniture());
+        let after = draw(&mut renderer, ViewOptions::default());
+        assert!(editors > 200, "the editor's view does not draw its furniture ({editors} green texels)");
+        assert_eq!(before, 0, "a view that is not the editor's drew the furniture ({before} green texels)");
+        assert_eq!(after, 0, "the furniture stayed on after the editor's view ({after} green texels)");
+        assert!(!renderer.draws_editor_furniture, "the view's flag is still set on the renderer");
+    });
+}
+
+/// **A view drawn as lines only shows a face's edges and not its middle** (`ViewShading::Wire`,
+/// `Renderer::wire_only`) — the editor toolbar's "Wire". A cube filling most of the view: lit, the
+/// face nearest the camera is the cube's colour; as lines, it is what is behind the cube, while the
+/// lines themselves are still drawn. Then lit again: the view's shading is its own.
+///
+/// Sampled at four points of the face off its middle: the face is two triangles, and the edge
+/// between them runs through the middle, where a line is drawn.
+///
+/// Not on the forward-only path: it has no line mode, and its `wireframe` pipeline is a fill.
+#[cfg(not(gizmo_forward_only))]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_wire_view_draws_edges_and_not_faces() {
+    use crate::systems::render::{draw_camera_into, ViewOptions, ViewShading};
+    use gizmo_renderer::components::CameraTarget;
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        renderer.taa = None;
+        let mut world = World::new();
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let cube = world.spawn();
+        world.add_component(cube, Transform::new(Vec3::ZERO));
+        world.add_component(cube, AssetManager::create_cube(&renderer.device));
+        world.add_component(cube, Material::new(tex).with_unlit(Vec4::new(0.0, 4.0, 0.0, 1.0)));
+        world.add_component(cube, MeshRenderer::new());
+        let camera = world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 3.2),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+        let target = CameraTarget::new(&renderer.gpu_context(), 64, 64);
+
+        super::prepare_frame(&mut world, &mut renderer);
+        let draw = |renderer: &mut Renderer, options: ViewOptions| {
+            draw_camera_into(&world, renderer, camera, target.view(), target.size(), options);
+            super::frame_split_tests::texture_bytes(renderer, target.texture())
+        };
+        let green = |p: &[u8]| p[1] > 200 && p[0] < 80 && p[2] < 80;
+        // On the axes through the face's middle, a third of the way out: off both diagonals.
+        let face = |bytes: &[u8]| -> Vec<[u8; 4]> {
+            [(32, 20), (32, 44), (20, 32), (44, 32)]
+                .iter()
+                .map(|&(x, y)| {
+                    let i = (y * 64 + x) * 4;
+                    [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+                })
+                .collect()
+        };
+        let lit = draw(&mut renderer, ViewOptions::default().with_shading(ViewShading::Lit));
+        let wire = draw(&mut renderer, ViewOptions::default().with_shading(ViewShading::Wire));
+        let lit_again = draw(&mut renderer, ViewOptions::default());
+        assert!(face(&lit).iter().all(|p| green(p)), "the lit cube's face is not its colour: {:?}", face(&lit));
+        assert!(face(&wire).iter().all(|p| !green(p)), "the wire view filled the face: {:?}", face(&wire));
+        let wire_green = wire.chunks(4).filter(|p| green(p)).count();
+        let lit_green = lit.chunks(4).filter(|p| green(p)).count();
+        assert!(wire_green > 20, "the wire view drew no lines ({wire_green} green texels)");
+        assert!(wire_green < lit_green / 2, "the wire view is mostly filled ({wire_green} of the lit {lit_green})");
+        assert_eq!(lit_again, lit, "the wire view's shading outlived it");
+        assert!(!renderer.wire_only, "the renderer is still drawing lines only");
+    });
+}

@@ -427,7 +427,7 @@ fn draw_camera_targets(world: &World, renderer: &mut Renderer) {
         .collect();
     targets.sort_by_key(|&(order, id, _)| (order, id));
     for (_, camera, target) in targets {
-        draw_camera_into(world, renderer, camera, target.view(), target.size(), false);
+        draw_camera_into(world, renderer, camera, target.view(), target.size(), ViewOptions::default());
     }
 }
 
@@ -439,7 +439,8 @@ fn draw_camera_targets(world: &World, renderer: &mut Renderer) {
 ///
 /// At the texture's size ([`Renderer::with_view_targets`]) and aspect, with its mirrors captured
 /// for it just before it, the camera's own temporal history ([`Renderer::with_view_history`]), and
-/// the HUD when `hud`. Recorded into an encoder of its own and **submitted at once**: the draw's
+/// what `options` adds (the HUD, an editor's furniture). Recorded into an encoder of its own and
+/// **submitted at once**: the draw's
 /// uploads (`queue.write_buffer`) order against submission, so a view recorded into a caller's
 /// encoder would draw whatever the caller wrote last. Call it before recording anything of the
 /// caller's own that writes the same buffers.
@@ -452,7 +453,7 @@ pub fn draw_camera_into(
     camera: Entity,
     view: &wgpu::TextureView,
     (width, height): (u32, u32),
-    hud: bool,
+    options: ViewOptions,
 ) {
     // Its mirrors, captured for it, just before it.
     capture_planar_reflections(world, renderer, Some(camera), width as f32 / height.max(1) as f32);
@@ -461,6 +462,13 @@ pub fn draw_camera_into(
     });
     renderer.with_view_targets((width, height), |renderer| {
         renderer.with_view_history(Some(camera), |renderer| {
+            // For this view's own draw only: its mirrors, captured above, are the game's.
+            renderer.draws_editor_furniture = options.furniture;
+            let game_shading = renderer.shading_mode;
+            if let Some(shading) = options.shading {
+                renderer.shading_mode = shading.mode();
+                renderer.wire_only = shading == ViewShading::Wire;
+            }
             draw_camera_view(
                 world,
                 &mut encoder,
@@ -469,12 +477,79 @@ pub fn draw_camera_into(
                 Some(camera),
                 true,
                 Some([0.0, 0.0, width as f32, height as f32]),
-                hud,
+                options.hud,
                 None,
             );
+            renderer.draws_editor_furniture = false;
+            renderer.shading_mode = game_shading;
+            renderer.wire_only = false;
         });
     });
     renderer.queue.submit(std::iter::once(encoder.finish()));
+}
+
+/// What [`draw_camera_into`] draws past the camera's own picture.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ViewOptions {
+    /// The frame's HUD over the picture, as the game draws it over its own.
+    pub hud: bool,
+    /// The editor's furniture too (`EditorOnly`: the grid, light icons, gizmo handles): the view is
+    /// the editor's Scene panel. Every other view leaves it out.
+    pub furniture: bool,
+    /// How the view is shaded, when not the way the game shades it (`Renderer::shading_mode`): an
+    /// editor's toolbar.
+    pub shading: Option<ViewShading>,
+}
+
+/// One of the pictures an editor's toolbar switches its view between.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ViewShading {
+    /// Lit, as the game is.
+    Lit,
+    /// World normals (`Renderer::shading_mode` 1).
+    Normals,
+    /// The surfaces' albedo, unlit (`Renderer::shading_mode` 2).
+    Albedo,
+    /// World geometry as lines only (`Renderer::wire_only`), lit. Native only: the forward-only
+    /// path (the web, a phone) has no line mode, and its "wireframe" is a fill.
+    Wire,
+}
+
+impl ViewShading {
+    /// The `Renderer::shading_mode` the view is drawn with: the lighting's own picture, or one of
+    /// its debug ones. `Wire` is lit lines.
+    fn mode(self) -> u32 {
+        match self {
+            Self::Lit | Self::Wire => 0,
+            Self::Normals => 1,
+            Self::Albedo => 2,
+        }
+    }
+}
+
+impl ViewOptions {
+    /// With the HUD: the game's own picture (the editor's Game panel).
+    #[must_use]
+    pub fn with_hud(mut self) -> Self {
+        self.hud = true;
+        self
+    }
+
+    /// With the editor's furniture: the editor's Scene panel.
+    #[must_use]
+    pub fn with_furniture(mut self) -> Self {
+        self.furniture = true;
+        self
+    }
+
+    /// Shaded `shading`'s way rather than the game's.
+    #[must_use]
+    pub fn with_shading(mut self, shading: ViewShading) -> Self {
+        self.shading = Some(shading);
+        self
+    }
 }
 
 /// Where the cameras that draw into textures stand — for the level of detail the frame's GPU

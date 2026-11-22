@@ -371,6 +371,15 @@ pub struct Renderer {
     /// the background, an environment map, a skybox or backdrop — is left out of it, as the lighting
     /// pass adds the sky to every surface itself.
     pub skip_sky: bool,
+    /// This view is an editor's: its furniture (`EditorOnly` — the grid, light icons, gizmo handles)
+    /// is drawn into it. Every other view leaves the furniture out. Set around one view's draw, by
+    /// `gizmo`'s `draw_camera_into` (`ViewOptions::furniture`).
+    pub draws_editor_furniture: bool,
+    /// This view draws its world geometry as lines only: nothing into the G-buffer, no shaded
+    /// forward draw, and every object's wireframe (the lit `wireframe` pipeline). The sky, a backdrop
+    /// and the editor's grid are drawn as usual. The editor toolbar's "Wire"; set around one view's
+    /// draw by `gizmo`'s `draw_camera_into` (`ViewShading::Wire`).
+    pub wire_only: bool,
     /// How long the parts of the last draw took on whichever thread drew it, `(name, time)` — the
     /// draw's half of the frame profile. The draw runs on a copy of the world (often on a thread of
     /// its own), which has no profiler, so it writes here and the next frame's preparation, which

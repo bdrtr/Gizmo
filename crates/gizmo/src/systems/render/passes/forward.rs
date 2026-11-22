@@ -357,11 +357,16 @@ fn draw_forward_items(
         // and the wireframe pipeline is `shader.wgsl`: it neither camera-locks nor pins
         // depth, so a backdrop's wireframe would be drawn somewhere the backdrop is not.
         let wire = item.wire.as_ref().filter(|_| !item.is_skybox && !item.is_backdrop);
+        // A view drawn as lines only (`Renderer::wire_only`): its world geometry is its wireframe
+        // alone. The sky, a backdrop and the editor's grid are not geometry, and keep their draw.
+        let lines_only = renderer.wire_only && !item.is_skybox && !item.is_backdrop && !item.is_grid;
+        let wire = wire.filter(|_| !item.is_grid);
 
         // Forward: what the G-buffer does not hold (`DrawItem::in_gbuffer` — a baked-lit surface is in it
         // where there is one), and everything where there is none.
         if (item.is_skybox || !item.in_gbuffer(baked) || renderer.deferred.is_none() || item.is_transparent)
             && !item.drawn_reflective(baked)
+            && !lines_only
         {
             draw_solid = true;
         }

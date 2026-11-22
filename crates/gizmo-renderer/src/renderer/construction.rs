@@ -680,6 +680,8 @@ impl Renderer {
             planar: Default::default(),
             skip_mirrors: false,
             skip_sky: false,
+            draws_editor_furniture: false,
+            wire_only: false,
             draw_laps: Vec::new(),
             gpu_timer,
             // Depth of field is an opt-in artistic effect, not a default: with it

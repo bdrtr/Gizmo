@@ -11,6 +11,10 @@ pub fn record_deferred_geometry(
     // Where the opaque baked-lit surfaces are drawn this view (`DrawItem::in_gbuffer`).
     baked: BakedRoute,
 ) {
+    // A view drawn as lines only (`Renderer::wire_only`) puts nothing into the G-buffer: its passes
+    // still clear their targets, so the lighting shades only the sky, and the forward pass draws the
+    // lines (`passes::forward`).
+    let draw_items: &[DrawItem] = if renderer.wire_only { &[] } else { draw_items };
 
     // ── Z-Prepass (Depth Only) ────────────────────────────────────────────────
     if let Some(ref def) = renderer.deferred {

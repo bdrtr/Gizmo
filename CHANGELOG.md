@@ -50,6 +50,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`ViewOptions` for `draw_camera_into`: what an editor's view draws past the camera's picture.**
+  This is the game path's side of drawing the studio's Scene panel through it, as its Game panel
+  now is.
+  - `with_hud()`: the frame's HUD, as the game draws it.
+  - `with_furniture()`: the editor's `EditorOnly` objects, read by `collect_draw_items` as
+    `Renderer::draws_editor_furniture`, which every other view leaves off. Mirrors captured for the
+    view are the game's.
+  - `with_shading(ViewShading::{Lit, Normals, Albedo, Wire})`: the toolbar's pictures.
+    - Normals and Albedo are `Renderer::shading_mode` 1 and 2, as `deferred_lighting.wgsl` numbers
+      them.
+    - Wire is new, `Renderer::wire_only`: world geometry as lit lines only. Nothing goes into the
+      G-buffer and the shaded forward draw is skipped; the sky, a backdrop and the grid keep their
+      draw. The engine's wireframe so far drew lines over the shading.
+    - Native only: the forward-only path has no line mode.
+  - The view's settings are its own and are put back after it.
+  - Tests: `editor_furniture_is_drawn_only_into_an_editors_view` and
+    `a_wire_view_draws_edges_and_not_faces`. Removing the check, or the lines-only decision, fails
+    each.
+  - **Breaking:** `draw_camera_into`'s last parameter is the options, not `hud: bool`.
+
 - **Anamorphic streaks, with the lens flare (`LensFlare::streak`, `streak_threshold`, `streak_length`,
   `streak_tint`).** The brightest lights are drawn out sideways across the frame, as an anamorphic lens draws
   them, tinted blue by its coatings.

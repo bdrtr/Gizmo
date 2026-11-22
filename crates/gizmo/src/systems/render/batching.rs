@@ -736,10 +736,11 @@ pub(super) fn collect_draw_items(
     // pair's 2 946 pixels on screen. The set is built from the same two borrows both paths hold,
     // and it costs nothing on a frame with nothing hidden.
     let hidden = super::collect_hidden(world, &world.query::<&crate::core::component::Children>());
-    // **Editor furniture never draws here.** A game has none, so for a game this is a no-op; it
-    // matters since 2026-11-01, when the studio started capturing reflection probes through this
-    // path (`capture_reflection_probes`) — without it the grid, light icons and gizmo handles
-    // would be baked into every probe the editor captured.
+    // **Editor furniture only in an editor's view** (`Renderer::draws_editor_furniture`, which
+    // `draw_camera_into` sets for the editor's Scene panel). A game has none, so for a game this is a
+    // no-op. Every other view leaves it out: since 2026-11-01 the studio captures reflection probes
+    // through this path (`capture_reflection_probes`), and the grid, light icons and gizmo handles
+    // would otherwise be baked into every probe the editor captured.
     let editor_only = world.query::<&crate::core::component::EditorOnly>();
 
     // What this view's occluders hide. Built before the walk, from this frame's transforms; `None`
@@ -750,7 +751,8 @@ pub(super) fn collect_draw_items(
     let wire_on = world.query::<&crate::renderer::components::Wireframe>();
     let wire_off = world.query::<&crate::renderer::components::NoWireframe>();
     let wire_colors = world.query::<&crate::renderer::components::WireframeColor>();
-    let wire_global = world.get_resource::<super::WireframeConfig>().is_some_and(|c| c.global);
+    // A view drawn as lines only (`Renderer::wire_only`) has every object's lines.
+    let wire_global = renderer.wire_only || world.get_resource::<super::WireframeConfig>().is_some_and(|c| c.global);
     let wire_any = wire_global || wire_on.iter().next().is_some();
     let reflections = world.query::<&crate::renderer::components::PlanarReflection>();
 
@@ -787,6 +789,7 @@ pub(super) fn collect_draw_items(
             velocity_read,
             skip_mirrors: renderer.skip_mirrors,
             skip_sky: renderer.skip_sky,
+            furniture: renderer.draws_editor_furniture,
             wire_any,
             wire_global,
             wire_on: &wire_on,
@@ -874,7 +877,7 @@ pub(super) fn collect_draw_items(
                         let Some(mesh_renderer) = renderers.get(e) else {
                             continue;
                         };
-                        if pooled_storage.get(e).is_some() || editor_only.get(e).is_some() {
+                        if pooled_storage.get(e).is_some() || (editor_only.get(e).is_some() && !walk.furniture) {
                             continue;
                         }
                         let picks = crate::renderer::components::LodGroup::pick_faded(lod_groups.get(e), mesh, cam_pos.distance(trans.matrix.w_axis.truncate()));
@@ -929,6 +932,8 @@ struct Walk<'a> {
     velocity_read: bool,
     skip_mirrors: bool,
     skip_sky: bool,
+    /// `Renderer::draws_editor_furniture`: this view draws `EditorOnly` objects too.
+    furniture: bool,
     wire_any: bool,
     wire_global: bool,
     wire_on: &'a gizmo_core::query::Query<'a, &'a crate::renderer::components::Wireframe>,
@@ -990,8 +995,8 @@ impl Walk<'_> {
     /// of the walk in a large scene.
     fn component_entity(&mut self, cache: &mut RenderCache, renderer: &mut Renderer, walked: Walked<'_>) {
         let (e, mesh, trans, mat, mesh_renderer, skeleton, lod_group, reflection, pooled, editor_only, occluder) = walked;
-        // Pooled (havuzda pasif) nesneleri render etme. Editor furniture never draws here.
-        if pooled.is_some() || editor_only.is_some() {
+        // Pooled (havuzda pasif) nesneleri render etme. Editor furniture only in an editor's view.
+        if pooled.is_some() || (editor_only.is_some() && !self.furniture) {
             return;
         }
         // Kept only while nothing about it is decided per frame: a skeleton is posed for its
