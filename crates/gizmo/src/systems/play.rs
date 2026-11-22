@@ -664,7 +664,10 @@ impl PlayLoop {
                 // After the clock: the active window it resolves has to be this step's.
                 crate::physics::hit_detection_system(world, FIXED_DT);
             }
-            crate::physics::system::physics_step_system(world, FIXED_DT);
+            // The facade's step, not the rigid world's alone: explosions, fracture and the
+            // break's sound and pieces, and soft bodies, ride on it. Until 2026-11-22 this was the
+            // bare rigid step, and in the editor's ▶ and every exported game nothing broke.
+            crate::systems::cpu_physics_step_system(world, FIXED_DT);
         }
         self.accumulator = remaining;
         register_event_queues(world);
@@ -1109,6 +1112,7 @@ mod tests {
             .collect();
 
         for call in [
+            "systems::cpu_physics_step_system(world,FIXED_DT)",
             "ai::system::ai_frame(world,dt)",
             "gizmo_audio::host::host_frame(world)",
             "audio::audio_spatial_system(world,dt)",

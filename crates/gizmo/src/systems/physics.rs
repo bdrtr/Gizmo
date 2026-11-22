@@ -569,17 +569,25 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
 // Senkronize eder: GpuPhysicsLink sahibi objeleri FluidCollider buffer'ına yazar.
 /// Steps the CPU physics world by `dt` and writes the results back into the ECS.
 ///
-/// The step includes **fracture**: a [`Breakable`](gizmo_physics_rigid::components::Breakable)
-/// hit hard enough shatters, its pieces age and are removed after its `debris_lifetime`, and —
-/// with the `render` feature — each piece is drawn as its own Voronoi cell in the broken body's
-/// material. Until 2026-11-03 neither this step nor anything else ran the fracture system, so a
-/// `Breakable` in a game never broke unless the game called
-/// `physics_fracture_system` itself, and the debris it then got had no geometry to draw.
+/// The step includes **explosions** and **fracture**: an active
+/// [`Explosion`](gizmo_physics_rigid::components::Explosion) pushes and damages what is in its
+/// reach, once; a [`Breakable`](gizmo_physics_rigid::components::Breakable) hit hard enough
+/// shatters, its pieces age and are removed after its `debris_lifetime`, its `break_sound` plays
+/// at it (with the `audio` and `render` features), and — with `render` — each piece is drawn as
+/// its own Voronoi cell in the broken body's material. Until 2026-11-03 nothing ran the fracture
+/// system, and until 2026-11-22 nothing ran the explosion system: an `Explosion` did nothing unless
+/// the game called `physics_explosion_system` itself.
 pub fn cpu_physics_step_system(world: &crate::core::World, dt: f32) {
+    // Before the step, so the blast's push is integrated by it.
+    let mut breaks = gizmo_physics_rigid::system::explosion_step(world, dt);
     gizmo_physics_rigid::system::physics_step_system(world, dt);
-    gizmo_physics_rigid::system::physics_fracture_system(world, dt);
+    breaks.extend(gizmo_physics_rigid::system::fracture_step(world, dt));
     #[cfg(feature = "render")]
     queue_debris_visuals(world);
+    #[cfg(all(feature = "audio", feature = "render"))]
+    play_break_sounds(world, &breaks);
+    #[cfg(not(all(feature = "audio", feature = "render")))]
+    let _ = breaks;
 
     #[cfg(feature = "physics-soft")]
     {
@@ -591,6 +599,24 @@ pub fn cpu_physics_step_system(world: &crate::core::World, dt: f32) {
         gizmo_physics_soft::system::soft_body_step_system(world, dt, gravity);
         gizmo_physics_soft::system::cloth_step_system(world, dt, gravity);
         gizmo_physics_soft::system::rope_step_system(world, dt, gravity);
+    }
+}
+
+/// Plays each break's `break_sound` at the body that broke, heard from the frame's camera — what
+/// `Breakable::break_sound` asks for, which until 2026-11-22 nothing read.
+#[cfg(all(feature = "audio", feature = "render"))]
+fn play_break_sounds(world: &crate::core::World, breaks: &[gizmo_physics_rigid::components::BreakEvent]) {
+    if breaks.iter().all(|b| b.sound.is_none()) {
+        return;
+    }
+    let Some(mut audio) = world.get_resource_mut::<gizmo_audio::AudioManager>() else { return };
+    let (left, right) = crate::systems::audio::listener(world).ears();
+    for b in breaks {
+        if let Some(name) = &b.sound {
+            if let Err(e) = audio.play_3d(name, b.position.to_array(), left, right) {
+                tracing::warn!(sound = %name, error = %e, "[Physics] a break's sound could not be played");
+            }
+        }
     }
 }
 

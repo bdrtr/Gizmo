@@ -167,6 +167,10 @@ fn default_bus() -> String {
     Mixer::DEFAULT_BUS.to_string()
 }
 
+/// The distance at which a 3D sound has faded out, in metres, when nothing says otherwise: an
+/// [`AudioSource`]'s default, and the reach of a one-shot [`AudioManager::play_3d`].
+pub const DEFAULT_MAX_DISTANCE: f32 = 100.0;
+
 impl AudioSource {
     /// Creates a new [`AudioSource`] for the sound with the given name.
     pub fn new(name: &str) -> Self {
@@ -176,7 +180,7 @@ impl AudioSource {
             volume: 1.0,
             pitch: 1.0,
             loop_sound: false,
-            max_distance: 100.0, // Varsayılan değer
+            max_distance: DEFAULT_MAX_DISTANCE,
             bus: default_bus(),
             _internal_sink_id: None,
             has_played: false,
@@ -316,6 +320,12 @@ pub fn spatial_gain(distance: f32, max_distance: f32, base_volume: f32) -> f32 {
     // Below one metre rodio's own modifier is clamped to 1, so there is nothing to cancel.
     let rodio_distance_term = distance.max(1.0).powi(2);
     taper * base_volume * rodio_distance_term
+}
+
+/// The distance from the point between two ears to an emitter.
+fn ear_distance(emitter: [f32; 3], left_ear: [f32; 3], right_ear: [f32; 3]) -> f32 {
+    let centre = [0, 1, 2].map(|i| (left_ear[i] + right_ear[i]) / 2.0);
+    (0..3).map(|i| (emitter[i] - centre[i]).powi(2)).sum::<f32>().sqrt()
 }
 
 /// The length a sound's bytes decode to, if the format states it.
@@ -714,6 +724,11 @@ impl AudioManager {
 
     /// Plays a 3D Spatial sound (one-shot)
     ///
+    /// It starts at the engine's distance curve ([`spatial_gain`], over [`DEFAULT_MAX_DISTANCE`]),
+    /// as an [`AudioSource`]'s does — not at rodio's own `1/d²`, which is what a sound played
+    /// here got until 2026-11-22 (nothing updated it after the start, as the spatial system does
+    /// an `AudioSource`): a script's `audio.play_3d` ten metres away played at 1 %.
+    ///
     /// # Errors
     ///
     /// Returns [`AudioError::NotLoaded`] if `name` was never loaded, or
@@ -777,6 +792,7 @@ impl AudioManager {
         self.active_spatial_sinks.insert(id, sink);
         self.sink_sounds.insert(id, name.to_string());
         self.mixer.route(id, Mixer::DEFAULT_BUS);
+        self.mixer.set_sink_volume(id, spatial_gain(ear_distance(emitter_pos, left_ear, right_ear), DEFAULT_MAX_DISTANCE, 1.0));
         self.apply_mix(id);
         Ok(id)
     }
@@ -801,15 +817,7 @@ impl AudioManager {
         sink.set_left_ear_position(left_ear);
         sink.set_right_ear_position(right_ear);
 
-        let listener_pos = [
-            (left_ear[0] + right_ear[0]) / 2.0,
-            (left_ear[1] + right_ear[1]) / 2.0,
-            (left_ear[2] + right_ear[2]) / 2.0,
-        ];
-        let dx = emitter_pos[0] - listener_pos[0];
-        let dy = emitter_pos[1] - listener_pos[1];
-        let dz = emitter_pos[2] - listener_pos[2];
-        let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+        let distance = ear_distance(emitter_pos, left_ear, right_ear);
 
         // Distance attenuation is INTENT, not the sink's volume — that distinction is the fix for
         // the muffle this call used to erase every frame (see `set_underwater`).
@@ -1400,6 +1408,22 @@ mod position_tests {
         assert!((2.4..3.0).contains(&p), "after seeking to 2.5 s the position is {p}");
         assert!(audio.position(u64::MAX).is_none());
         assert!(audio.seek(u64::MAX, 1.0).is_err());
+    }
+
+    /// A one-shot 3D sound starts on the engine's distance curve, as an `AudioSource` does: ten
+    /// metres away its sink is asked for `spatial_gain(10, 100, 1)` — the factor that cancels
+    /// rodio's own `1/d²` — and not left at 1, which played it at 1 %.
+    ///
+    /// `cargo test -p gizmo-audio -- --ignored one_shot`
+    #[test]
+    #[ignore = "needs a real audio output device — run with --ignored"]
+    fn a_one_shot_3d_sound_starts_on_the_engine_s_distance_curve() {
+        let mut audio = AudioManager::new().expect("an audio output device");
+        audio.load_samples("tone", &vec![0.0; 44_100], 44_100);
+        let id = audio.play_3d("tone", [10.0, 0.0, 0.0], [-0.1, 0.0, 0.0], [0.1, 0.0, 0.0]).unwrap();
+        let asked = audio.mixer().volume_for(id);
+        let expected = crate::spatial_gain(10.0, crate::DEFAULT_MAX_DISTANCE, 1.0);
+        assert!((asked - expected).abs() < 1e-3 * expected, "asked for {asked}, the curve says {expected}");
     }
 
     /// On real hardware: the master bus (and its limiter) carries sound played after a stretch

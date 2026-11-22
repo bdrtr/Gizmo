@@ -50,6 +50,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking things in a game says what broke: `BreakEvent`.** A `Breakable` that shatters sends
+  one into `Events<BreakEvent>` (`world.init_events::<BreakEvent>()`): the body, where it stood, where
+  it was struck, how many pieces, its `break_sound`. `fracture_step` and `explosion_step` return the
+  same list. Nothing said it before — the body was despawned by the step that broke it.
+- **Behaviour trees can be reactive (`BtNode::reactive_selector`, `reactive_sequence`).** A reactive
+  selector asks its children again every tick and a higher one that runs aborts a lower running one;
+  a reactive sequence checks the conditions before its running step every tick. Both composites
+  carry `reactive: bool` (`#[serde(default)]`, so older trees read as the memory composites they were),
+  and the editor's tree inspector has a checkbox for it. Found by `ari`: with a memory root no bee ever
+  fled the hornet.
+- **A script can set a collider's friction and restitution: `physics.set_material(id, f, e)`**
+  (`ScriptCommand::SetColliderMaterial`). They left `add_rigidbody` for the collider and no Lua call
+  took them over.
+- **`SteeringWeights::arrive` does something**, with `slowing_radius`: an `arrive` term in
+  `combined_steering`. It was read by nothing. Its default is now `0.0`, which is what every caller got.
+
 - **`ViewOptions` for `draw_camera_into`: what an editor's view draws past the camera's picture.**
   This is the game path's side of drawing the studio's Scene panel through it, as its Game panel
   now is.
@@ -699,6 +715,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **Breaking: `Breakable::piece_prefab`.** Its documentation said "metadata only — the built-in path
+  always spawns procedural chunks and never consults this", and nothing ever did.
+
 What nothing called, found by cargo 1.100's lints, by deleting every unconditional `#[allow(dead_code)]` and
 asking the compiler, and by reading the list of public items the workspace never names.
 
@@ -737,6 +756,35 @@ asking the compiler, and by reading the list of public items the workspace never
   and `AsyncAssetLoader`'s result sender on native, where the worker owns it.
 
 ### Fixed
+
+- **In the editor's ▶ and every exported game, nothing broke.** `PlayLoop` ran the bare rigid step;
+  fracture, the break's pieces and sound, and soft bodies were in the facade's
+  `cpu_physics_step_system`, which it now runs. That step also runs explosions now: nothing in the
+  engine ran `physics_explosion_system`, so an `Explosion` did nothing. Covered by
+  `play_breaks_explodes_and_swings_ropes` — before it, a pane hit by a ball stood whole, a crate in a
+  blast stood whole and a rope's end hung where it started.
+- **A `Breakable` without a body breaks.** The fracture pass asked for a `Velocity`, so a pane or a wall
+  standing as bare collider was immune to every hit.
+- **A broken body's pieces are hulls of their cells**, the shape the facade draws them with. They were
+  spheres of 42 % of the cell's volume, which the drawn cells sank into and which rolled on forever:
+  a crate's pieces were still rolling at 1.7 m/s after eight seconds, 14 m away. Now they rest within
+  four seconds. `debris_comes_to_rest_on_its_own_shape`.
+- **`Explosion::damage_radius` is the damage's reach**; it was read by nothing.
+- **`Breakable::break_sound` plays**, at the body, from the facade's physics step (with `audio` and
+  `render`); nothing read it.
+- **A one-shot 3D sound starts on the engine's distance curve.** `AudioManager::play_3d` left the sink
+  at rodio's own `1/d²`, and nothing updated it after: a script's `audio.play_3d` ten metres away
+  played at 1 %.
+- **A flock can come to rest.** `alignment` asked for full `max_speed` along the flock's heading
+  however slowly it moved — six sheep split from `coban`'s flock walked on at 0.47 m/s for a minute —
+  and now matches the neighbours' velocity. `separate` and `avoid_obstacles` pushed with
+  `max_speed / distance`, jumping to nothing at the radius and saturating at a hard-coded 1 m; the
+  penned flock chattered at 0.04 m/s. The push now falls from full speed at half the radius to
+  nothing at it, at any scale.
+- **A script sees each physics event once, at any frame rate** (`PhysicsEventLog`). It saw the last
+  step's: a ball entering a zone once was counted 0 times at 30 fps and 4 times at 240.
+- **An entity's `on_init(id, props)` runs**, once, before its first update. `Script::initialized`
+  documented it and nothing called it.
 
 - **The editor's Game panel is the game's own picture.**
   - It was the studio's forward path drawn from the game camera, with its own cascades and its own

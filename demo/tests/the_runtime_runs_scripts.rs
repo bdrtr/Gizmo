@@ -760,3 +760,35 @@ end
     let _ = std::fs::remove_file(&late);
     assert_eq!(position_of(&world, d), Vec3::new(0.0, 7.0, 0.0), "a script that loads late still gets its on_init");
 }
+
+/// The editor's ▶ and an exported game step the facade's physics, not the rigid world's alone: a
+/// `Breakable` hit hard enough breaks, an `Explosion` goes off, and a rope swings. Until
+/// 2026-11-22 the loop ran the bare rigid step, and none of the three happened — a pane hit by a
+/// ball stood whole beside it, a blast did nothing, a rope hung frozen in mid-air.
+#[test]
+fn play_breaks_explodes_and_swings_ropes() {
+    use gizmo::physics::components::{Breakable, Debris, Explosion, ExplosionFalloff};
+    use gizmo::physics::{Collider, RigidBody, Velocity};
+    let mut world = World::new();
+    world.insert_resource(gizmo::physics::world::PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    let fragile = || Breakable { threshold: 1.0, current_health: 1.0, max_health: 1.0, ..Default::default() };
+    let pane = world.spawn_bundle((Transform::new(Vec3::new(0.0, 1.0, 0.0)), Collider::box_collider(Vec3::new(1.0, 1.0, 0.05)), fragile()));
+    world.spawn_bundle((Transform::new(Vec3::new(0.0, 1.0, -3.0)), RigidBody::new(1.0, false), Velocity::new(Vec3::new(0.0, 0.0, 15.0)), Collider::sphere(0.2)));
+    let crate_ = world.spawn_bundle((Transform::new(Vec3::new(20.0, 1.0, 0.0)), Collider::box_collider(Vec3::splat(0.4)), fragile()));
+    world.spawn_bundle((
+        Transform::new(Vec3::new(20.5, 1.0, 0.0)),
+        Explosion { force_radius: 3.0, force: 50.0, damage: 10.0, damage_radius: 3.0, falloff: ExplosionFalloff::Linear, offset: Vec3::ZERO, is_active: true },
+    ));
+    let rope = world.spawn_bundle((Transform::new(Vec3::new(-20.0, 5.0, 0.0)), gizmo::physics::soft_body::Rope::new(Vec3::new(-20.0, 5.0, 0.0), Vec3::X, 8, 0.25, 0.1, true, false)));
+    let tip_before = world.query::<&gizmo::physics::soft_body::Rope>().get(rope).map(|r| r.nodes.last().unwrap().position).unwrap();
+    let mut play = PlayLoop::new();
+    for _ in 0..60 {
+        play.step(&mut world, 1.0 / 60.0, &Input::default(), &mut |_| {});
+        world.apply_commands();
+    }
+    assert!(!world.is_alive(pane), "a pane hit by a ball broke");
+    assert!(!world.is_alive(crate_), "a crate in a blast broke");
+    assert!(world.query::<&Debris>().iter().count() > 2, "into pieces");
+    let tip = world.query::<&gizmo::physics::soft_body::Rope>().get(rope).map(|r| r.nodes.last().unwrap().position).unwrap();
+    assert!(tip.y < tip_before.y - 0.5, "a rope's free end swung down: {tip_before:?} → {tip:?}");
+}

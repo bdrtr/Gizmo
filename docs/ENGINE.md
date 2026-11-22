@@ -2609,15 +2609,11 @@ after an add, where a queue of edits is true for none of them.
 
 **Measured and deliberately left open.** Each of these is real and none is a wiring bug:
 
-- **Destruction is in no engine frame, and should not be wired blind.** `physics_fracture_system`
-  and `physics_explosion_system` are called from exactly one place in the workspace,
-  `demo/src/bin/advanced_physics.rs:386-387` — not `PlayLoop::step`, not `gameplay.rs`'s schedule.
-  Unlike navigation and audio there is **no user-visible surface promising it**: `Breakable` is in
-  no menu, no registry and no inspector section. So adding the two systems to `physics_pass` would
-  not close a gap between what a user sees and what runs; it would put two more systems on every
-  game's fixed step on the strength of a public function existing. The open question is a policy
-  one — does the engine's default frame own destruction, or is it opt-in like the gameplay
-  systems `gameplay.rs` registers? — and it should be answered together with the surface.
+- **~~Destruction is in no engine frame.~~ Closed.** The policy question was answered on 2026-11-03,
+  when the facade's `cpu_physics_step_system` took fracture on (and `Breakable` is a built-in of the
+  scene registry, so no longer surface-less); on 2026-11-22 `PlayLoop::step` took that step on in place of the bare rigid one — in the
+  editor's ▶ and every exported game nothing had broken — and the step took the explosion pass on
+  too, which no engine frame had run. Found writing `cam`.
 - **~~The GPU fluid is disconnected at both ends.~~ Closed 2026-11-14.** The flag came from the
   presence of a `FluidSimulation`: `Renderer::fluid_enabled` is gone, and the frame preparation
   (`gizmo/src/systems/render/fluid.rs`, `fluid_scene_system`) hands the solver the scene's
