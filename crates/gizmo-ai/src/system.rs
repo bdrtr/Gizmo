@@ -271,7 +271,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
         steer(&mut agent, &mut v, agent_id, t, planned[index].take(), &crowd, index, &mut nearby, dt, &mut tally);
     }
 
-    let NavTally { recalc: recalc_count, path_found, path_failed, stuck: stuck_count, reached: reached_count } = tally;
+    let NavTally { recalc: recalc_count, path_found, path_failed, newly_failed, stuck: stuck_count, reached: reached_count } = tally;
     // Çıkışta AGGREGATE — yalnız bir navigasyon kararı olduysa logla (sessiz frame'ler gürültü yapmasın).
     if recalc_count > 0 || stuck_count > 0 || reached_count > 0 || path_failed > 0 {
         tracing::debug!(
@@ -286,9 +286,13 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
     }
 
     // Yol hesaplama başarısızlıkları gerçek bir sorunu gizleyebilir (ulaşılamaz harita,
-    // hatalı hedef, bozuk NavGrid) — çıkışta toplu warn! ile yüzeye çıkar.
-    if path_failed > 0 {
+    // hatalı hedef, bozuk NavGrid) — çıkışta toplu warn! ile yüzeye çıkar. Only the NEW ones: an
+    // agent searching again, on its schedule, for a target it already could not reach was warned
+    // about on every retry — `karinca --test` logged this 900 times for one ant. The retries are in
+    // the debug summary above.
+    if newly_failed > 0 {
         tracing::warn!(
+            newly_failed,
             path_failed,
             recalc_count,
             agent_count,
@@ -310,6 +314,8 @@ struct NavTally {
     recalc: u32,
     path_found: u32,
     path_failed: u32,
+    /// Failures that are not an agent retrying a target it already could not reach.
+    newly_failed: u32,
     stuck: u32,
     reached: u32,
 }
@@ -507,8 +513,11 @@ fn take_route(agent: &mut NavAgent, agent_id: Entity, route: Option<Option<Vec<V
         } else {
             // Yol bulunamadı: path temizlenir (sessiz yutmayı sayaca bağla — çıkışta warn!).
             agent.clear_path();
-            agent.set_route_failed(true);
+            let repeat = agent.set_route_failed(true);
             tally.path_failed += 1;
+            if !repeat {
+                tally.newly_failed += 1;
+            }
             tracing::trace!(
                 entity = %agent_id,
                 "[AI] Ajan için yol bulunamadı (hedef ulaşılamaz/duvar içinde?)"

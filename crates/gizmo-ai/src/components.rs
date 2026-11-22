@@ -130,6 +130,9 @@ pub struct NavAgent {
     /// [`route_failed`](Self::route_failed).
     #[serde(skip)]
     route_failed: bool,
+    /// The target the last failed search was for (`recalc.last_target_pos` then).
+    #[serde(skip)]
+    failed_target: Option<Vec3>,
     #[serde(skip)]
     current_path_index: usize, // path.remove(0) yerine indeks takibi — O(1)
     /// Last state written by the navigation system. See [`NavAgentState`] — writing it
@@ -230,8 +233,14 @@ impl NavAgent {
         self.route_failed
     }
 
-    pub(crate) fn set_route_failed(&mut self, failed: bool) {
+    /// Records the last route search's outcome. For a failure, returns whether it repeats the one
+    /// before for the same target: the agent searching again on its schedule for a place it could
+    /// not reach — news once, not on every retry.
+    pub(crate) fn set_route_failed(&mut self, failed: bool) -> bool {
+        let repeat = failed && self.route_failed && self.failed_target == self.recalc.last_target_pos;
         self.route_failed = failed;
+        self.failed_target = if failed { self.recalc.last_target_pos } else { None };
+        repeat
     }
 
     /// Builds an idle agent: no destination, no path, [`NavAgentState::Idle`], and a
@@ -248,6 +257,7 @@ impl NavAgent {
             target: None,
             path: Vec::new(),
             route_failed: false,
+            failed_target: None,
             current_path_index: 0,
             state: NavAgentState::Idle,
             recalc: NavAgentRecalcState {
@@ -423,6 +433,21 @@ gizmo_core::impl_component!(NavAgent);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A failed search for the target the last one failed for too is a retry; a failure for a new
+    /// target, or after a route was found, is news. The navigation warning counts only the news.
+    #[test]
+    fn a_route_failure_repeats_only_for_the_same_target() {
+        let mut agent = NavAgent::default();
+        agent.recalc.last_target_pos = Some(Vec3::new(1.0, 0.0, 0.0));
+        assert!(!agent.set_route_failed(true), "the first failure is news");
+        assert!(agent.set_route_failed(true), "the same target again is a retry");
+        agent.recalc.last_target_pos = Some(Vec3::new(5.0, 0.0, 0.0));
+        assert!(!agent.set_route_failed(true), "a new target that fails is news");
+        agent.set_route_failed(false);
+        assert!(!agent.set_route_failed(true), "a failure after a found route is news");
+        assert!(agent.route_failed());
+    }
 
     // REGRESYON (audit round 2): ai.clear_target() hem hedefi hem path'i temizlemeli.
     // Sadece path temizlenirse target durur, ai_navigation_system yeniden hesaplayıp
