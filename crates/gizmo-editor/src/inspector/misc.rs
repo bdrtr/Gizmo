@@ -629,8 +629,22 @@ pub fn draw_hurtbox_section(
 /// all. It was `Entity::new(id, 0)`, which is a dead entity's handle once the id has been reused, and
 /// the attachment then followed nothing. An id nobody holds keeps the number, so the field can be
 /// scrolled through ids that are not in use.
-fn attachment_target(world: &World, id: u32) -> gizmo_core::entity::Entity {
-    world.entity(id).unwrap_or(gizmo_core::entity::Entity::new(id, 0))
+/// The name of the model whose skeleton an attachment on `entity` follows — the nearest ancestor
+/// carrying a `Skeleton` — or what to do when there is none.
+fn attachment_skeleton_label(world: &World, entity: gizmo_core::entity::Entity) -> String {
+    use gizmo_core::component::Parent;
+    let parents = world.query::<&Parent>();
+    let skeletons = world.query::<&gizmo_renderer::components::Skeleton>();
+    let names = world.query::<&gizmo_core::component::EntityName>();
+    let mut at = entity;
+    for _ in 0..256 {
+        let Some(parent) = parents.get(at).and_then(|p| world.live(p.0)) else { break };
+        at = parent;
+        if skeletons.get(at).is_some() {
+            return names.get(at).map_or_else(|| format!("#{}", at.id()), |n| n.0.clone());
+        }
+    }
+    "(yok — varlığı modelin altına bağla)".to_string()
 }
 
 /// The bone-attachment rows: which skeleton bone the entity rides.
@@ -647,11 +661,10 @@ pub fn draw_bone_attachment_section(
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Target Entity ID:");
-                    let mut tid = attachment.target_entity.id();
-                    if ui.add(egui::DragValue::new(&mut tid)).changed() {
-                        attachment.target_entity = attachment_target(world, tid);
-                    }
+                    // Which skeleton: the nearest ancestor carrying one. Parent the entity under
+                    // the model to attach it.
+                    ui.label("İskelet:");
+                    ui.label(attachment_skeleton_label(world, entity_id));
                 });
                 ui.horizontal(|ui| {
                     ui.label("Bone Index:");
@@ -911,16 +924,16 @@ pub fn draw_mesh_renderer_section(
 mod tests {
     use super::*;
 
-    /// A bone attachment's target typed as an id is the live entity on it, generation and all.
+    /// An attachment with no skeleton above it says how to give it one: its skeleton is the
+    /// hierarchy's answer, not an id typed in.
     #[test]
-    fn an_attachment_typed_as_an_id_points_at_the_live_entity() {
+    fn an_attachment_without_a_skeleton_above_says_to_parent_it() {
         let mut world = World::new();
-        let gone = world.spawn();
-        world.despawn(gone);
-        let reused = world.spawn();
-        assert!(reused.generation() > 0);
-        assert_eq!(attachment_target(&world, reused.id()), reused);
-        assert_eq!(attachment_target(&world, 77).id(), 77, "an unused id keeps its number");
+        let model = world.spawn();
+        let sword = world.spawn();
+        world.add_component(sword, gizmo_core::component::Parent(model));
+        assert!(attachment_skeleton_label(&world, sword).contains("altına bağla"));
+        assert!(attachment_skeleton_label(&world, model).contains("altına bağla"), "no parent at all");
     }
     use gizmo_physics_core::components::fighter::{CombatMove, FighterController, FrameData};
 

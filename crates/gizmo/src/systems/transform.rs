@@ -328,7 +328,8 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
             for (entity, attachment) in query.iter() {
                 {
                     let sq = &mut skeletons;
-                    if let Some(skeleton) = sq.get(attachment.target_entity) {
+                    let Some(owner) = bone_attachment_skeleton(world, entity) else { continue };
+                    if let Some(skeleton) = sq.get(owner) {
                         if let Some(global_matrix) = skeleton.global_poses.get(attachment.bone_index) {
                             {
                                 let tq = &mut transforms;
@@ -352,6 +353,24 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
             tracing::trace!(attached, "bone_attachment: kemiğe bağlı varlıklar güncellendi");
         }
     }
+}
+
+/// The entity whose `Skeleton` a [`BoneAttachment`](gizmo_renderer::components::BoneAttachment) on
+/// `entity` follows: the nearest ancestor carrying one, starting at its parent. `None` when no
+/// ancestor does, or the chain is broken or loops.
+#[cfg(feature = "render")]
+pub fn bone_attachment_skeleton(world: &gizmo_core::world::World, entity: Entity) -> Option<Entity> {
+    use gizmo_core::component::Parent;
+    let parents = world.query::<&Parent>();
+    let skeletons = world.query::<&gizmo_renderer::components::Skeleton>();
+    let mut at = entity;
+    for _ in 0..256 {
+        at = world.live(parents.get(at)?.0)?;
+        if skeletons.get(at).is_some() {
+            return Some(at);
+        }
+    }
+    None
 }
 
 /// The world matrices of every bone-attached entity and of everything under it, from the pose
@@ -453,17 +472,13 @@ mod tests {
         assert_eq!(world.get::<gizmo_core::component::Parent>(b).map(|p| p.0), Some(a));
     }
 
-    /// **An attachment is drawn where its bone is this frame.** The attachment system runs after
-    /// the animation, which is after the frame's propagation; it now writes the attached entity's
-    /// world matrix, and its children's, itself. Until 2026-11-15 a sword was drawn a frame behind
-    /// its hand. No propagation runs here: what the system leaves is what the frame draws.
+    /// A one-joint skeleton ("Hand") posed at `pose`, on wgpu's no-op backend: a `Skeleton` needs a
+    /// bind group and a buffer, and nothing here draws.
     #[cfg(feature = "render")]
-    #[test]
-    fn an_attachment_is_drawn_where_its_bone_is_this_frame() {
+    fn one_bone_skeleton(pose: crate::math::Mat4) -> gizmo_renderer::components::Skeleton {
         use crate::math::{Mat4, Quat, Vec3};
         use gizmo_renderer::{SkeletonHierarchy, SkeletonJoint};
-        use gizmo_core::component::Parent;
-        use gizmo_renderer::components::{BoneAttachment, Skeleton};
+        use gizmo_renderer::components::Skeleton;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::NOOP,
             backend_options: wgpu::BackendOptions {
@@ -491,9 +506,61 @@ mod tests {
             root_transform: Mat4::IDENTITY,
         };
         let mut skeleton = Skeleton::new(std::sync::Arc::new(bind_group), std::sync::Arc::new(buffer), std::sync::Arc::new(hierarchy), vec![Mat4::IDENTITY]);
+        skeleton.global_poses = vec![pose];
+        skeleton
+    }
+
+    /// **An attachment follows its model through a scene round trip** — the editor's ▶ and every
+    /// loaded scene spawn the entities again under new ids. It followed a stored `target_entity`,
+    /// which after the trip named the model's old id: measured, a sword saved on a model with
+    /// three entities before it pointed at `Entity(3)` in a world where the model was `Entity(0)`,
+    /// and was never placed. The skeleton is the hierarchy's answer now.
+    #[cfg(all(feature = "render", feature = "scene"))]
+    #[test]
+    fn an_attachment_follows_its_model_through_a_scene_round_trip() {
+        use crate::math::{Mat4, Quat, Vec3};
+        use gizmo_core::component::{Children, EntityName, Parent};
+        use gizmo_renderer::components::BoneAttachment;
+        let pose = Mat4::from_rotation_translation(Quat::from_rotation_z(0.4), Vec3::new(0.2, 1.1, 0.0));
+        let offset = Mat4::from_translation(Vec3::new(0.0, 0.3, 0.0));
+        let mut edited = World::new();
+        for _ in 0..3 {
+            edited.spawn_bundle((Transform::new(Vec3::ZERO), EntityName::new("Editor Grid")));
+        }
+        let model = edited.spawn_bundle((Transform::new(Vec3::new(4.0, 0.0, 0.0)), GlobalTransform::default(), EntityName::new("model")));
+        let sword = edited.spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), Parent(model), BoneAttachment { bone_index: 0, offset }));
+        edited.add_component(model, Children(vec![sword]));
+        let registry = crate::scene_registry_for(&edited);
+        let scene = gizmo_scene::SceneData::of_entities(&edited, vec![model, sword], &registry);
+        let mut play = World::new();
+        let ids = scene.instantiate(&mut play, &registry);
+        let (model, sword) = (ids[&model.id()], ids[&sword.id()]);
+        assert_ne!(model.id(), 3, "the trip gave the model a new id, which is the point");
+        // The model's skeleton is rebuilt at run time — a GPU resource no file holds.
+        play.add_component(model, one_bone_skeleton(pose));
+        play.add_component(model, GlobalTransform { matrix: Mat4::from_translation(Vec3::new(4.0, 0.0, 0.0)) });
+        // World matrices are run-time too; the frame gives every placed entity one.
+        play.add_component(sword, GlobalTransform::default());
+        assert_eq!(bone_attachment_skeleton(&play, sword), Some(model));
+        BoneAttachmentSystem.run(&play, 1.0 / 60.0);
+        let want = Mat4::from_translation(Vec3::new(4.0, 0.0, 0.0)) * pose * offset;
+        let drawn = play.get::<GlobalTransform>(sword).unwrap().matrix;
+        assert!(drawn.abs_diff_eq(want, 1e-5), "the sword is drawn at {:?}, its hand at {:?}", drawn.w_axis, want.w_axis);
+    }
+
+    /// **An attachment is drawn where its bone is this frame.** The attachment system runs after
+    /// the animation, which is after the frame's propagation; it now writes the attached entity's
+    /// world matrix, and its children's, itself. Until 2026-11-15 a sword was drawn a frame behind
+    /// its hand. No propagation runs here: what the system leaves is what the frame draws.
+    #[cfg(feature = "render")]
+    #[test]
+    fn an_attachment_is_drawn_where_its_bone_is_this_frame() {
+        use crate::math::{Mat4, Quat, Vec3};
+        use gizmo_core::component::Parent;
+        use gizmo_renderer::components::BoneAttachment;
         // The pose the animation wrote this frame: the hand raised and turned.
         let pose = Mat4::from_rotation_translation(Quat::from_rotation_z(0.7), Vec3::new(0.5, 1.4, 0.0));
-        skeleton.global_poses = vec![pose];
+        let skeleton = one_bone_skeleton(pose);
 
         let mut world = World::new();
         let model = world.spawn_bundle((Transform::new(Vec3::new(10.0, 0.0, 0.0)), GlobalTransform::default(), skeleton));
@@ -502,7 +569,7 @@ mod tests {
             Transform::new(Vec3::ZERO),
             GlobalTransform::default(),
             Parent(model),
-            BoneAttachment { target_entity: model, bone_index: 0, offset },
+            BoneAttachment { bone_index: 0, offset },
         ));
         let gem = world.spawn_bundle((Transform::new(Vec3::new(0.0, 0.8, 0.0)), GlobalTransform::default(), Parent(sword)));
         world.add_component(model, Children(vec![sword]));

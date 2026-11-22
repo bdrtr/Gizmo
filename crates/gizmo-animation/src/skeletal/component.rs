@@ -227,6 +227,13 @@ impl AnimationPlayer {
 /// Pins this entity to a single bone of *another* entity's skeleton — sword in hand,
 /// hat on head.
 ///
+/// **Which skeleton** is the hierarchy's answer, not a stored id: the nearest ancestor that
+/// carries a `Skeleton`, starting at this entity's parent. That is the parent itself in every
+/// correct setup (see the placement note below). It used to be a `target_entity` handle, and a
+/// handle is a run's: the editor's ▶ and every loaded scene spawn the entities again under new
+/// ids, so a sword saved on a knight's hand followed whatever held the knight's old id in the new
+/// world — measured, nothing at all (2026-11-22).
+///
 /// Driven by `gizmo`'s `BoneAttachmentSystem` (behind the facade's `render` feature, since
 /// the `Skeleton` it reads is a renderer component). Every frame that system **overwrites**
 /// this entity's `Transform` — position, rotation *and* scale — with
@@ -247,17 +254,6 @@ impl AnimationPlayer {
 /// reads that registry to build the menu — it does not register anything itself.)
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BoneAttachment {
-    /// The entity carrying the `Skeleton` component to follow — the skinned model, *not*
-    /// this entity.
-    ///
-    /// Only the id half is used: the driving system looks the skeleton up by
-    /// `target_entity.id()` and never checks the generation, so a handle left over from a
-    /// despawned model silently follows whatever now occupies that slot. Defaults to
-    /// `Entity::new(0, 0)`, a placeholder for the editor's "add component" path rather than a
-    /// meaningful target — every real attachment must overwrite it, ideally with a handle
-    /// from `World::entity(id)` so the generation is current.
-    pub target_entity: gizmo_core::entity::Entity,
-
     /// Which bone to follow, as an index into `SkeletonHierarchy::joints` (equivalently into
     /// the renderer's `Skeleton::global_poses`, which is parallel to it).
     ///
@@ -282,7 +278,6 @@ pub struct BoneAttachment {
 impl Default for BoneAttachment {
     fn default() -> Self {
         Self {
-            target_entity: gizmo_core::entity::Entity::new(0, 0),
             bone_index: 0,
             offset: gizmo_math::Mat4::IDENTITY,
         }

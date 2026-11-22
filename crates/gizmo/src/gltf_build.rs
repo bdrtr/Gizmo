@@ -99,7 +99,7 @@ pub(crate) fn spawn_gltf_node_flat(
     if let Some((bone, above)) = on_bone {
         world.add_component(
             entity,
-            gizmo_renderer::components::BoneAttachment { target_entity: place.root, bone_index: bone, offset: above * local },
+            gizmo_renderer::components::BoneAttachment { bone_index: bone, offset: above * local },
         );
     }
     // What the node's children inherit: a bone of their own, or the way down from the one above.

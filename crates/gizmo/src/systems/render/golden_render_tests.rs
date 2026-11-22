@@ -15301,7 +15301,7 @@ fn a_gltf_model_asked_for_by_name_is_built_from_its_file() {
         for part in ["Knight_Helmet", "Knight_Cape"] {
             let e = named(part);
             let a = world.get::<crate::renderer::components::BoneAttachment>(e).unwrap_or_else(|| panic!("{part} follows no bone"));
-            assert_eq!(a.target_entity, root, "{part} follows another model's skeleton");
+            assert_eq!(crate::systems::bone_attachment_skeleton(&world, e), Some(root), "{part} follows another model's skeleton");
             // Drawn where the bone is this frame, not where propagation last left it.
             let sk = world.get::<crate::renderer::components::Skeleton>(root).expect("the root's skeleton");
             let want = crate::math::Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0)) * sk.global_poses[a.bone_index] * a.offset;
@@ -15737,7 +15737,9 @@ fn an_ik_chain_bends_the_limb_and_a_reopened_scene_bends_it_the_same() {
         };
         let sword = world.spawn();
         world.add_component(sword, Transform::new(Vec3::ZERO));
-        world.add_component(sword, BoneAttachment { target_entity: root, bone_index: tip, offset: gizmo_math::Mat4::IDENTITY });
+        world.add_component(sword, BoneAttachment { bone_index: tip, offset: gizmo_math::Mat4::IDENTITY });
+        // Under the model: its skeleton is the one it follows.
+        gizmo_core::hierarchy::HierarchyExt::add_child(&mut world, root, sword);
 
         let straight = render_world(&mut renderer, &mut world).await;
         world.add_component(root, chain(0.5));

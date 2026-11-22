@@ -715,6 +715,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **Breaking: `BoneAttachment::target_entity`.** The skeleton an attachment follows is the nearest
+  ancestor carrying one (`systems::bone_attachment_skeleton`), which the placement already required
+  it to be under. A stored handle is a run's: after the editor's ▶ or a scene load, which spawn the
+  entities again under new ids, a sword saved on a model followed the model's old id — measured,
+  `Entity(3)` in a world where the model was `Entity(0)` — and was never placed. The inspector shows
+  the model it follows instead of an id to type.
 - **Breaking: `Breakable::piece_prefab`.** Its documentation said "metadata only — the built-in path
   always spawns procedural chunks and never consults this", and nothing ever did.
 
