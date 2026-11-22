@@ -150,52 +150,12 @@ fn step_character(
     let foot_pos = transform.position - Vec3::new(0.0, height * 0.5 - radius, 0.0);
     let ray = Ray::new(foot_pos, Vec3::new(0.0, -1.0, 0.0));
 
-    let mut ground_dist = f32::MAX;
-    let mut ground_normal = Vec3::ZERO;
-
     let grounded_threshold = radius + 0.1;
 
-    // AABB pre-filter: gather colliders near the character
-    let max_move_dist =
-        (kcc.target_velocity.length() + kcc.gravity * dt + kcc.jump_speed) * dt * 2.0;
-    let char_aabb = gizmo_math::Aabb {
-        min: (transform.position - Vec3::splat(height.max(radius) + max_move_dist)).into(),
-        max: (transform.position + Vec3::splat(height.max(radius) + max_move_dist)).into(),
-    };
-
-    // A trigger volume is not something to stand on or walk into: it goes to its own list,
-    // read only to report what the character ends the step inside (`CharacterController::triggers`).
-    let mut near_colliders = Vec::new();
-    let mut near_triggers = Vec::new();
-    for (i, col_data) in colliders.iter().enumerate() {
-        if col_data.0 == _entity {
-            continue;
-        }
-        let aabb = match aabbs {
-            Some(boxes) => boxes[i],
-            None => col_data.2.compute_aabb(col_data.1.position, col_data.1.rotation),
-        };
-        if char_aabb.intersects(aabb) {
-            if col_data.2.is_trigger {
-                near_triggers.push(col_data);
-            } else {
-                near_colliders.push(col_data);
-            }
-        }
-    }
+    let (near_colliders, near_triggers) = nearby_colliders(_entity, kcc, transform, colliders, aabbs, height, radius, dt);
 
     let dropping = kcc.drop_through_timer > 0.0;
-    // The ground is only ever wanted this far below the feet: grounded within `radius + 0.1`, the
-    // wading test within `radius + 0.6`. A ray not bounded by it walked the whole terrain.
-    let ground_reach = radius + 0.7;
-    for (_col_ent, col_trans, col) in &near_colliders {
-        if let Some((d, n)) = Raycast::ray_shape_within(&ray, &col.shape, col_trans, ground_reach) {
-            if d < ground_dist && blocks(col, col_trans, d, n, radius, vel.linear, true, dropping) {
-                ground_dist = d;
-                ground_normal = n;
-            }
-        }
-    }
+    let (ground_dist, ground_normal) = ground_below(&ray, &near_colliders, radius, vel, dropping);
 
     // **Shallow water is waded, not swum.** The swim mode holds the character at the surface,
     // so with its centre in the water it could never rise out of it: at a shore whose bottom
@@ -240,6 +200,94 @@ fn step_character(
     }
     kcc.is_submerged = false;
 
+    land_step(kcc, transform, vel, _entity, ground_dist, grounded_threshold, radius, dropping, dt);
+
+    let desired_move = horizontal_move(kcc, ground_normal, _entity);
+    vel.linear.x = desired_move.x;
+    vel.linear.z = desired_move.z;
+
+    transform.position = slide_along_walls(kcc, transform.position, vel, &near_colliders, _entity, height, radius, dropping, dt, hits);
+    record_triggers(kcc, transform, collider, &near_triggers);
+}
+
+/// The colliders near enough to matter this step (an AABB around the character, as wide as it could
+/// move), the trigger volumes apart: those are not stood on or walked into, only reported.
+#[allow(clippy::too_many_arguments)]
+fn nearby_colliders<'a>(
+    _entity: BodyHandle,
+    kcc: &CharacterController,
+    transform: &Transform,
+    colliders: &'a [(BodyHandle, Transform, Collider)],
+    aabbs: Option<&[gizmo_math::Aabb]>,
+    height: f32,
+    radius: f32,
+    dt: f32,
+) -> (Vec<&'a (BodyHandle, Transform, Collider)>, Vec<&'a (BodyHandle, Transform, Collider)>) {
+    // AABB pre-filter: gather colliders near the character
+    let max_move_dist =
+        (kcc.target_velocity.length() + kcc.gravity * dt + kcc.jump_speed) * dt * 2.0;
+    let char_aabb = gizmo_math::Aabb {
+        min: (transform.position - Vec3::splat(height.max(radius) + max_move_dist)).into(),
+        max: (transform.position + Vec3::splat(height.max(radius) + max_move_dist)).into(),
+    };
+
+    // A trigger volume is not something to stand on or walk into: it goes to its own list,
+    // read only to report what the character ends the step inside (`CharacterController::triggers`).
+    let mut near_colliders = Vec::new();
+    let mut near_triggers = Vec::new();
+    for (i, col_data) in colliders.iter().enumerate() {
+        if col_data.0 == _entity {
+            continue;
+        }
+        let aabb = match aabbs {
+            Some(boxes) => boxes[i],
+            None => col_data.2.compute_aabb(col_data.1.position, col_data.1.rotation),
+        };
+        if char_aabb.intersects(aabb) {
+            if col_data.2.is_trigger {
+                near_triggers.push(col_data);
+            } else {
+                near_colliders.push(col_data);
+            }
+        }
+    }
+    (near_colliders, near_triggers)
+}
+
+/// The nearest ground under the feet that holds the character, `(distance, normal)`; `f32::MAX`
+/// and zero with none.
+fn ground_below(ray: &Ray, near_colliders: &[&(BodyHandle, Transform, Collider)], radius: f32, vel: &Velocity, dropping: bool) -> (f32, Vec3) {
+    let mut ground_dist = f32::MAX;
+    let mut ground_normal = Vec3::ZERO;
+
+    // The ground is only ever wanted this far below the feet: grounded within `radius + 0.1`, the
+    // wading test within `radius + 0.6`. A ray not bounded by it walked the whole terrain.
+    let ground_reach = radius + 0.7;
+    for (_col_ent, col_trans, col) in near_colliders {
+        if let Some((d, n)) = Raycast::ray_shape_within(ray, &col.shape, col_trans, ground_reach) {
+            if d < ground_dist && blocks(col, col_trans, d, n, radius, vel.linear, true, dropping) {
+                ground_dist = d;
+                ground_normal = n;
+            }
+        }
+    }
+    (ground_dist, ground_normal)
+}
+
+/// The land step's vertical part: the drop-through timer, grounded or not, coyote time and the jump
+/// buffer, the snap to the ground, the jump, gravity.
+#[allow(clippy::too_many_arguments)]
+fn land_step(
+    kcc: &mut CharacterController,
+    transform: &mut Transform,
+    vel: &mut Velocity,
+    _entity: BodyHandle,
+    ground_dist: f32,
+    grounded_threshold: f32,
+    radius: f32,
+    dropping: bool,
+    dt: f32,
+) {
     if dropping {
         kcc.drop_through_timer -= dt;
     }
@@ -293,8 +341,11 @@ fn step_character(
     if !kcc.is_grounded {
         vel.linear.y -= kcc.gravity * dt;
     }
+}
 
-    // 3. Horizontal Movement
+/// The horizontal move this step: the input along the ground on a walkable slope, or the slide down
+/// a steep one.
+fn horizontal_move(kcc: &CharacterController, mut ground_normal: Vec3, _entity: BodyHandle) -> Vec3 {
     let mut desired_move = kcc.target_velocity;
 
     if kcc.is_grounded {
@@ -325,20 +376,30 @@ fn step_character(
             );
         }
     }
+    desired_move
+}
 
-    vel.linear.x = desired_move.x;
-    vel.linear.z = desired_move.z;
-
+/// Moves the character from `position` by this step's velocity, sliding along what it hits and
+/// stepping up onto ledges low enough; returns where it ends. What stopped it goes into `hits`.
+#[allow(clippy::too_many_arguments)]
+fn slide_along_walls(
+    kcc: &CharacterController,
+    position: Vec3,
+    vel: &mut Velocity,
+    near_colliders: &[&(BodyHandle, Transform, Collider)],
+    _entity: BodyHandle,
+    height: f32,
+    radius: f32,
+    dropping: bool,
+    dt: f32,
+    hits: &mut Vec<(BodyHandle, Vec3)>,
+) -> Vec3 {
     // 4. Collision Sliding against Walls
     let move_delta = vel.linear * dt;
     let mut final_delta = move_delta;
 
-    let mut current_pos = transform.position;
+    let mut current_pos = position;
     for _ in 0..3 {
-        let mut hit = false;
-        let mut closest_n = Vec3::ZERO;
-        let mut closest_ent = None;
-        let mut min_t = 1.0;
         let move_dist = final_delta.length();
         if move_dist < 1e-4 {
             break;
@@ -346,99 +407,19 @@ fn step_character(
 
         let move_dir = final_delta.normalize_or_zero();
 
-        let sweep_heights = [-height * 0.5 + radius, 0.0, height * 0.5 - radius];
-
-        for (i, h_offset) in sweep_heights.into_iter().enumerate() {
-            let mut local_min_t = 1.0;
-            let mut local_closest_n = Vec3::ZERO;
-            let mut local_closest_ent = None;
-            let origin = current_pos + Vec3::new(0.0, h_offset, 0.0);
-            let move_ray = Ray::new(origin, move_dir);
-
-            // A hit further than this step's move past the character's surface stops nothing.
-            let reach = move_dist + radius + 0.05;
-            for (col_ent, col_trans, col) in &near_colliders {
-                if let Some((d, n)) = Raycast::ray_shape_within(&move_ray, &col.shape, col_trans, reach) {
-                    // The character's surface sits `radius` ahead of its center. Clamp
-                    // the surface distance to 0 so a contact or slightly-penetrating hit
-                    // (`d - radius <= 0`, common exactly at contact where FP rounding
-                    // makes it a hair negative) still BLOCKS (min_t → 0) instead of being
-                    // rejected by an `actual_d >= 0` test — which let the body walk
-                    // straight through the wall.
-                    if d >= 0.0
-                        && blocks(col, col_trans, d, n, radius, vel.linear, i == 0, dropping)
-                    {
-                        let actual_d = (d - radius).max(0.0);
-                        if actual_d < move_dist * local_min_t {
-                            local_min_t = actual_d / move_dist;
-                            local_closest_n = n;
-                            local_closest_ent = Some(*col_ent);
-                        }
-                    }
-                }
-            }
-            if local_min_t < min_t {
-                min_t = local_min_t;
-                closest_n = local_closest_n;
-                closest_ent = local_closest_ent;
-                hit = true;
-            }
-        }
+        let (hit, min_t, closest_n, closest_ent) =
+            sweep_walls(current_pos, move_dir, move_dist, near_colliders, height, radius, vel, dropping);
 
         if hit {
             // Attempt Step Climbing
-            let mut stepped = false;
-            if kcc.is_grounded && kcc.step_height > 0.0 {
-                // Determine if the hit normal represents a wall
-                let wall_angle = closest_n.angle_between(Vec3::new(0.0, 1.0, 0.0));
-                if wall_angle > kcc.max_slope_angle {
-                    // Cast down from `step_height` above the bottom of the collider, slightly
-                    // forward into the obstacle: a ledge is a step only when its top is between
-                    // the feet and that height. This was cast from `step_height` above the
-                    // bottom sphere's *centre* and accepted twice that distance, so a capsule of
-                    // radius 0.35 climbed anything up to ~0.65 m with `step_height` 0.3 — a
-                    // bridge's railing among them (`dunya`, 2026-11-16).
-                    const STEP_SKIN: f32 = 0.01;
-                    let step_check_origin = current_pos
-                        + Vec3::new(0.0, -height * 0.5 + kcc.step_height + STEP_SKIN, 0.0)
-                        + move_dir * (radius + 0.05); // Push forward into the wall
+            let climbed = if kcc.is_grounded && kcc.step_height > 0.0 {
+                try_step_up(kcc, current_pos, move_dir, move_dist, min_t, closest_n, near_colliders, height, radius, vel, dropping)
+            } else {
+                None
+            };
 
-                    let step_down_ray = Ray::new(step_check_origin, Vec3::new(0.0, -1.0, 0.0));
-
-                    let mut step_dist = f32::MAX;
-                    let mut step_normal = Vec3::ZERO;
-
-                    for (_col_ent, col_trans, col) in &near_colliders {
-                        if let Some((d, n)) =
-                            Raycast::ray_shape_within(&step_down_ray, &col.shape, col_trans, kcc.step_height + STEP_SKIN)
-                        {
-                            if d < step_dist
-                                && blocks(col, col_trans, d, n, 0.0, vel.linear, true, dropping)
-                            {
-                                step_dist = d;
-                                step_normal = n;
-                            }
-                        }
-                    }
-
-                    // If we found a surface within step_height bounds and it's walkable
-                    if step_dist <= kcc.step_height + STEP_SKIN {
-                        let step_slope_angle = step_normal.angle_between(Vec3::new(0.0, 1.0, 0.0));
-                        if step_slope_angle <= kcc.max_slope_angle {
-                            // Calculate new Y position
-                            let target_y = step_check_origin.y - step_dist + height * 0.5 - radius;
-                            // Only step up, don't step down (handled by gravity/ground snapping)
-                            if target_y > current_pos.y + 0.01 {
-                                current_pos.y = target_y + 0.01; // Tiny lift to avoid precision issues
-                                current_pos += move_dir * (move_dist * min_t).max(0.0); // Move forward to the ledge
-                                stepped = true;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if stepped {
+            if let Some(raised) = climbed {
+                current_pos = raised;
                 // We climbed onto the ledge and already advanced up to the wall
                 // base (`move_dist * min_t`). Reduce `final_delta` to the *remaining*
                 // movement so the next sweep iteration carries us forward onto the
@@ -487,9 +468,133 @@ fn step_character(
             break;
         }
     }
+    current_pos
+}
 
-    transform.position = current_pos;
-    record_triggers(kcc, transform, collider, &near_triggers);
+/// Sweeps the character's three heights (feet, middle, head) along `move_dir` for `move_dist`:
+/// `(hit, fraction of the move before the nearest hit, its normal, its body)`.
+#[allow(clippy::too_many_arguments)]
+fn sweep_walls(
+    current_pos: Vec3,
+    move_dir: Vec3,
+    move_dist: f32,
+    near_colliders: &[&(BodyHandle, Transform, Collider)],
+    height: f32,
+    radius: f32,
+    vel: &Velocity,
+    dropping: bool,
+) -> (bool, f32, Vec3, Option<BodyHandle>) {
+    let mut hit = false;
+    let mut closest_n = Vec3::ZERO;
+    let mut closest_ent = None;
+    let mut min_t = 1.0;
+
+    let sweep_heights = [-height * 0.5 + radius, 0.0, height * 0.5 - radius];
+
+    for (i, h_offset) in sweep_heights.into_iter().enumerate() {
+        let mut local_min_t = 1.0;
+        let mut local_closest_n = Vec3::ZERO;
+        let mut local_closest_ent = None;
+        let origin = current_pos + Vec3::new(0.0, h_offset, 0.0);
+        let move_ray = Ray::new(origin, move_dir);
+
+        // A hit further than this step's move past the character's surface stops nothing.
+        let reach = move_dist + radius + 0.05;
+        for (col_ent, col_trans, col) in near_colliders {
+            if let Some((d, n)) = Raycast::ray_shape_within(&move_ray, &col.shape, col_trans, reach) {
+                // The character's surface sits `radius` ahead of its center. Clamp
+                // the surface distance to 0 so a contact or slightly-penetrating hit
+                // (`d - radius <= 0`, common exactly at contact where FP rounding
+                // makes it a hair negative) still BLOCKS (min_t → 0) instead of being
+                // rejected by an `actual_d >= 0` test — which let the body walk
+                // straight through the wall.
+                if d >= 0.0
+                    && blocks(col, col_trans, d, n, radius, vel.linear, i == 0, dropping)
+                {
+                    let actual_d = (d - radius).max(0.0);
+                    if actual_d < move_dist * local_min_t {
+                        local_min_t = actual_d / move_dist;
+                        local_closest_n = n;
+                        local_closest_ent = Some(*col_ent);
+                    }
+                }
+            }
+        }
+        if local_min_t < min_t {
+            min_t = local_min_t;
+            closest_n = local_closest_n;
+            closest_ent = local_closest_ent;
+            hit = true;
+        }
+    }
+    (hit, min_t, closest_n, closest_ent)
+}
+
+/// Step climbing, for a grounded character that hit a wall: the ledge's top found by a ray cast
+/// down from `step_height` above the feet, just inside the wall. `Some(where it stands)` when the
+/// ledge is low enough, walkable and higher than the feet.
+#[allow(clippy::too_many_arguments)]
+fn try_step_up(
+    kcc: &CharacterController,
+    mut current_pos: Vec3,
+    move_dir: Vec3,
+    move_dist: f32,
+    min_t: f32,
+    closest_n: Vec3,
+    near_colliders: &[&(BodyHandle, Transform, Collider)],
+    height: f32,
+    radius: f32,
+    vel: &Velocity,
+    dropping: bool,
+) -> Option<Vec3> {
+    // Determine if the hit normal represents a wall
+    let wall_angle = closest_n.angle_between(Vec3::new(0.0, 1.0, 0.0));
+    if wall_angle > kcc.max_slope_angle {
+        // Cast down from `step_height` above the bottom of the collider, slightly
+        // forward into the obstacle: a ledge is a step only when its top is between
+        // the feet and that height. This was cast from `step_height` above the
+        // bottom sphere's *centre* and accepted twice that distance, so a capsule of
+        // radius 0.35 climbed anything up to ~0.65 m with `step_height` 0.3 — a
+        // bridge's railing among them (`dunya`, 2026-11-16).
+        const STEP_SKIN: f32 = 0.01;
+        let step_check_origin = current_pos
+            + Vec3::new(0.0, -height * 0.5 + kcc.step_height + STEP_SKIN, 0.0)
+            + move_dir * (radius + 0.05); // Push forward into the wall
+
+        let step_down_ray = Ray::new(step_check_origin, Vec3::new(0.0, -1.0, 0.0));
+
+        let mut step_dist = f32::MAX;
+        let mut step_normal = Vec3::ZERO;
+
+        for (_col_ent, col_trans, col) in near_colliders {
+            if let Some((d, n)) =
+                Raycast::ray_shape_within(&step_down_ray, &col.shape, col_trans, kcc.step_height + STEP_SKIN)
+            {
+                if d < step_dist
+                    && blocks(col, col_trans, d, n, 0.0, vel.linear, true, dropping)
+                {
+                    step_dist = d;
+                    step_normal = n;
+                }
+            }
+        }
+
+        // If we found a surface within step_height bounds and it's walkable
+        if step_dist <= kcc.step_height + STEP_SKIN {
+            let step_slope_angle = step_normal.angle_between(Vec3::new(0.0, 1.0, 0.0));
+            if step_slope_angle <= kcc.max_slope_angle {
+                // Calculate new Y position
+                let target_y = step_check_origin.y - step_dist + height * 0.5 - radius;
+                // Only step up, don't step down (handled by gravity/ground snapping)
+                if target_y > current_pos.y + 0.01 {
+                    current_pos.y = target_y + 0.01; // Tiny lift to avoid precision issues
+                    current_pos += move_dir * (move_dist * min_t).max(0.0); // Move forward to the ledge
+                    return Some(current_pos);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Writes [`CharacterController::triggers`]: the trigger colliders the character's collider
