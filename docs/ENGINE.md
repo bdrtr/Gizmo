@@ -3844,10 +3844,11 @@ Cihazsız yarısı ayrı: komutların **tanınması** — asıl kırık olan yar
 birim testinde.
 
 **Ve aynı soru bütün komut vokabülerine soruldu — LİSTE BU (2026-08-18).** `ScriptCommand`'ın
-**45 varyantı** var; `flush_commands` bunların **25'ini** kendi içinde uyguluyor, **20'si** geri
+**46 varyantı** var; `flush_commands` bunların **26'sını** kendi içinde uyguluyor, **20'si** geri
 dönüyordu ve hiçbirine bakan yoktu. `PlayLoop` şimdi sekizini karşılıyor. *(2026-11-04: `yilan`
 üç varyant ekledi — kimliği ayrılmış doğurma `SpawnReserved` ve `SetMesh` betik katmanında,
-`SetColor` host'ta.)* *(Sayılar 2026-08-19'da
+`SetColor` host'ta. 2026-11-22: `kirici` bir tane daha — collider malzemesi `SetColliderMaterial`,
+betik katmanında.)* *(Sayılar 2026-08-19'da
 düzeltildi: `SetFighterHealth` aynı gün eklendi ve iki yerde yazılı sayıyı bayatlattı — §8'in
 "düzyazıya yazılan sayı, kodun geride bıraktığı sayıdır" kuralının bu oturumdaki örneği. Ölçüm:
 enum gövdesindeki varyant adları sayıldı, 43.)*

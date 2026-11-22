@@ -58,6 +58,17 @@ pub enum ScriptCommand {
         /// Radius in metres, clamped away from zero and non-finite values.
         radius: f32,
     },
+    /// Set the contact material of an entity's collider: friction (static = dynamic) and
+    /// restitution. Applied after any collider command queued before it, so a script can add a
+    /// collider and give it a material on the same frame.
+    SetColliderMaterial {
+        /// Entity whose collider it is.
+        id: u32,
+        /// Friction coefficient; below 0 is clamped to 0.
+        friction: f32,
+        /// Restitution, clamped to 0 (no bounce) to 1 (a perfect bounce).
+        restitution: f32,
+    },
 
     // ── Vehicle ──────────────────────────────────────────────────────────────
     /// Set a vehicle's engine force. Negative drives it backwards.
@@ -263,6 +274,7 @@ impl ScriptCommand {
                 hx.is_finite() && hy.is_finite() && hz.is_finite()
             }
             AddSphereCollider { radius, .. } => radius.is_finite(),
+            SetColliderMaterial { friction, restitution, .. } => friction.is_finite() && restitution.is_finite(),
             SetVehicleEngineForce(_, f) | SetVehicleSteering(_, f) | SetVehicleBrake(_, f) => {
                 f.is_finite()
             }

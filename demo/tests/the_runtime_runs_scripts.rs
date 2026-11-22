@@ -645,3 +645,54 @@ end
         assert_eq!(enters, Some(ScriptValue::Num(1.0)), "at {fps} fps the script counted the one entry {enters:?} times");
     }
 }
+
+/// A material a script gives a collider the physics world already has reaches the solver: a ball
+/// that has been falling for a while is made perfectly bouncy, on a floor made bouncy too, and
+/// comes back up near the height it fell from. Before `physics.set_material` a script had no way
+/// to set friction or restitution at all — they left `add_rigidbody` for the collider, and no
+/// collider call took them.
+#[test]
+fn a_material_set_from_a_script_reaches_a_collider_already_simulated() {
+    use gizmo::physics::{Collider, RigidBody, Velocity};
+    use gizmo::scripting::ScriptEngine;
+    let bounce = |bouncy: bool| -> f32 {
+        let mut world = World::new();
+        world.insert_resource(gizmo::physics::world::PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+        let floor = world.spawn_bundle((Transform::new(Vec3::new(0.0, -0.5, 0.0)), Collider::box_collider(Vec3::new(5.0, 0.5, 5.0))));
+        let ball = world.spawn_bundle((Transform::new(Vec3::new(0.0, 3.0, 0.0)), RigidBody::new(1.0, true), Velocity::default(), Collider::sphere(0.25)));
+        let mut play = PlayLoop::new();
+        let input = gizmo::core::input::Input::default();
+        // A while in the air first, so the physics world has both colliders before the script runs.
+        for _ in 0..10 {
+            play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+        }
+        if bouncy {
+            let mut engine = ScriptEngine::new().expect("Lua");
+            let src = format!(
+                "done = false\nfunction on_update(dt)\n if not done then physics.set_material({}, 0.0, 1.0) physics.set_material({}, 0.0, 1.0) done = true end\nend\n",
+                ball.id(),
+                floor.id()
+            );
+            engine.load_script_source("bouncy.lua", src).expect("loads");
+            world.insert_resource(engine);
+        }
+        // The fall from 3 m takes ~0.75 s; the highest point after the first bounce.
+        let mut landed = false;
+        let mut peak = f32::MIN;
+        for _ in 0..180 {
+            play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+            let y = position_of(&world, ball).y;
+            if y < 0.4 {
+                landed = true;
+            }
+            if landed {
+                peak = peak.max(y);
+            }
+        }
+        assert!(landed, "the ball reached the floor");
+        peak
+    };
+    let (plain, bouncy) = (bounce(false), bounce(true));
+    assert!(bouncy > 2.0, "a perfectly bouncy ball comes back up near its 3 m: {bouncy:.2} m (the default material: {plain:.2} m)");
+    assert!(plain < 1.0, "and the default material does not: {plain:.2} m");
+}

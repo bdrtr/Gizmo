@@ -88,6 +88,20 @@ pub fn register_physics_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resu
         )?;
     }
 
+    // Friction and restitution live on the collider's material. When they left `add_rigidbody`
+    // (they are not the body's), nothing in Lua took them over: every collider a script made
+    // bounced at the default 0.3 and could not be made bouncier, nor slippery.
+    {
+        let cq = command_queue.clone();
+        physics_table.raw_set(
+            "set_material",
+            lua.create_function(move |_, (id, friction, restitution): (u32, f32, f32)| {
+                cq.push(ScriptCommand::SetColliderMaterial { id, friction, restitution });
+                Ok(())
+            })?,
+        )?;
+    }
+
     {
         let cq = command_queue.clone();
         physics_table.raw_set(

@@ -854,6 +854,18 @@ impl ScriptEngine {
             ScriptCommand::AddSphereCollider { id, radius } => {
                 add_to(world, id, "AddSphereCollider", gizmo_physics_core::Collider::sphere(radius));
             }
+            ScriptCommand::SetColliderMaterial { id, friction, restitution } => {
+                edit::<gizmo_physics_core::Collider>(world, id, "SetColliderMaterial", |c| {
+                    if friction.is_finite() {
+                        let f = friction.max(0.0);
+                        c.material.static_friction = f;
+                        c.material.dynamic_friction = f;
+                    }
+                    if restitution.is_finite() {
+                        c.material.restitution = restitution.clamp(0.0, 1.0);
+                    }
+                });
+            }
 
             // The three vehicle commands used to be matched here with empty bodies: Lua could
             // call them, they queued, and they vanished without a word. Applying them properly
@@ -1675,6 +1687,37 @@ mod tests {
             ColliderShape::Sphere(s) => assert!((s.radius - 4.0).abs() < 1e-6),
             other => panic!("beklenen Sphere, gelen {other:?}"),
         }
+    }
+
+    /// `physics.set_material` reaches the collider a script added on the same frame: the commands
+    /// apply in order. Out-of-range values are clamped; a NaN drops the whole command.
+    #[test]
+    fn a_script_sets_the_material_of_the_collider_it_just_added() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let mut world = World::new();
+        let e = world.spawn();
+        let other = world.spawn();
+        let src = format!(
+            "function on_update(dt)\n physics.add_sphere_collider({a}, 0.5)\n physics.set_material({a}, 0.0, 1.0)\n physics.add_box_collider({b}, 1, 1, 1)\n physics.set_material({b}, -2.0, 0/0)\nend\n",
+            a = e.id(),
+            b = other.id()
+        );
+        engine.load_script_source("m.lua", src).unwrap();
+        engine.update(&world, &Input::default(), 0.016).unwrap();
+        engine.flush_commands(&mut world, 0.016);
+        let cols = world.query::<&Collider>();
+        let ball = cols.get(e).expect("the sphere").material;
+        assert_eq!((ball.static_friction, ball.dynamic_friction, ball.restitution), (0.0, 0.0, 1.0));
+        let block = cols.get(other).expect("the box").material;
+        let default = Collider::sphere(1.0).material.restitution;
+        assert_eq!(block.restitution, default, "a NaN drops the command: the box keeps its default material");
+        let mut clamp = ScriptEngine::new().unwrap();
+        clamp.load_script_source("c.lua", format!("function on_update(dt) physics.set_material({}, -2.0, 3.0) end", other.id())).unwrap();
+        drop(cols);
+        clamp.update(&world, &Input::default(), 0.016).unwrap();
+        clamp.flush_commands(&mut world, 0.016);
+        let block = world.query::<&Collider>().get(other).expect("the box").material;
+        assert_eq!((block.dynamic_friction, block.restitution), (0.0, 1.0), "clamped into range");
     }
 
     /// SpawnEntity: creates a named entity with a Transform and leaves a record in the log
