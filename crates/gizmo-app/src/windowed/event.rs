@@ -186,9 +186,9 @@ impl<State: 'static> App<State> {
     pub(super) fn handle_event(&mut self, event: Event<()>, current_window: &ActiveEventLoop) {
         // Reconstruct what the old `move` closure captured. `editor`/`state` are
         // taken out of `self` so the `editor.run(|ctx| … &mut self.world …)`
-        // closure can borrow `self`'s other fields disjointly; they (and the
-        // frame timers) are restored at every exit — including the two early
-        // `return`s in the redraw path.
+        // closure can borrow `self`'s other fields disjointly; they and the frame
+        // timers are put back at the end. The window's events are `on_window_event`,
+        // and a frame is `redraw`.
         let window = match self.window.clone() {
             Some(w) => w,
             None => return,
@@ -245,431 +245,17 @@ impl<State: 'static> App<State> {
                         ref event,
                         window_id,
                     } if window_id == window.id() => {
-                        match event {
-                            WindowEvent::CloseRequested => {
-                                tracing::info!("[App] close requested; shutting down");
-                                self.shut_down(current_window);
-                            }
-                            WindowEvent::Resized(physical_size) => {
-                                // resize() web'de boyutu 640x360'a caplayabilir; WindowInfo'yu
-                                // ham fiziksel boyuttan DEĞİL, renderer'ın gerçek (caplenmiş)
-                                // boyutundan besle ki kamera aspect'i / picking math'i
-                                // surface'le tutarlı kalsın.
-                                let effective = {
-                                    let r = self.renderer_mut().expect("a window event comes after initialization");
-                                    r.resize(*physical_size);
-                                    r.size
-                                };
-                                let mut win_info = self
-                                    .world
-                                    .get_resource_mut_or_default::<gizmo_core::window::WindowInfo>(
-                                    );
-                                win_info.width = effective.width as f32;
-                                win_info.height = effective.height as f32;
-                                tracing::debug!(
-                                    physical_width = physical_size.width,
-                                    physical_height = physical_size.height,
-                                    effective_width = effective.width,
-                                    effective_height = effective.height,
-                                    "[App] window resized"
-                                );
-                            }
-                            WindowEvent::KeyboardInput {
-                                event: kb_event, ..
-                            } => {
-                                let codes_to_press = Self::key_codes_for(kb_event);
-                                // The text the press wrote, as the layout produced it — for name
-                                // fields and the like (`Input::typed_text`). Not while egui owns
-                                // the keyboard, for the same reason as the key presses below.
-                                if kb_event.state == winit::event::ElementState::Pressed && !consumes_input {
-                                    if let Some(text) = kb_event.text.as_ref() {
-                                        self.input.on_text(text);
-                                    }
-                                }
-
-                                for code in codes_to_press {
-                                    if kb_event.state == winit::event::ElementState::Pressed {
-                                        // egui bir metin alanına odaklıyken (consumes_input),
-                                        // tuş BASIŞINI motor Input'una besleme — yoksa editör
-                                        // kısayolları (Delete/Ctrl+*/W-E-R) metin yazarken
-                                        // tetiklenir; Delete seçili entity'leri siler (GC sonrası
-                                        // kalıcı veri kaybı). BIRAKMA her zaman işlenir: odak
-                                        // metin kutusuna geçtikten sonra bırakılan bir tuş aksi
-                                        // halde "sonsuza dek basılı" kalırdı.
-                                        if !consumes_input {
-                                            self.input.on_key_pressed(code);
-                                        }
-                                    } else {
-                                        self.input.on_key_released(code);
-                                    }
-                                }
-                            }
-                            WindowEvent::MouseInput {
-                                state: m_state,
-                                button,
-                                ..
-                            } => {
-                                let btn_code = match button {
-                                    winit::event::MouseButton::Left => {
-                                        gizmo_core::input::mouse::LEFT
-                                    }
-                                    winit::event::MouseButton::Right => {
-                                        gizmo_core::input::mouse::RIGHT
-                                    }
-                                    winit::event::MouseButton::Middle => {
-                                        gizmo_core::input::mouse::MIDDLE
-                                    }
-                                    _ => u32::MAX,
-                                };
-                                if btn_code != u32::MAX {
-                                    if *m_state == winit::event::ElementState::Pressed {
-                                        self.input.on_mouse_button_pressed(btn_code);
-                                    } else {
-                                        self.input.on_mouse_button_released(btn_code);
-                                    }
-                                }
-                            }
-                            WindowEvent::CursorMoved { position, .. } => {
-                                let (sx, sy) = pointer_scale(&self.world, &window);
-                                let position = winit::dpi::PhysicalPosition::new(position.x * sx as f64, position.y * sy as f64);
-                                // Desktop: the raw look delta comes from
-                                // DeviceEvent::MouseMotion, so CursorMoved only tracks
-                                // absolute position — accumulating delta here too
-                                // DOUBLE-counted mouse-look (2× sensitivity). wasm has
-                                // no MouseMotion, so there CursorMoved is also the delta
-                                // source (`on_mouse_moved` accumulates it).
-                                #[cfg(not(target_arch = "wasm32"))]
-                                self.input
-                                    .set_mouse_position(position.x as f32, position.y as f32);
-                                #[cfg(target_arch = "wasm32")]
-                                self.input
-                                    .on_mouse_moved(position.x as f32, position.y as f32);
-                            }
-                            WindowEvent::MouseWheel { delta, .. } => {
-                                // Scroll was documented public API (Input::mouse_scroll)
-                                // but never wired — no MouseWheel arm existed, so it
-                                // always read 0.0.
-                                let scroll = match delta {
-                                    winit::event::MouseScrollDelta::LineDelta(_, y) => *y,
-                                    winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
-                                };
-                                self.input.on_mouse_scroll(scroll);
-                            }
-                            // Fingers. Dropped until 2026-11-02, so on a phone (the web build
-                            // runs on one) or a touchscreen nothing could be pressed: the first
-                            // finger now drives the mouse (`Input::on_touch`), every finger is in
-                            // `Input::touches`.
-                            WindowEvent::Touch(touch) => {
-                                use gizmo_core::input::TouchPhase;
-                                let phase = match touch.phase {
-                                    winit::event::TouchPhase::Started => TouchPhase::Started,
-                                    winit::event::TouchPhase::Moved => TouchPhase::Moved,
-                                    winit::event::TouchPhase::Ended => TouchPhase::Ended,
-                                    winit::event::TouchPhase::Cancelled => TouchPhase::Cancelled,
-                                };
-                                let (sx, sy) = pointer_scale(&self.world, &window);
-                                self.input.on_touch(
-                                    touch.id,
-                                    phase,
-                                    touch.location.x as f32 * sx,
-                                    touch.location.y as f32 * sy,
-                                );
-                            }
-                            // Odak kaybında (Alt-Tab / tarayıcı sekme değişimi) basılı
-                            // tuşları bırak — yoksa OS key-up göndermez ve tuşlar
-                            // sonsuza dek "basılı" kalıp kamerayı kaydırır.
-                            WindowEvent::Focused(false) => {
-                                self.input.release_all();
-                            }
-                            // Gamepads are read straight from the device, so unlike the
-                            // keyboard they never stopped sending while focus was away and
-                            // never announce what is still held on the way back. `release_all`
-                            // dropped that state; this is what restores it, and without it a
-                            // player holding the throttle across an Alt-Tab comes back to a
-                            // dead pad until they let go.
-                            WindowEvent::Focused(true) => {
-                                #[cfg(feature = "gamepad")]
-                                if let Some(backend) = self.gamepad_backend.as_mut() {
-                                    backend.resync(&mut self.input);
-                                }
-                                // Android shows the bars again when the app comes back (a dialog,
-                                // the recent-apps screen); the mode is applied again next frame.
-                                #[cfg(target_os = "android")]
-                                {
-                                    self.applied_mode = None;
-                                }
-                            }
-                            _ => {}
-                        }
+                        self.on_window_event(event, &window, current_window, consumes_input);
                         if let WindowEvent::RedrawRequested = event {
-                            // When this frame began, and how long the loop left before it since the
-                            // last one ended — the pacing delay, and whatever events ran in it.
-                            let frame_began = super::FrameInstant::now();
-                            let gap = self
-                                .frame_ended_at
-                                .map(|ended| frame_began.duration_since(ended))
-                                .unwrap_or_default();
-                            sync_display(&mut self.world, &window);
-                            // Per-frame root span; the physics/update/render sub-spans
-                            // (from the ECS schedule and physics pipeline) nest under it.
-                            let _frame_span = tracing::trace_span!("frame").entered();
-                            let now = super::FrameInstant::now();
-                            let mut dt = now.duration_since(last_frame_time).as_secs_f32();
-                            dt = dt.min(0.05); // Güvenlik çemberi: Frame takılırsa 50ms'den fazla zıplamayacak, yerçekiminden düşme engellenecek.
-                            last_frame_time = now;
-                            tracing::trace!(dt, "[frame] begin");
-
-                            // Physical controllers, before the replay logic below: during a
-                            // recording this is what gets recorded, and during playback the
-                            // recorded input overwrites it — a replay must not be steerable.
-                            #[cfg(feature = "gamepad")]
-                            {
-                                if self.gamepad_backend.is_none() {
-                                    self.gamepad_backend =
-                                        Some(crate::gamepad::GamepadBackend::new(&mut self.input));
-                                }
-                                if let Some(backend) = self.gamepad_backend.as_mut() {
-                                    backend.pump(&mut self.input);
-                                }
-                            }
-
-                            // Playback / Record mantigi
-                            self.apply_playback_or_record(&mut dt, current_window);
-
-                            light_time += dt;
-
-                            // Update — run one egui frame (overlay UI + dev console).
-                            #[cfg(feature = "egui")]
-                            let full_output = editor.run(&window, |ctx| {
-                                if let Some(ui_hk) = self.ui_fn.as_mut() {
-                                    ui_hk(&mut self.world, &mut state, ctx);
-                                }
-
-                                // Render Global Dev Console on top of everything
-                                dev_console::ui_dev_console(&mut self.world, ctx, &self.input);
-                            });
-
-                            // Editor component and scene save/load requests (reads/mutates
-                            // EditorState). The viewport render targets are the sync point's: they
-                            // need the renderer and the painter.
-                            #[cfg(feature = "editor")]
-                            {
-                                crate::editor_runtime::process_component_requests(&mut self.world);
-                                crate::editor_runtime::process_scene_requests(&mut self.world);
-                            }
-
-                            // ECS Sistemlerini Çalıştırmadan önce DI için Core Resource'ları Güncelle
-                            self.world.insert_resource(self.input.clone());
-                            // `sim_dt` = Time'ın `time_scale` ile ölçeklenmiş (ve clamp'lenmiş)
-                            // dt'si → fiziği/ECS'i besler ki `set_time_scale(0.0)` gerçekten
-                            // DURDURSUN, `0.5` ağır çekim yapsın. `time_scale == 1.0` (varsayılan)
-                            // iken `min(dt, max_dt) == dt` olduğundan davranış bit-aynı. Kullanıcı
-                            // update hook'u ham `dt` alır (kamera/UI duraklamada bile akıcı kalsın).
-                            let sim_dt = crate::frame::advance_time(&mut self.world, dt);
-
-                            // ═══ Fixed Timestep Fizik Döngüsü ═══
-                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
-                                profiler.begin_scope("physics");
-                            }
-                            // Fixed-timestep simulation, then the once-per-frame update.
-                            //
-                            // The accumulator drains into `self.schedule` at a constant dt
-                            // (0..N times, frame-rate independent), and `self.update_schedule`
-                            // then runs EXACTLY ONCE with the real frame delta. That second
-                            // part is the fix for the defect this loop used to have: with only
-                            // the fixed schedule, a frame that did not fill the accumulator ran
-                            // no systems at all — and since `Input` is captured just above and
-                            // cleared at the bottom of this same frame, key edges and mouse
-                            // deltas on those frames were written and discarded unobserved.
-                            // With vsync off by default, that was most frames.
-                            //
-                            // See `crate::frame` for the sequencing and its regression tests.
-                            let steps = crate::frame::run_fixed_and_update(
-                                &mut self.world,
-                                &mut self.schedule,
-                                &mut self.update_schedule,
-                                sim_dt,
-                                dt,
+                            self.redraw(
+                                &window,
+                                current_window,
+                                #[cfg(feature = "egui")]
+                                &mut editor,
+                                &mut state,
+                                &mut last_frame_time,
+                                &mut light_time,
                             );
-                            let _ = steps;
-
-                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
-                                profiler.end_scope("physics");
-                            }
-
-                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
-                                profiler.begin_scope("update");
-                            }
-
-                            // Kullanıcı update hook'u (render dt ile — kamera, UI, vb.)
-                            for update_hk in self.update_fns.iter_mut() {
-                                update_hk(&mut self.world, &mut state, dt, &self.input);
-                            }
-
-                            // Update sonrası olası ertelenmiş komutları (CommandQueue) hemen işle
-                            self.world.apply_commands();
-
-                            // Asset Loading System (Lazy Load)
-                            self.run_asset_loading();
-
-                            // The game asked to quit: leave the way closing the window does.
-                            if self.world.get_resource::<gizmo_core::window::AppExit>().is_some() {
-                                tracing::info!("[App] AppExit requested; shutting down");
-                                self.shut_down(current_window);
-                            }
-
-                            // The cursor behaviour the game asked for this frame.
-                            self.apply_cursor_options(&window);
-                            self.apply_window_mode(&window);
-
-
-                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
-                                profiler.end_scope("update");
-                            }
-
-                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
-                                profiler.begin_scope("render");
-                            }
-
-                            // ═══ The sync point ═══
-                            // The game's update is done, and the draw's side comes back — at once
-                            // on the loop's thread, or when the render thread has finished the last
-                            // frame. Everything the frame does with the world and the renderer
-                            // happens here, before the swapchain is asked for an image, so it
-                            // happens on a frame that turns out not to be drawn, too.
-                            // What the last frame's draw said — a screenshot asking to exit after
-                            // it — is acted on here, where the loop is.
-                            let synced_at = super::FrameInstant::now();
-                            let (report, threaded) = {
-                                let gpu = self.gpu.as_mut().expect("a frame comes after initialization");
-                                gpu.sync();
-                                (gpu.take_report(), gpu.is_threaded())
-                            };
-                            if report.exit {
-                                self.shut_down(current_window);
-                            }
-                            // The last frame's draw, timed on whichever thread ran it: with a render
-                            // thread it ran outside every scope of this one, and the `render` scope
-                            // is only this sync point.
-                            if !report.busy.is_zero() {
-                                if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
-                                    profiler.record_scope("draw", report.busy);
-                                }
-                            }
-                            // Pacing (see `pacing`): the render thread was busy `report.busy` with
-                            // the last frame; the loop was busy for the time since it handed that
-                            // frame over, less the gap it left on purpose. What the draw has over
-                            // the loop is how much later the next update can start.
-                            let pace = match self.handed_at.take() {
-                                Some(handed) if threaded => {
-                                    let loop_busy = synced_at.duration_since(handed).saturating_sub(gap);
-                                    self.pacing.record(report.busy, loop_busy)
-                                }
-                                _ => std::time::Duration::ZERO,
-                            };
-                            let gpu = self.gpu.as_mut().expect("a frame comes after initialization");
-                            let side = gpu.sync();
-                            // A stale swapchain the last draw found: configured here, where nothing
-                            // else submits — see `acquire_backbuffer`.
-                            if report.reconfigure {
-                                side.renderer.reconfigure_surface();
-                            }
-                            #[cfg(feature = "editor")]
-                            crate::editor_runtime::sync_render_targets(&mut self.world, &side.renderer, &mut side.painter);
-                            if let Some(stage) = side.stage.as_mut() {
-                                stage.prepare(&mut self.world, &mut side.renderer);
-                            }
-                            #[cfg(feature = "egui")]
-                            let ui_frame = editor.end_frame(&window, full_output);
-
-                            // ═══ The draw ═══
-                            if side.stage.is_some() {
-                                // From what the stage kept, with no world: on the render thread
-                                // when there is one, while the loop goes on to the next update.
-                                gpu.draw(Box::new(move |side: &mut DrawSide| {
-                                    let DrawSide {
-                                        renderer,
-                                        stage,
-                                        #[cfg(feature = "egui")]
-                                        painter,
-                                    } = side;
-                                    let stage = stage.as_mut().expect("a stage frame is drawn by the stage");
-                                    draw_and_present(
-                                        renderer,
-                                        #[cfg(feature = "egui")]
-                                        painter,
-                                        #[cfg(feature = "egui")]
-                                        ui_frame,
-                                        |encoder, view, renderer| stage.draw(encoder, view, renderer),
-                                    )
-                                }));
-                                self.handed_at = Some(super::FrameInstant::now());
-                            } else {
-                                // A hook handed the game world in the middle of the draw: drawn
-                                // here, at the sync point.
-                                let render = &mut self.render;
-                                let world = &mut self.world;
-                                let report = draw_and_present(
-                                    &mut side.renderer,
-                                    #[cfg(feature = "egui")]
-                                    &mut side.painter,
-                                    #[cfg(feature = "egui")]
-                                    ui_frame,
-                                    |encoder, view, renderer| match render {
-                                        // Kullaniciya CommandEncoder verip cizdiriyoruz!
-                                        RenderHook::Raw(render_hk) => {
-                                            render_hk(world, &state, encoder, view, renderer, light_time)
-                                        }
-                                        RenderHook::Simple(s_render) => {
-                                            let mut ctx = RenderContext::new(encoder, view, renderer, light_time);
-                                            s_render(world, &state, &mut ctx);
-                                        }
-                                        RenderHook::Stage(_) => unreachable!("a stage moves to the draw's side at start"),
-                                        RenderHook::None => {
-                                            // Hiçbir render hook yok → 3B sahne çizilmez (klasik
-                                            // "siyah ekran" tuzağı: egui HUD görünür ama sahne
-                                            // siyah). Bir kez uyar.
-                                            use std::sync::atomic::{AtomicBool, Ordering};
-                                            static WARNED: AtomicBool = AtomicBool::new(false);
-                                            if !WARNED.swap(true, Ordering::Relaxed) {
-                                                tracing::warn!(
-                                                    "Render hook ayarlı DEĞİL — 3B sahne çizilmeyecek \
-                                                     (ekran siyah kalır). `.with_scene_render()` (manuel \
-                                                     App), `.set_render(..)` veya `.with_simple_scene(..)` \
-                                                     kullan."
-                                                );
-                                            }
-                                        }
-                                    },
-                                );
-                                if report.exit {
-                                    self.shut_down(current_window);
-                                }
-                            }
-
-                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
-                                profiler.end_scope("render");
-                            }
-
-                            // Rumble the frame's systems asked for, handed to the driver here —
-                            // AFTER they have run, because that is when the requests exist, and
-                            // before `begin_frame`, which is where a request made this frame would
-                            // otherwise sit unseen until the next one.
-                            #[cfg(feature = "gamepad")]
-                            if let Some(backend) = self.gamepad_backend.as_mut() {
-                                backend.apply_rumble(&mut self.input);
-                            }
-
-                            // İşlemlerin bitiminde frame-özel input girdilerini (fare delta vs.) temizle
-                            self.input.begin_frame();
-
-                            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
-                                profiler.end_frame();
-                            }
-
-                            let ended = super::FrameInstant::now();
-                            self.frame_ended_at = Some(ended);
-                            self.next_frame_at = (!pace.is_zero()).then(|| ended + pace);
                         }
                     }
                     Event::AboutToWait => {
@@ -704,6 +290,492 @@ impl<State: 'static> App<State> {
             self.app_state = Some(state);
             self.last_frame_time = Some(last_frame_time);
             self.light_time = light_time;
+    }
+
+    /// One window event of the frame's window, other than the redraw: closing, a resize, the
+    /// pointer, the wheel, a touch, the focus.
+    fn on_window_event(
+        &mut self,
+        event: &WindowEvent,
+        window: &Arc<winit::window::Window>,
+        current_window: &ActiveEventLoop,
+        // Whether the editor's UI took this event (`EguiContext::handle_event`).
+        consumes_input: bool,
+    ) {
+        match event {
+            WindowEvent::CloseRequested => {
+                tracing::info!("[App] close requested; shutting down");
+                self.shut_down(current_window);
+            }
+            WindowEvent::Resized(physical_size) => {
+                // resize() web'de boyutu 640x360'a caplayabilir; WindowInfo'yu
+                // ham fiziksel boyuttan DEĞİL, renderer'ın gerçek (caplenmiş)
+                // boyutundan besle ki kamera aspect'i / picking math'i
+                // surface'le tutarlı kalsın.
+                let effective = {
+                    let r = self.renderer_mut().expect("a window event comes after initialization");
+                    r.resize(*physical_size);
+                    r.size
+                };
+                let mut win_info = self
+                    .world
+                    .get_resource_mut_or_default::<gizmo_core::window::WindowInfo>(
+                    );
+                win_info.width = effective.width as f32;
+                win_info.height = effective.height as f32;
+                tracing::debug!(
+                    physical_width = physical_size.width,
+                    physical_height = physical_size.height,
+                    effective_width = effective.width,
+                    effective_height = effective.height,
+                    "[App] window resized"
+                );
+            }
+            WindowEvent::KeyboardInput {
+                event: kb_event, ..
+            } => {
+                let codes_to_press = Self::key_codes_for(kb_event);
+                // The text the press wrote, as the layout produced it — for name
+                // fields and the like (`Input::typed_text`). Not while egui owns
+                // the keyboard, for the same reason as the key presses below.
+                if kb_event.state == winit::event::ElementState::Pressed && !consumes_input {
+                    if let Some(text) = kb_event.text.as_ref() {
+                        self.input.on_text(text);
+                    }
+                }
+
+                for code in codes_to_press {
+                    if kb_event.state == winit::event::ElementState::Pressed {
+                        // egui bir metin alanına odaklıyken (consumes_input),
+                        // tuş BASIŞINI motor Input'una besleme — yoksa editör
+                        // kısayolları (Delete/Ctrl+*/W-E-R) metin yazarken
+                        // tetiklenir; Delete seçili entity'leri siler (GC sonrası
+                        // kalıcı veri kaybı). BIRAKMA her zaman işlenir: odak
+                        // metin kutusuna geçtikten sonra bırakılan bir tuş aksi
+                        // halde "sonsuza dek basılı" kalırdı.
+                        if !consumes_input {
+                            self.input.on_key_pressed(code);
+                        }
+                    } else {
+                        self.input.on_key_released(code);
+                    }
+                }
+            }
+            WindowEvent::MouseInput {
+                state: m_state,
+                button,
+                ..
+            } => {
+                let btn_code = match button {
+                    winit::event::MouseButton::Left => {
+                        gizmo_core::input::mouse::LEFT
+                    }
+                    winit::event::MouseButton::Right => {
+                        gizmo_core::input::mouse::RIGHT
+                    }
+                    winit::event::MouseButton::Middle => {
+                        gizmo_core::input::mouse::MIDDLE
+                    }
+                    _ => u32::MAX,
+                };
+                if btn_code != u32::MAX {
+                    if *m_state == winit::event::ElementState::Pressed {
+                        self.input.on_mouse_button_pressed(btn_code);
+                    } else {
+                        self.input.on_mouse_button_released(btn_code);
+                    }
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let (sx, sy) = pointer_scale(&self.world, window);
+                let position = winit::dpi::PhysicalPosition::new(position.x * sx as f64, position.y * sy as f64);
+                // Desktop: the raw look delta comes from
+                // DeviceEvent::MouseMotion, so CursorMoved only tracks
+                // absolute position — accumulating delta here too
+                // DOUBLE-counted mouse-look (2× sensitivity). wasm has
+                // no MouseMotion, so there CursorMoved is also the delta
+                // source (`on_mouse_moved` accumulates it).
+                #[cfg(not(target_arch = "wasm32"))]
+                self.input
+                    .set_mouse_position(position.x as f32, position.y as f32);
+                #[cfg(target_arch = "wasm32")]
+                self.input
+                    .on_mouse_moved(position.x as f32, position.y as f32);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // Scroll was documented public API (Input::mouse_scroll)
+                // but never wired — no MouseWheel arm existed, so it
+                // always read 0.0.
+                let scroll = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => *y,
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+                };
+                self.input.on_mouse_scroll(scroll);
+            }
+            // Fingers. Dropped until 2026-11-02, so on a phone (the web build
+            // runs on one) or a touchscreen nothing could be pressed: the first
+            // finger now drives the mouse (`Input::on_touch`), every finger is in
+            // `Input::touches`.
+            WindowEvent::Touch(touch) => {
+                use gizmo_core::input::TouchPhase;
+                let phase = match touch.phase {
+                    winit::event::TouchPhase::Started => TouchPhase::Started,
+                    winit::event::TouchPhase::Moved => TouchPhase::Moved,
+                    winit::event::TouchPhase::Ended => TouchPhase::Ended,
+                    winit::event::TouchPhase::Cancelled => TouchPhase::Cancelled,
+                };
+                let (sx, sy) = pointer_scale(&self.world, window);
+                self.input.on_touch(
+                    touch.id,
+                    phase,
+                    touch.location.x as f32 * sx,
+                    touch.location.y as f32 * sy,
+                );
+            }
+            // Odak kaybında (Alt-Tab / tarayıcı sekme değişimi) basılı
+            // tuşları bırak — yoksa OS key-up göndermez ve tuşlar
+            // sonsuza dek "basılı" kalıp kamerayı kaydırır.
+            WindowEvent::Focused(false) => {
+                self.input.release_all();
+            }
+            // Gamepads are read straight from the device, so unlike the
+            // keyboard they never stopped sending while focus was away and
+            // never announce what is still held on the way back. `release_all`
+            // dropped that state; this is what restores it, and without it a
+            // player holding the throttle across an Alt-Tab comes back to a
+            // dead pad until they let go.
+            WindowEvent::Focused(true) => {
+                #[cfg(feature = "gamepad")]
+                if let Some(backend) = self.gamepad_backend.as_mut() {
+                    backend.resync(&mut self.input);
+                }
+                // Android shows the bars again when the app comes back (a dialog,
+                // the recent-apps screen); the mode is applied again next frame.
+                #[cfg(target_os = "android")]
+                {
+                    self.applied_mode = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// One frame: its clock and input, the editor's UI, the game's fixed steps and update, then the
+    /// sync point with the draw, which is drawn on this thread or handed to the render thread.
+    fn redraw(
+        &mut self,
+        window: &Arc<winit::window::Window>,
+        current_window: &ActiveEventLoop,
+        #[cfg(feature = "egui")] editor: &mut EguiContext,
+        state: &mut State,
+        last_frame_time: &mut FrameInstant,
+        light_time: &mut f32,
+    ) {
+        // When this frame began, and how long the loop left before it since the
+        // last one ended — the pacing delay, and whatever events ran in it.
+        let frame_began = super::FrameInstant::now();
+        let gap = self
+            .frame_ended_at
+            .map(|ended| frame_began.duration_since(ended))
+            .unwrap_or_default();
+        sync_display(&mut self.world, window);
+        // Per-frame root span; the physics/update/render sub-spans
+        // (from the ECS schedule and physics pipeline) nest under it.
+        let _frame_span = tracing::trace_span!("frame").entered();
+        let now = super::FrameInstant::now();
+        let mut dt = now.duration_since(*last_frame_time).as_secs_f32();
+        dt = dt.min(0.05); // Güvenlik çemberi: Frame takılırsa 50ms'den fazla zıplamayacak, yerçekiminden düşme engellenecek.
+        *last_frame_time = now;
+        tracing::trace!(dt, "[frame] begin");
+
+        // Physical controllers, before the replay logic below: during a
+        // recording this is what gets recorded, and during playback the
+        // recorded input overwrites it — a replay must not be steerable.
+        #[cfg(feature = "gamepad")]
+        {
+            if self.gamepad_backend.is_none() {
+                self.gamepad_backend =
+                    Some(crate::gamepad::GamepadBackend::new(&mut self.input));
+            }
+            if let Some(backend) = self.gamepad_backend.as_mut() {
+                backend.pump(&mut self.input);
+            }
+        }
+
+        // Playback / Record mantigi
+        self.apply_playback_or_record(&mut dt, current_window);
+
+        *light_time += dt;
+
+        // Update — run one egui frame (overlay UI + dev console).
+        #[cfg(feature = "egui")]
+        let full_output = editor.run(window, |ctx| {
+            if let Some(ui_hk) = self.ui_fn.as_mut() {
+                ui_hk(&mut self.world, state, ctx);
+            }
+
+            // Render Global Dev Console on top of everything
+            dev_console::ui_dev_console(&mut self.world, ctx, &self.input);
+        });
+
+        // Editor component and scene save/load requests (reads/mutates
+        // EditorState). The viewport render targets are the sync point's: they
+        // need the renderer and the painter.
+        #[cfg(feature = "editor")]
+        {
+            crate::editor_runtime::process_component_requests(&mut self.world);
+            crate::editor_runtime::process_scene_requests(&mut self.world);
+        }
+
+        self.simulate(window, current_window, state, dt);
+
+
+        let pace = self.sync_and_draw(
+            #[cfg(feature = "egui")]
+            window,
+            current_window,
+            #[cfg(feature = "egui")]
+            editor,
+            #[cfg(feature = "egui")]
+            full_output,
+            state,
+            gap,
+            *light_time,
+        );
+
+        // Rumble the frame's systems asked for, handed to the driver here —
+        // AFTER they have run, because that is when the requests exist, and
+        // before `begin_frame`, which is where a request made this frame would
+        // otherwise sit unseen until the next one.
+        #[cfg(feature = "gamepad")]
+        if let Some(backend) = self.gamepad_backend.as_mut() {
+            backend.apply_rumble(&mut self.input);
+        }
+
+        // İşlemlerin bitiminde frame-özel input girdilerini (fare delta vs.) temizle
+        self.input.begin_frame();
+
+        if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+            profiler.end_frame();
+        }
+
+        let ended = super::FrameInstant::now();
+        self.frame_ended_at = Some(ended);
+        self.next_frame_at = (!pace.is_zero()).then(|| ended + pace);
+    }
+
+    /// The game's part of a frame: its input as a resource, the clock, the fixed steps and the
+    /// update, the update hooks, the deferred commands, the assets that finished loading, a quit
+    /// it asked for, and the cursor and window mode it asked for.
+    fn simulate(&mut self, window: &Arc<winit::window::Window>, current_window: &ActiveEventLoop, state: &mut State, dt: f32) {
+        // ECS Sistemlerini Çalıştırmadan önce DI için Core Resource'ları Güncelle
+        self.world.insert_resource(self.input.clone());
+        // `sim_dt` = Time'ın `time_scale` ile ölçeklenmiş (ve clamp'lenmiş)
+        // dt'si → fiziği/ECS'i besler ki `set_time_scale(0.0)` gerçekten
+        // DURDURSUN, `0.5` ağır çekim yapsın. `time_scale == 1.0` (varsayılan)
+        // iken `min(dt, max_dt) == dt` olduğundan davranış bit-aynı. Kullanıcı
+        // update hook'u ham `dt` alır (kamera/UI duraklamada bile akıcı kalsın).
+        let sim_dt = crate::frame::advance_time(&mut self.world, dt);
+
+        // ═══ Fixed Timestep Fizik Döngüsü ═══
+        if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+            profiler.begin_scope("physics");
+        }
+        // Fixed-timestep simulation, then the once-per-frame update.
+        //
+        // The accumulator drains into `self.schedule` at a constant dt
+        // (0..N times, frame-rate independent), and `self.update_schedule`
+        // then runs EXACTLY ONCE with the real frame delta. That second
+        // part is the fix for the defect this loop used to have: with only
+        // the fixed schedule, a frame that did not fill the accumulator ran
+        // no systems at all — and since `Input` is captured just above and
+        // cleared at the bottom of this same frame, key edges and mouse
+        // deltas on those frames were written and discarded unobserved.
+        // With vsync off by default, that was most frames.
+        //
+        // See `crate::frame` for the sequencing and its regression tests.
+        let steps = crate::frame::run_fixed_and_update(
+            &mut self.world,
+            &mut self.schedule,
+            &mut self.update_schedule,
+            sim_dt,
+            dt,
+        );
+        let _ = steps;
+
+        if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+            profiler.end_scope("physics");
+        }
+
+        if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+            profiler.begin_scope("update");
+        }
+
+        // Kullanıcı update hook'u (render dt ile — kamera, UI, vb.)
+        for update_hk in self.update_fns.iter_mut() {
+            update_hk(&mut self.world, state, dt, &self.input);
+        }
+
+        // Update sonrası olası ertelenmiş komutları (CommandQueue) hemen işle
+        self.world.apply_commands();
+
+        // Asset Loading System (Lazy Load)
+        self.run_asset_loading();
+
+        // The game asked to quit: leave the way closing the window does.
+        if self.world.get_resource::<gizmo_core::window::AppExit>().is_some() {
+            tracing::info!("[App] AppExit requested; shutting down");
+            self.shut_down(current_window);
+        }
+
+        // The cursor behaviour the game asked for this frame.
+        self.apply_cursor_options(window);
+        self.apply_window_mode(window);
+
+
+        if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+            profiler.end_scope("update");
+        }
+    }
+
+    /// The sync point with the draw, then the draw: here, or handed to the render thread. Returns
+    /// how long the loop should wait before its next frame (`pacing`).
+    #[allow(clippy::too_many_arguments)]
+    fn sync_and_draw(
+        &mut self,
+        // The UI's frame ends on it.
+        #[cfg(feature = "egui")] window: &Arc<winit::window::Window>,
+        current_window: &ActiveEventLoop,
+        #[cfg(feature = "egui")] editor: &mut EguiContext,
+        #[cfg(feature = "egui")] full_output: egui::FullOutput,
+        state: &mut State,
+        gap: std::time::Duration,
+        light_time: f32,
+    ) -> std::time::Duration {
+        if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+            profiler.begin_scope("render");
+        }
+
+        // ═══ The sync point ═══
+        // The game's update is done, and the draw's side comes back — at once
+        // on the loop's thread, or when the render thread has finished the last
+        // frame. Everything the frame does with the world and the renderer
+        // happens here, before the swapchain is asked for an image, so it
+        // happens on a frame that turns out not to be drawn, too.
+        // What the last frame's draw said — a screenshot asking to exit after
+        // it — is acted on here, where the loop is.
+        let synced_at = super::FrameInstant::now();
+        let (report, threaded) = {
+            let gpu = self.gpu.as_mut().expect("a frame comes after initialization");
+            gpu.sync();
+            (gpu.take_report(), gpu.is_threaded())
+        };
+        if report.exit {
+            self.shut_down(current_window);
+        }
+        // The last frame's draw, timed on whichever thread ran it: with a render
+        // thread it ran outside every scope of this one, and the `render` scope
+        // is only this sync point.
+        if !report.busy.is_zero() {
+            if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+                profiler.record_scope("draw", report.busy);
+            }
+        }
+        // Pacing (see `pacing`): the render thread was busy `report.busy` with
+        // the last frame; the loop was busy for the time since it handed that
+        // frame over, less the gap it left on purpose. What the draw has over
+        // the loop is how much later the next update can start.
+        let pace = match self.handed_at.take() {
+            Some(handed) if threaded => {
+                let loop_busy = synced_at.duration_since(handed).saturating_sub(gap);
+                self.pacing.record(report.busy, loop_busy)
+            }
+            _ => std::time::Duration::ZERO,
+        };
+        let gpu = self.gpu.as_mut().expect("a frame comes after initialization");
+        let side = gpu.sync();
+        // A stale swapchain the last draw found: configured here, where nothing
+        // else submits — see `acquire_backbuffer`.
+        if report.reconfigure {
+            side.renderer.reconfigure_surface();
+        }
+        #[cfg(feature = "editor")]
+        crate::editor_runtime::sync_render_targets(&mut self.world, &side.renderer, &mut side.painter);
+        if let Some(stage) = side.stage.as_mut() {
+            stage.prepare(&mut self.world, &mut side.renderer);
+        }
+        #[cfg(feature = "egui")]
+        let ui_frame = editor.end_frame(window, full_output);
+
+        // ═══ The draw ═══
+        if side.stage.is_some() {
+            // From what the stage kept, with no world: on the render thread
+            // when there is one, while the loop goes on to the next update.
+            gpu.draw(Box::new(move |side: &mut DrawSide| {
+                let DrawSide {
+                    renderer,
+                    stage,
+                    #[cfg(feature = "egui")]
+                    painter,
+                } = side;
+                let stage = stage.as_mut().expect("a stage frame is drawn by the stage");
+                draw_and_present(
+                    renderer,
+                    #[cfg(feature = "egui")]
+                    painter,
+                    #[cfg(feature = "egui")]
+                    ui_frame,
+                    |encoder, view, renderer| stage.draw(encoder, view, renderer),
+                )
+            }));
+            self.handed_at = Some(super::FrameInstant::now());
+        } else {
+            // A hook handed the game world in the middle of the draw: drawn
+            // here, at the sync point.
+            let render = &mut self.render;
+            let world = &mut self.world;
+            let report = draw_and_present(
+                &mut side.renderer,
+                #[cfg(feature = "egui")]
+                &mut side.painter,
+                #[cfg(feature = "egui")]
+                ui_frame,
+                |encoder, view, renderer| match render {
+                    // Kullaniciya CommandEncoder verip cizdiriyoruz!
+                    RenderHook::Raw(render_hk) => {
+                        render_hk(world, state, encoder, view, renderer, light_time)
+                    }
+                    RenderHook::Simple(s_render) => {
+                        let mut ctx = RenderContext::new(encoder, view, renderer, light_time);
+                        s_render(world, state, &mut ctx);
+                    }
+                    RenderHook::Stage(_) => unreachable!("a stage moves to the draw's side at start"),
+                    RenderHook::None => {
+                        // Hiçbir render hook yok → 3B sahne çizilmez (klasik
+                        // "siyah ekran" tuzağı: egui HUD görünür ama sahne
+                        // siyah). Bir kez uyar.
+                        use std::sync::atomic::{AtomicBool, Ordering};
+                        static WARNED: AtomicBool = AtomicBool::new(false);
+                        if !WARNED.swap(true, Ordering::Relaxed) {
+                            tracing::warn!(
+                                "Render hook ayarlı DEĞİL — 3B sahne çizilmeyecek \
+                                 (ekran siyah kalır). `.with_scene_render()` (manuel \
+                                 App), `.set_render(..)` veya `.with_simple_scene(..)` \
+                                 kullan."
+                            );
+                        }
+                    }
+                },
+            );
+            if report.exit {
+                self.shut_down(current_window);
+            }
+        }
+
+        if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+            profiler.end_scope("render");
+        }
+        pace
     }
 }
 

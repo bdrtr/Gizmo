@@ -9,6 +9,10 @@
 //! from USB HID usage codes — a different and equally real numbering. Every entry was wrong, and
 //! `down`/`right` were each other's codes, so a script reading the arrow keys moved the player
 //! right when they pressed down. Nothing caught it because nothing compared the two numberings.
+//!
+//! With the `window` feature only: `winit` is that feature's, and without it there is no key to
+//! forward (a headless build of this crate did not compile its tests until 2026-11-22).
+#![cfg(feature = "window")]
 
 use gizmo_core::input::{code_from_name, NAMED_KEYS};
 use winit::keyboard::KeyCode;
