@@ -168,7 +168,7 @@ the first write (Unity's material instance — a hidden un-sharing).
 > tested, exported and **connected to nothing**. **First item of work named there: text/font
 > rendering, which the engine has no path for at all.**
 
-> **2026-11-22 — four open items, each a piece of work of its own.** Found while splitting the
+> **2026-11-22 — five open items, each a piece of work of its own.** Found while splitting the
 > god functions and building `misket` and `rampa`; written down here so they are not lost, not as
 > limits:
 >
@@ -198,6 +198,14 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    follows the parent's scale (`Relative::then`). `misket` divides its tray walls' half sizes by
 >    the tray's scale by hand. A decision to make: scale shapes by the world scale, as Unity does,
 >    or keep scale visual-only and say so where a scaled parent is given a child collider.
+> 5. **The facade's tests compile only with its default features.** `cargo test -p gizmo-engine
+>    --lib --no-default-features --features physics` fails with 13 errors across several test
+>    modules — `systems::interpolation`'s tests import `crate::simple` (gated on `window` + `render`
+>    + `physics`), others name `gizmo_renderer`, `Transform`, `Collider`, `RigidBody`, `Vec3` without
+>    the feature that brings them. The library itself is clean in every combination (the
+>    powerset gate lints it with `--no-dev-deps`, which builds no tests), and CI runs the tests with
+>    defaults only, so nothing has seen it. The fix: gate each test module on what it uses, and a CI
+>    job that builds the tests (`--no-run`) under the `headless` and physics-only sets.
 
 Phases 0–5 (stabilization, tests+CI, determinism, P2P rollback netcode, physics depth,
 renderer/WASM/editor) are **DONE**. Remaining:
