@@ -146,7 +146,7 @@ impl ConstraintSolver {
         // Bare `FxHashMap` and not the opaque `EntityIndexMap`: `pub(super)` keeps this off
         // the public surface, so it is not a `rustc-hash` leak (docs/ENGINE.md §4). The
         // public caller (`solve_contacts`) unwraps with the `pub(crate)` `raw()`.
-        entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
+        entity_index_map: &crate::world::EntityIndexMap,
         // Distinct GLOBAL body indices referenced by THIS island's manifolds. All the
         // per-body scratch (dp) and loops are sized/iterated by this island-local set
         // instead of the full world, so cost is O(island_bodies·iters), not
@@ -221,21 +221,11 @@ impl ConstraintSolver {
 
         // ── 1) Warm-start ──
         for mid in 0..manifolds.len() {
-            let (idx_a, idx_b) = match (
-                entity_index_map.get(&manifolds[mid].entity_a.id()),
-                entity_index_map.get(&manifolds[mid].entity_b.id()),
-            ) {
-                (Some(&a), Some(&b)) => (a, b),
-                _ => continue,
+            let Some(super::ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b }) =
+                super::ContactPair::of(&manifolds[mid], rigid_bodies, transforms, entity_index_map)
+            else {
+                continue;
             };
-            let inv_m_a = rigid_bodies[idx_a].inv_contact_mass();
-            let inv_m_b = rigid_bodies[idx_b].inv_contact_mass();
-            let inv_i_a = rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation);
-            let inv_i_b = rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation);
-            let dyn_a = rigid_bodies[idx_a].responds_to_contacts();
-            let dyn_b = rigid_bodies[idx_b].responds_to_contacts();
-            let com_a = com_of(idx_a);
-            let com_b = com_of(idx_b);
             for contact in &manifolds[mid].contacts {
                 let r_a = contact.point - com_a;
                 let r_b = contact.point - com_b;
@@ -289,24 +279,14 @@ impl ConstraintSolver {
         let _prep = crate::profile::Scope::new(&crate::profile::PHASES.prepare);
         let mut prepared: Vec<Prepared> = Vec::with_capacity(manifolds.len());
         for mid in 0..manifolds.len() {
-            let (idx_a, idx_b) = match (
-                entity_index_map.get(&manifolds[mid].entity_a.id()),
-                entity_index_map.get(&manifolds[mid].entity_b.id()),
-            ) {
-                (Some(&a), Some(&b)) => (a, b),
-                _ => continue,
+            let Some(super::ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b }) =
+                super::ContactPair::of(&manifolds[mid], rigid_bodies, transforms, entity_index_map)
+            else {
+                continue;
             };
-            let dyn_a = rigid_bodies[idx_a].responds_to_contacts();
-            let dyn_b = rigid_bodies[idx_b].responds_to_contacts();
             if !dyn_a && !dyn_b {
                 continue;
             }
-            let inv_m_a = rigid_bodies[idx_a].inv_contact_mass();
-            let inv_m_b = rigid_bodies[idx_b].inv_contact_mass();
-            let inv_i_a = rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation);
-            let inv_i_b = rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation);
-            let com_a = com_of(idx_a);
-            let com_b = com_of(idx_b);
             let friction = manifolds[mid].friction;
             let static_friction = manifolds[mid].static_friction;
             let restitution = manifolds[mid].restitution;

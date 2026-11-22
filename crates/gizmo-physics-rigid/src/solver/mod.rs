@@ -508,6 +508,54 @@ impl Default for ConstraintSolver {
     }
 }
 
+/// The two bodies of a contact manifold as the contact solvers read them: their indices, inverse
+/// contact masses and world inverse inertias, whether each responds to contacts, and each centre of
+/// mass in the world.
+///
+/// Six copies of this were written out in the solvers — warm start, the velocity iterations, the
+/// restitution pass and the split-impulse pass here, the warm start and the preparation in `tgs` —
+/// in four layouts. The values are pure functions of the bodies and their transforms, which no
+/// solve changes, so computing them once per manifold computes the same numbers.
+#[derive(Clone, Copy)]
+pub(crate) struct ContactPair {
+    pub(crate) idx_a: usize,
+    pub(crate) idx_b: usize,
+    pub(crate) inv_m_a: f32,
+    pub(crate) inv_m_b: f32,
+    pub(crate) inv_i_a: gizmo_math::Mat3,
+    pub(crate) inv_i_b: gizmo_math::Mat3,
+    pub(crate) dyn_a: bool,
+    pub(crate) dyn_b: bool,
+    pub(crate) com_a: Vec3,
+    pub(crate) com_b: Vec3,
+}
+
+impl ContactPair {
+    /// `manifold`'s two bodies, or `None` when either is not in this world's index.
+    pub(crate) fn of(
+        manifold: &ContactManifold,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        entity_index_map: &crate::world::EntityIndexMap,
+    ) -> Option<Self> {
+        let idx_a = *entity_index_map.get(&manifold.entity_a.id())?;
+        let idx_b = *entity_index_map.get(&manifold.entity_b.id())?;
+        let com = |i: usize| transforms[i].position + transforms[i].rotation.mul_vec3(rigid_bodies[i].center_of_mass);
+        Some(Self {
+            idx_a,
+            idx_b,
+            inv_m_a: rigid_bodies[idx_a].inv_contact_mass(),
+            inv_m_b: rigid_bodies[idx_b].inv_contact_mass(),
+            inv_i_a: rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation),
+            inv_i_b: rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation),
+            dyn_a: rigid_bodies[idx_a].responds_to_contacts(),
+            dyn_b: rigid_bodies[idx_b].responds_to_contacts(),
+            com_a: com(idx_a),
+            com_b: com(idx_b),
+        })
+    }
+}
+
 impl ConstraintSolver {
     /// Solver with a custom base sweep count; every other field keeps its default, so the
     /// TGS-soft path and the manifold block solver stay enabled.
@@ -730,7 +778,7 @@ impl ConstraintSolver {
                 transforms,
                 velocities,
                 pos_corrections,
-                entity_index_map.raw(),
+                entity_index_map,
                 island_bodies,
                 island_depth,
                 n_iterations,
@@ -742,10 +790,6 @@ impl ConstraintSolver {
             };
         }
 
-        // ── Split Impulse: pseudo-velocity buffers ────────────────────────
-        // Pozisyon düzeltmesi asıl velocity'den ayrılır, böylece resting
-        // contact'larda jitter engellenir ve stacking stabilitesi artar.
-        let mut pseudo_vel: Vec<(Vec3, Vec3)> = vec![(Vec3::ZERO, Vec3::ZERO); velocities.len()];
 
         // ── Restitution of speculative contacts: the closing speed before the solve ──────────
         // A speculative contact (a gap still open, `penetration < 0`) is solved without
@@ -786,33 +830,11 @@ impl ConstraintSolver {
 
         // ── Warm-starting ────────────────────────────────────────────────────
         for mid in 0..manifolds.len() {
-            let entity_a_id = manifolds[mid].entity_a.id();
-            let entity_b_id = manifolds[mid].entity_b.id();
-
-            let idx_a = match entity_index_map.get(&entity_a_id) {
-                Some(&i) => i,
-                None => continue,
+            let Some(ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b }) =
+                ContactPair::of(&manifolds[mid], rigid_bodies, transforms, entity_index_map)
+            else {
+                continue;
             };
-            let idx_b = match entity_index_map.get(&entity_b_id) {
-                Some(&i) => i,
-                None => continue,
-            };
-
-            let inv_m_a = rigid_bodies[idx_a].inv_contact_mass();
-            let inv_m_b = rigid_bodies[idx_b].inv_contact_mass();
-            let inv_i_a = rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation);
-            let inv_i_b = rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation);
-            let dyn_a = rigid_bodies[idx_a].responds_to_contacts();
-            let dyn_b = rigid_bodies[idx_b].responds_to_contacts();
-
-            let com_a = transforms[idx_a].position
-                + transforms[idx_a]
-                    .rotation
-                    .mul_vec3(rigid_bodies[idx_a].center_of_mass);
-            let com_b = transforms[idx_b].position
-                + transforms[idx_b]
-                    .rotation
-                    .mul_vec3(rigid_bodies[idx_b].center_of_mass);
 
             for contact in &manifolds[mid].contacts {
                 let r_a = contact.point - com_a;
@@ -861,17 +883,10 @@ impl ConstraintSolver {
             let reverse = iter % 2 == 1;
             for mi in 0..n_manifolds {
                 let mid = if reverse { n_manifolds - 1 - mi } else { mi };
-                let entity_a_id = manifolds[mid].entity_a.id();
-                let entity_b_id = manifolds[mid].entity_b.id();
-
-                let idx_a = match entity_index_map.get(&entity_a_id) {
-                    Some(&i) => i,
-                    None => continue,
+                let Some(pair) = ContactPair::of(&manifolds[mid], rigid_bodies, transforms, entity_index_map) else {
+                    continue;
                 };
-                let idx_b = match entity_index_map.get(&entity_b_id) {
-                    Some(&i) => i,
-                    None => continue,
-                };
+                let ContactPair { idx_a, idx_b, .. } = pair;
 
                 let friction = manifolds[mid].friction;
                 let restitution = manifolds[mid].restitution;
@@ -885,25 +900,9 @@ impl ConstraintSolver {
                     let acc_n = manifolds[mid].contacts[cid].normal_impulse;
                     let acc_t = manifolds[mid].contacts[cid].tangent_impulse;
 
-                    let com_a = transforms[idx_a].position
-                        + transforms[idx_a]
-                            .rotation
-                            .mul_vec3(rigid_bodies[idx_a].center_of_mass);
-                    let com_b = transforms[idx_b].position
-                        + transforms[idx_b]
-                            .rotation
-                            .mul_vec3(rigid_bodies[idx_b].center_of_mass);
+                    let ContactPair { inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b, .. } = pair;
                     let r_a = contact_pt - com_a;
                     let r_b = contact_pt - com_b;
-
-                    let inv_m_a = rigid_bodies[idx_a].inv_contact_mass();
-                    let inv_m_b = rigid_bodies[idx_b].inv_contact_mass();
-                    let inv_i_a =
-                        rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation);
-                    let inv_i_b =
-                        rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation);
-                    let dyn_a = rigid_bodies[idx_a].responds_to_contacts();
-                    let dyn_b = rigid_bodies[idx_b].responds_to_contacts();
 
                     if !dyn_a && !dyn_b {
                         continue;
@@ -1094,21 +1093,14 @@ impl ConstraintSolver {
             if e <= 0.0 {
                 continue;
             }
-            let (Some(&idx_a), Some(&idx_b)) =
-                (entity_index_map.get(&manifolds[mid].entity_a.id()), entity_index_map.get(&manifolds[mid].entity_b.id()))
+            let Some(ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b }) =
+                ContactPair::of(&manifolds[mid], rigid_bodies, transforms, entity_index_map)
             else {
                 continue;
             };
-            let (dyn_a, dyn_b) = (rigid_bodies[idx_a].responds_to_contacts(), rigid_bodies[idx_b].responds_to_contacts());
             if !dyn_a && !dyn_b {
                 continue;
             }
-            let inv_m_a = rigid_bodies[idx_a].inv_contact_mass();
-            let inv_m_b = rigid_bodies[idx_b].inv_contact_mass();
-            let inv_i_a = rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation);
-            let inv_i_b = rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation);
-            let com_a = transforms[idx_a].position + transforms[idx_a].rotation.mul_vec3(rigid_bodies[idx_a].center_of_mass);
-            let com_b = transforms[idx_b].position + transforms[idx_b].rotation.mul_vec3(rigid_bodies[idx_b].center_of_mass);
             for cid in 0..manifolds[mid].contacts.len() {
                 let vn0 = spec_vn0[spec_off[mid] + cid];
                 // An impact meeting within this step at the speed it had (`gap ≤ |v₀|·dt`),
@@ -1165,125 +1157,8 @@ impl ConstraintSolver {
             velocities[i] = kept;
         }
 
-        // ── Split Impulse: Pozisyon Düzeltme Pass ────────────────────────────
-        // Asıl velocity'den bağımsız olarak pseudo-velocity hesaplar.
-        // Bu pass penetrasyon düzeltmesini velocity kanalından ayırır.
-        // Birikimli pseudo-impulse takibi ile over-correction engellenir.
         if self.split_impulse_enabled {
-            // Per-contact birikimli pseudo-impulse (PGS clamping için).
-            //
-            // Tek düz tampon + offset tablosu; `solve_contacts_tgs`'in `vn0`'ıyla aynı düzeltme
-            // (C4-followup). Eskiden manifold başına bir iç `Vec` ayrılıyordu, yani ada başına
-            // substep başına `1 + N_manifold` ayırma. `ArrayVec` olamaz: `m.contacts.len()`
-            // capped değil ve `ArrayVec` taşmada panikler.
-            let mut acc_off: Vec<usize> = Vec::with_capacity(manifolds.len() + 1);
-            acc_off.push(0);
-            let mut acc_total = 0usize;
-            for m in manifolds.iter() {
-                acc_total += m.contacts.len();
-                acc_off.push(acc_total);
-            }
-            let mut acc_pseudo = vec![0.0f32; acc_total];
-
-            let pos_iterations = (self.iterations / 2).max(4);
-            for _ in 0..pos_iterations {
-                for mid in 0..manifolds.len() {
-                    let entity_a_id = manifolds[mid].entity_a.id();
-                    let entity_b_id = manifolds[mid].entity_b.id();
-
-                    let idx_a = match entity_index_map.get(&entity_a_id) {
-                        Some(&i) => i,
-                        None => continue,
-                    };
-                    let idx_b = match entity_index_map.get(&entity_b_id) {
-                        Some(&i) => i,
-                        None => continue,
-                    };
-
-                    let inv_m_a = rigid_bodies[idx_a].inv_contact_mass();
-                    let inv_m_b = rigid_bodies[idx_b].inv_contact_mass();
-                    let inv_i_a =
-                        rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation);
-                    let inv_i_b =
-                        rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation);
-                    let dyn_a = rigid_bodies[idx_a].responds_to_contacts();
-                    let dyn_b = rigid_bodies[idx_b].responds_to_contacts();
-
-                    if !dyn_a && !dyn_b {
-                        continue;
-                    }
-
-                    let com_a = transforms[idx_a].position
-                        + transforms[idx_a]
-                            .rotation
-                            .mul_vec3(rigid_bodies[idx_a].center_of_mass);
-                    let com_b = transforms[idx_b].position
-                        + transforms[idx_b]
-                            .rotation
-                            .mul_vec3(rigid_bodies[idx_b].center_of_mass);
-
-                    for cid in 0..manifolds[mid].contacts.len() {
-                        let contact_pt = manifolds[mid].contacts[cid].point;
-                        let normal = manifolds[mid].contacts[cid].normal;
-                        let penetration = manifolds[mid].contacts[cid].penetration;
-
-                        let correction = (penetration - self.slop)
-                            .max(0.0)
-                            .min(self.max_linear_correction);
-                        if correction < 1e-6 {
-                            continue;
-                        }
-
-                        let r_a = contact_pt - com_a;
-                        let r_b = contact_pt - com_b;
-
-                        let r_a_x_n = r_a.cross(normal);
-                        let r_b_x_n = r_b.cross(normal);
-                        let k_n = inv_m_a
-                            + inv_m_b
-                            + (inv_i_a.mul_vec3(r_a_x_n)).dot(r_a_x_n)
-                            + (inv_i_b.mul_vec3(r_b_x_n)).dot(r_b_x_n);
-                        if k_n < 1e-8 {
-                            continue;
-                        }
-
-                        // Pseudo-velocity relative to contact normal
-                        let pv_a = pseudo_vel[idx_a].0 + pseudo_vel[idx_a].1.cross(r_a);
-                        let pv_b = pseudo_vel[idx_b].0 + pseudo_vel[idx_b].1.cross(r_b);
-                        let pv_rel = pv_b.dot(normal) - pv_a.dot(normal);
-
-                        let bias = self.split_impulse_erp * inv_dt * correction;
-                        // Velocity solver ile aynı konvansiyon: delta = (-pv_rel + bias) / k
-                        // pv_rel > 0 → nesneler zaten ayrılıyor → düzeltme azalır
-                        // pv_rel ≈ bias → yakınsadı → delta ≈ 0
-                        let delta_p = (-pv_rel + bias) / k_n;
-
-                        // Birikimli clamp: toplam pseudo-impulse ≥ 0 (çekme yok)
-                        let acc_i = acc_off[mid] + cid;
-                        let old_acc = acc_pseudo[acc_i];
-                        let new_acc = (old_acc + delta_p).max(0.0);
-                        let actual_delta = new_acc - old_acc;
-                        acc_pseudo[acc_i] = new_acc;
-
-                        let imp_p = normal * actual_delta;
-                        if dyn_a {
-                            pseudo_vel[idx_a].0 -= imp_p * inv_m_a;
-                            pseudo_vel[idx_a].1 -= inv_i_a.mul_vec3(r_a.cross(imp_p));
-                        }
-                        if dyn_b {
-                            pseudo_vel[idx_b].0 += imp_p * inv_m_b;
-                            pseudo_vel[idx_b].1 += inv_i_b.mul_vec3(r_b.cross(imp_p));
-                        }
-                    }
-                }
-            }
-
-            // Pseudo-velocity'yi HIZA EKLEME (eski hata buydu). Bunun yerine pozisyon
-            // düzeltmesi olarak dışarı yaz: Δkonum = pseudo_vel * dt. Çağıran bunu
-            // doğrudan transform'a uygular; hız kanalı temiz kalır.
-            for i in 0..velocities.len() {
-                pos_corrections[i] = (pseudo_vel[i].0 * dt, pseudo_vel[i].1 * dt);
-            }
+            self.split_impulse_positions(manifolds, rigid_bodies, transforms, entity_index_map, velocities.len(), inv_dt, dt, pos_corrections);
         }
 
         // The split-impulse path sweeps `self.iterations` (see the loop above) and has never
@@ -1293,6 +1168,118 @@ impl ConstraintSolver {
         SolveStats {
             island_depth,
             iterations: self.iterations,
+        }
+    }
+
+    /// ── Split Impulse: Pozisyon Düzeltme Pass ────────────────────────────
+    /// Asıl velocity'den bağımsız olarak pseudo-velocity hesaplar.
+    /// Bu pass penetrasyon düzeltmesini velocity kanalından ayırır.
+    /// Birikimli pseudo-impulse takibi ile over-correction engellenir.
+    ///
+    /// The pseudo-velocities are this pass's own, one per body of the world (`n_bodies`, as the
+    /// velocities), and start at zero: what it writes out is `pos_corrections`, which the caller
+    /// applies to position. They were allocated for every island the solver ran, the pass on or off.
+    #[allow(clippy::too_many_arguments)]
+    fn split_impulse_positions(
+        &self,
+        manifolds: &[ContactManifold],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        entity_index_map: &crate::world::EntityIndexMap,
+        n_bodies: usize,
+        inv_dt: f32,
+        dt: f32,
+        pos_corrections: &mut [(Vec3, Vec3)],
+    ) {
+        let mut pseudo_vel: Vec<(Vec3, Vec3)> = vec![(Vec3::ZERO, Vec3::ZERO); n_bodies];
+        // Per-contact birikimli pseudo-impulse (PGS clamping için).
+        //
+        // Tek düz tampon + offset tablosu; `solve_contacts_tgs`'in `vn0`'ıyla aynı düzeltme
+        // (C4-followup). Eskiden manifold başına bir iç `Vec` ayrılıyordu, yani ada başına
+        // substep başına `1 + N_manifold` ayırma. `ArrayVec` olamaz: `m.contacts.len()`
+        // capped değil ve `ArrayVec` taşmada panikler.
+        let mut acc_off: Vec<usize> = Vec::with_capacity(manifolds.len() + 1);
+        acc_off.push(0);
+        let mut acc_total = 0usize;
+        for m in manifolds.iter() {
+            acc_total += m.contacts.len();
+            acc_off.push(acc_total);
+        }
+        let mut acc_pseudo = vec![0.0f32; acc_total];
+
+        let pos_iterations = (self.iterations / 2).max(4);
+        for _ in 0..pos_iterations {
+            for mid in 0..manifolds.len() {
+                let Some(ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b }) =
+                    ContactPair::of(&manifolds[mid], rigid_bodies, transforms, entity_index_map)
+                else {
+                    continue;
+                };
+                if !dyn_a && !dyn_b {
+                    continue;
+                }
+
+                for (cid, contact) in manifolds[mid].contacts.iter().enumerate() {
+                    let contact_pt = contact.point;
+                    let normal = contact.normal;
+                    let penetration = contact.penetration;
+
+                    let correction = (penetration - self.slop)
+                        .max(0.0)
+                        .min(self.max_linear_correction);
+                    if correction < 1e-6 {
+                        continue;
+                    }
+
+                    let r_a = contact_pt - com_a;
+                    let r_b = contact_pt - com_b;
+
+                    let r_a_x_n = r_a.cross(normal);
+                    let r_b_x_n = r_b.cross(normal);
+                    let k_n = inv_m_a
+                        + inv_m_b
+                        + (inv_i_a.mul_vec3(r_a_x_n)).dot(r_a_x_n)
+                        + (inv_i_b.mul_vec3(r_b_x_n)).dot(r_b_x_n);
+                    if k_n < 1e-8 {
+                        continue;
+                    }
+
+                    // Pseudo-velocity relative to contact normal
+                    let pv_a = pseudo_vel[idx_a].0 + pseudo_vel[idx_a].1.cross(r_a);
+                    let pv_b = pseudo_vel[idx_b].0 + pseudo_vel[idx_b].1.cross(r_b);
+                    let pv_rel = pv_b.dot(normal) - pv_a.dot(normal);
+
+                    let bias = self.split_impulse_erp * inv_dt * correction;
+                    // Velocity solver ile aynı konvansiyon: delta = (-pv_rel + bias) / k
+                    // pv_rel > 0 → nesneler zaten ayrılıyor → düzeltme azalır
+                    // pv_rel ≈ bias → yakınsadı → delta ≈ 0
+                    let delta_p = (-pv_rel + bias) / k_n;
+
+                    // Birikimli clamp: toplam pseudo-impulse ≥ 0 (çekme yok)
+                    let acc_i = acc_off[mid] + cid;
+                    let old_acc = acc_pseudo[acc_i];
+                    let new_acc = (old_acc + delta_p).max(0.0);
+                    let actual_delta = new_acc - old_acc;
+                    acc_pseudo[acc_i] = new_acc;
+
+                    let imp_p = normal * actual_delta;
+                    if dyn_a {
+                        pseudo_vel[idx_a].0 -= imp_p * inv_m_a;
+                        pseudo_vel[idx_a].1 -= inv_i_a.mul_vec3(r_a.cross(imp_p));
+                    }
+                    if dyn_b {
+                        pseudo_vel[idx_b].0 += imp_p * inv_m_b;
+                        pseudo_vel[idx_b].1 += inv_i_b.mul_vec3(r_b.cross(imp_p));
+                    }
+                }
+            }
+        }
+
+        // Pseudo-velocity'yi HIZA EKLEME (eski hata buydu). Bunun yerine pozisyon
+        // düzeltmesi olarak dışarı yaz: Δkonum = pseudo_vel * dt. Çağıran bunu
+        // doğrudan transform'a uygular; hız kanalı temiz kalır.
+        for i in 0..pseudo_vel.len() {
+            pos_corrections[i] = (pseudo_vel[i].0 * dt, pseudo_vel[i].1 * dt);
         }
     }
 }
