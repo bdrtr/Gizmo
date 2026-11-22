@@ -173,22 +173,12 @@ impl JointSolver {
                 let delta_a = inv_i_a.mul_vec3(axis_w) * lambda;
                 let delta_b = inv_i_b.mul_vec3(axis_w) * lambda;
 
-                if idx_a < idx_b {
-                    let (l, r) = velocities.split_at_mut(idx_b);
-                    if dyn_a {
-                        l[idx_a].angular -= delta_a;
-                    }
-                    if dyn_b {
-                        r[0].angular += delta_b;
-                    }
-                } else {
-                    let (l, r) = velocities.split_at_mut(idx_a);
-                    if dyn_b {
-                        l[idx_b].angular += delta_b;
-                    }
-                    if dyn_a {
-                        r[0].angular -= delta_a;
-                    }
+                let (va, vb) = pair_mut(velocities, idx_a, idx_b);
+                if dyn_a {
+                    va.angular -= delta_a;
+                }
+                if dyn_b {
+                    vb.angular += delta_b;
                 }
             }
         }
@@ -238,22 +228,12 @@ impl JointSolver {
         let delta_b = inv_i_b.mul_vec3(axis_w) * torque_impulse;
         let dyn_a = rigid_bodies[idx_a].is_dynamic();
         let dyn_b = rigid_bodies[idx_b].is_dynamic();
-        if idx_a < idx_b {
-            let (l, r) = velocities.split_at_mut(idx_b);
-            if dyn_a {
-                l[idx_a].angular -= delta_a;
-            }
-            if dyn_b {
-                r[0].angular += delta_b;
-            }
-        } else {
-            let (l, r) = velocities.split_at_mut(idx_a);
-            if dyn_b {
-                l[idx_b].angular += delta_b;
-            }
-            if dyn_a {
-                r[0].angular -= delta_a;
-            }
+        let (va, vb) = pair_mut(velocities, idx_a, idx_b);
+        if dyn_a {
+            va.angular -= delta_a;
+        }
+        if dyn_b {
+            vb.angular += delta_b;
         }
     }
 }

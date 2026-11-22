@@ -221,26 +221,14 @@ impl JointSolver {
                 );
                 let impulse = axis_w * lambda;
 
-                if idx_a < idx_b {
-                    let (l, r) = velocities.split_at_mut(idx_b);
-                    if dyn_a {
-                        l[idx_a].linear -= impulse * inv_m_a;
-                        l[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(impulse));
-                    }
-                    if dyn_b {
-                        r[0].linear += impulse * inv_m_b;
-                        r[0].angular += inv_i_b.mul_vec3(r_b.cross(impulse));
-                    }
-                } else {
-                    let (l, r) = velocities.split_at_mut(idx_a);
-                    if dyn_b {
-                        l[idx_b].linear += impulse * inv_m_b;
-                        l[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(impulse));
-                    }
-                    if dyn_a {
-                        r[0].linear -= impulse * inv_m_a;
-                        r[0].angular -= inv_i_a.mul_vec3(r_a.cross(impulse));
-                    }
+                let (va, vb) = pair_mut(velocities, idx_a, idx_b);
+                if dyn_a {
+                    va.linear -= impulse * inv_m_a;
+                    va.angular -= inv_i_a.mul_vec3(r_a.cross(impulse));
+                }
+                if dyn_b {
+                    vb.linear += impulse * inv_m_b;
+                    vb.angular += inv_i_b.mul_vec3(r_b.cross(impulse));
                 }
             }
         }
@@ -301,26 +289,14 @@ impl JointSolver {
         let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
         let dyn_a = rigid_bodies[idx_a].is_dynamic();
         let dyn_b = rigid_bodies[idx_b].is_dynamic();
-        if idx_a < idx_b {
-            let (l, r) = velocities.split_at_mut(idx_b);
-            if dyn_a {
-                l[idx_a].linear += impulse * inv_m_a;
-                l[idx_a].angular += inv_i_a.mul_vec3(r_a.cross(impulse));
-            }
-            if dyn_b {
-                r[0].linear -= impulse * inv_m_b;
-                r[0].angular -= inv_i_b.mul_vec3(r_b.cross(impulse));
-            }
-        } else {
-            let (l, r) = velocities.split_at_mut(idx_a);
-            if dyn_b {
-                l[idx_b].linear -= impulse * inv_m_b;
-                l[idx_b].angular -= inv_i_b.mul_vec3(r_b.cross(impulse));
-            }
-            if dyn_a {
-                r[0].linear += impulse * inv_m_a;
-                r[0].angular += inv_i_a.mul_vec3(r_a.cross(impulse));
-            }
+        let (va, vb) = pair_mut(velocities, idx_a, idx_b);
+        if dyn_a {
+            va.linear += impulse * inv_m_a;
+            va.angular += inv_i_a.mul_vec3(r_a.cross(impulse));
+        }
+        if dyn_b {
+            vb.linear -= impulse * inv_m_b;
+            vb.angular -= inv_i_b.mul_vec3(r_b.cross(impulse));
         }
     }
 }

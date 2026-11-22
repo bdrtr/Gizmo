@@ -943,22 +943,12 @@ impl JointSolver {
         let delta_a = inv_i_a.mul_vec3(direction) * lambda;
         let delta_b = inv_i_b.mul_vec3(direction) * lambda;
 
-        if idx_a < idx_b {
-            let (l, r) = velocities.split_at_mut(idx_b);
-            if dyn_a {
-                l[idx_a].angular -= delta_a;
-            }
-            if dyn_b {
-                r[0].angular += delta_b;
-            }
-        } else {
-            let (l, r) = velocities.split_at_mut(idx_a);
-            if dyn_b {
-                l[idx_b].angular += delta_b;
-            }
-            if dyn_a {
-                r[0].angular -= delta_a;
-            }
+        let (va, vb) = pair_mut(velocities, idx_a, idx_b);
+        if dyn_a {
+            va.angular -= delta_a;
+        }
+        if dyn_b {
+            vb.angular += delta_b;
         }
         lambda
     }
@@ -1059,26 +1049,14 @@ impl JointSolver {
 
         let impulse = direction * lambda;
 
-        if idx_a < idx_b {
-            let (l, r) = velocities.split_at_mut(idx_b);
-            if dyn_a {
-                l[idx_a].linear -= impulse * inv_m_a;
-                l[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(impulse));
-            }
-            if dyn_b {
-                r[0].linear += impulse * inv_m_b;
-                r[0].angular += inv_i_b.mul_vec3(r_b.cross(impulse));
-            }
-        } else {
-            let (l, r) = velocities.split_at_mut(idx_a);
-            if dyn_b {
-                l[idx_b].linear += impulse * inv_m_b;
-                l[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(impulse));
-            }
-            if dyn_a {
-                r[0].linear -= impulse * inv_m_a;
-                r[0].angular -= inv_i_a.mul_vec3(r_a.cross(impulse));
-            }
+        let (va, vb) = pair_mut(velocities, idx_a, idx_b);
+        if dyn_a {
+            va.linear -= impulse * inv_m_a;
+            va.angular -= inv_i_a.mul_vec3(r_a.cross(impulse));
+        }
+        if dyn_b {
+            vb.linear += impulse * inv_m_b;
+            vb.angular += inv_i_b.mul_vec3(r_b.cross(impulse));
         }
         lambda
     }
@@ -1090,6 +1068,22 @@ impl JointSolver {
 // god-file Tier 3 round-2 bölmesi: per-joint çözücüler joint_types alt-modülünde
 mod joint_types;
 
+
+/// The velocities of a joint's two bodies, rows `a` and `b`, both mutable at once.
+///
+/// Nine impulse applications across the joint types each wrote out the split-borrow that gets
+/// them — an `if a < b` with two `split_at_mut` arms whose bodies had to be kept the mirror of each
+/// other by hand. The two rows are different by the solver's own rule (`joint_bodies`).
+pub(crate) fn pair_mut(velocities: &mut [Velocity], a: usize, b: usize) -> (&mut Velocity, &mut Velocity) {
+    debug_assert_ne!(a, b, "a joint's two bodies are two rows");
+    if a < b {
+        let (l, r) = velocities.split_at_mut(b);
+        (&mut l[a], &mut r[0])
+    } else {
+        let (l, r) = velocities.split_at_mut(a);
+        (&mut r[0], &mut l[b])
+    }
+}
 
 /// The rows of `joint`'s two bodies; `None` when either is not in the world or they are one body.
 fn joint_bodies(joint: &Joint, entity_index_map: &crate::world::EntityIndexMap) -> Option<(usize, usize)> {
