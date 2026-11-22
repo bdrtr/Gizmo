@@ -727,16 +727,8 @@ fn step_grounded_wheel(
         vehicle_entity,
         vehicle_transform,
         vehicle_vel,
-        up,
-        forward,
-        right,
         com,
-        front_diff,
-        rear_diff,
-        tuning,
         brake_input,
-        grounded_share,
-        weather_grip,
         dt,
         ..
     } = *step;
@@ -744,6 +736,45 @@ fn step_grounded_wheel(
     let point_rel = attach_world - vehicle_transform.position;
     let point_vel = vehicle_vel.linear + vehicle_vel.angular.cross(point_rel);
     let susp_vel = point_vel.dot(ray_dir); // pozitif = yay sıkışıyor
+    wheel.suspension_force = suspension_force(wheel, step, susp_vel);
+    let susp_impulse = (-ray_dir) * wheel.suspension_force;
+    apply_force_at_point(
+        vehicle_rb,
+        kick,
+        com,
+        vehicle_transform.rotation,
+        susp_impulse,
+        attach_world,
+        dt,
+    );
+
+    // 6.2 Pacejka Kuvvetleri
+    let tyre = Tyre::at(wheel, step, point_vel);
+
+    // 6.3 Tekerlek angular_velocity entegrasyonu (Semi-implicit Euler)
+    let (solved_force, solved_spin) = solve_spin(wheel, &tyre, effective_inertia, dt);
+
+    traction_control(wheel, vehicle_entity, &tyre);
+
+    lock_braked_wheel(wheel, brake_input, effective_inertia, dt);
+
+    let (long_force, final_lat) = settled_tyre_forces(wheel, &tyre, solved_force, solved_spin);
+    let tire_force = contact_force(wheel, &tyre, step, vehicle_rb, hit_point, long_force, final_lat);
+    apply_force_at_point(
+        vehicle_rb,
+        kick,
+        com,
+        vehicle_transform.rotation,
+        tire_force,
+        hit_point,
+        dt,
+    );
+}
+
+/// The suspension's push (6.1) at a compressing speed of `susp_vel`: the spring, the damper —
+/// compression and rebound apart — the bump stop and the anti-roll bar, never pulling.
+fn suspension_force(wheel: &Wheel, step: &WheelStep, susp_vel: f32) -> f32 {
+    let WheelStep { vehicle_entity, front_diff, rear_diff, tuning, .. } = *step;
     let compression = wheel.suspension_rest_length - wheel.suspension_length;
 
     let spring_force = wheel.suspension_stiffness * compression;
@@ -800,107 +831,146 @@ fn step_grounded_wheel(
     .unwrap_or(t.anti_roll_stiffness);
     let arb_force = anti_roll_force(wheel.is_left, axle_diff, arb_stiffness);
 
-    wheel.suspension_force =
-        (spring_force + damper_force + bump_stop_force + arb_force).max(0.0);
-    let susp_impulse = (-ray_dir) * wheel.suspension_force;
-    apply_force_at_point(
-        vehicle_rb,
-        kick,
-        com,
-        vehicle_transform.rotation,
-        susp_impulse,
-        attach_world,
-        dt,
-    );
+    (spring_force + damper_force + bump_stop_force + arb_force).max(0.0)
+}
 
-    // 6.2 Pacejka Kuvvetleri
-    let steering_rot = Quat::from_axis_angle(up, wheel.steering_angle);
-    let wheel_forward = steering_rot.mul_vec3(forward).normalize();
-    let wheel_right = steering_rot.mul_vec3(right).normalize();
+/// The tyre at its contact this step (6.2): its axes, the contact's velocity along them, the slips'
+/// reference speed, its slip angle and load, and the grip the surface and the weather leave it.
+struct Tyre {
+    /// The wheel's forward, turned by its steering.
+    forward: Vec3,
+    /// The wheel's right, turned by its steering.
+    right: Vec3,
+    /// The contact's velocity along `forward`.
+    v_long: f32,
+    /// The contact's velocity along `right`.
+    v_lat: f32,
+    /// The slips' denominator: `|v_long|`, never under 0.5 m/s.
+    ref_vel: f32,
+    /// The lateral slip angle, radians.
+    slip_angle: f32,
+    /// The suspension's force, which is the tyre's load.
+    normal_load: f32,
+    /// The traction weight while driven forward (`traction_circle_weight`), 1 otherwise.
+    fx_weight: f32,
+    /// The surface's and the weather's grip, against asphalt's.
+    grip: f32,
+}
 
-    let v_long = point_vel.dot(wheel_forward);
-    let v_lat = point_vel.dot(wheel_right);
+impl Tyre {
+    fn at(wheel: &Wheel, step: &WheelStep, point_vel: Vec3) -> Self {
+        let WheelStep { up, forward, right, weather_grip, .. } = *step;
+        let steering_rot = Quat::from_axis_angle(up, wheel.steering_angle);
+        let wheel_forward = steering_rot.mul_vec3(forward).normalize();
+        let wheel_right = steering_rot.mul_vec3(right).normalize();
 
-    // Denom: düşük hızda sıfır bölünmeyi önle
-    let ref_vel = v_long.abs().max(0.5);
+        let v_long = point_vel.dot(wheel_forward);
+        let v_lat = point_vel.dot(wheel_right);
 
+        // Denom: düşük hızda sıfır bölünmeyi önle
+        let ref_vel = v_long.abs().max(0.5);
+
+        // Lateral slip angle [rad]
+        let slip_angle = -(v_lat / ref_vel).atan();
+
+        // The traction weight counts while the wheel is driven forward (`traction_circle_weight`).
+        let fx_weight = if wheel.drive_torque > 1.0 { wheel.traction_circle_weight } else { 1.0 };
+
+        // Yüzey materyali (buz/kum/asfalt) + hava durumu (yağmur/kar) grip çarpanı.
+        // Sürtünme çemberi Pacejka içinde uygulandı; tüm vektörü ölçeklemek yönü korur,
+        // etkin μ'yü orantılı ölçekler (buzda düşük tutuş → redline patinaj vb.).
+        let grip = (wheel.surface_friction / PhysicsMaterial::ASPHALT.dynamic_friction)
+            * weather_grip;
+
+        Tyre {
+            forward: wheel_forward,
+            right: wheel_right,
+            v_long,
+            v_lat,
+            ref_vel,
+            slip_angle,
+            normal_load: wheel.suspension_force,
+            fx_weight,
+            grip,
+        }
+    }
+
+    /// The combined curve's forces at a longitudinal slip ratio of `slip_ratio`, before `grip`.
+    fn forces_at(&self, wheel: &Wheel, slip_ratio: f32) -> (f32, f32) {
+        pacejka_combined_weighted(
+            &wheel.pacejka_long,
+            &wheel.pacejka_lat,
+            slip_ratio,
+            self.slip_angle,
+            self.normal_load,
+            wheel.sliding_grip_floor,
+            self.fx_weight,
+        )
+    }
+
+    /// The longitudinal slip ratio of a wheel spinning at `wheel`'s current speed.
+    fn slip_ratio(&self, wheel: &Wheel) -> f32 {
+        (wheel.angular_velocity * wheel.radius - self.v_long) / self.ref_vel
+    }
+}
+
+/// The wheel's spin for the step (6.3), solved together with the tyre's force on it. Returns that
+/// force — what the chassis is pushed with too — and the spin it left.
+///
+/// **The wheel and the chassis take the same force.** The spin update is implicit
+/// in the tyre's stiffness at zero slip, `k = B·C·D·Fz / ref` per m/s of slip
+/// velocity — the steepest the curve gets, so it is stable wherever the slip is —
+/// which to first order is the wheel balancing against
+///   F = (F₀ + k·dt·r·T/I) / (1 + k·dt·r²/I),
+/// and that `F` is what the chassis is pushed with too. The chassis used to be pushed
+/// with the curve's force at the slip the update left instead: equal to `F` only on the
+/// curve's straight part, and at a crawl, where the slip is tiny and the stiffness
+/// ~10⁵ N per m/s, the two parted by enough to pump — a parked car fell into a slow
+/// spin on the spot, left and right wheels rolling opposite ways for good, and a heavy
+/// car could not pull away gently (`a_parked_car_comes_to_rest_and_stays`,
+/// `a_heavy_car_driven_by_one_axle_pulls_away`).
+fn solve_spin(wheel: &mut Wheel, tyre: &Tyre, effective_inertia: f32, dt: f32) -> (f32, f32) {
     // Longitudinal slip ratio
     let wheel_linear_vel = wheel.angular_velocity * wheel.radius;
-    let slip_ratio = (wheel_linear_vel - v_long) / ref_vel;
-
-    // Lateral slip angle [rad]
-    let slip_angle = -(v_lat / ref_vel).atan();
-
-    let normal_load = wheel.suspension_force;
+    let slip_ratio = (wheel_linear_vel - tyre.v_long) / tyre.ref_vel;
 
     // Kombine Pacejka MF — sürtünme çemberi dahilinde
-    // The traction weight counts while the wheel is driven forward (`traction_circle_weight`).
-    let fx_weight = if wheel.drive_torque > 1.0 { wheel.traction_circle_weight } else { 1.0 };
-    let (final_long, _) = pacejka_combined_weighted(
-        &wheel.pacejka_long,
-        &wheel.pacejka_lat,
-        slip_ratio,
-        slip_angle,
-        normal_load,
-        wheel.sliding_grip_floor,
-        fx_weight,
-    );
+    let (final_long, _) = tyre.forces_at(wheel, slip_ratio);
+    let final_long = final_long * tyre.grip;
 
-    // Yüzey materyali (buz/kum/asfalt) + hava durumu (yağmur/kar) grip çarpanı.
-    // Sürtünme çemberi Pacejka içinde uygulandı; tüm vektörü ölçeklemek yönü korur,
-    // etkin μ'yü orantılı ölçekler (buzda düşük tutuş → redline patinaj vb.).
-    let grip = (wheel.surface_friction / PhysicsMaterial::ASPHALT.dynamic_friction)
-        * weather_grip;
-    let final_long = final_long * grip;
-
-    // 6.3 Tekerlek angular_velocity entegrasyonu (Semi-implicit Euler)
     // Reaksiyon torku lastikten gelen geri tepme
     let effective_brake = brake_against_spin(wheel);
 
     let external = wheel.drive_torque + effective_brake;
 
-    // **The wheel and the chassis take the same force.** The spin update is implicit
-    // in the tyre's stiffness at zero slip, `k = B·C·D·Fz / ref` per m/s of slip
-    // velocity — the steepest the curve gets, so it is stable wherever the slip is —
-    // which to first order is the wheel balancing against
-    //   F = (F₀ + k·dt·r·T/I) / (1 + k·dt·r²/I),
-    // and that `F` is what the chassis is pushed with too. The chassis used to be pushed
-    // with the curve's force at the slip the update left instead: equal to `F` only on the
-    // curve's straight part, and at a crawl, where the slip is tiny and the stiffness
-    // ~10⁵ N per m/s, the two parted by enough to pump — a parked car fell into a slow
-    // spin on the spot, left and right wheels rolling opposite ways for good, and a heavy
-    // car could not pull away gently (`a_parked_car_comes_to_rest_and_stays`,
-    // `a_heavy_car_driven_by_one_axle_pulls_away`).
-    let r_contact = hit_point - com;
-    let inv_inertia = vehicle_rb.inv_world_inertia_tensor(vehicle_transform.rotation);
-    let inv_mass_along = |dir: Vec3| {
-        let rn = r_contact.cross(dir);
-        vehicle_rb.inv_mass() + rn.dot(inv_inertia * rn)
-    };
-    let k = wheel.pacejka_long.b * wheel.pacejka_long.c * wheel.pacejka_long.d * normal_load / ref_vel;
+    let k = wheel.pacejka_long.b * wheel.pacejka_long.c * wheel.pacejka_long.d * tyre.normal_load / tyre.ref_vel;
     let radius = wheel.radius;
     let solved_force = (final_long + k * dt * radius * external / effective_inertia)
         / (1.0 + k * dt * radius * radius / effective_inertia);
     wheel.angular_velocity += (external - solved_force * radius) / effective_inertia * dt;
-    let solved_spin = wheel.angular_velocity;
+    (solved_force, wheel.angular_velocity)
+}
 
-    // --- TRAKSİYON KONTROL (patinaj sınırı) ---
-    // Sürülen tekerleğin drive_torque'u lastik tutuşunun ürettiği reaksiyon
-    // torkunu (≤ μ·Fz·r) kat kat aşabilir → ω dengeye oturmayıp KAÇAR
-    // (ω·r ≫ v_long, gözlemde 109 m/s). Böyle bir slip_ratio sürtünme
-    // çemberini BOYUNA doldurur ve Lorentzian çapraz-ağırlık (gy) yüzünden
-    // lastiğin YANAL tutuşunu ~0'a çeker: sürülen aks yanal kuvvet üretemez,
-    // en küçük yaw bozunumu büyür → araç DÜZ tam gazda kendiliğinden spin
-    // atar (kalkışta da yerinde patinaj). ω'yı hedef slip'e kırpmak boyuna
-    // kuvveti Pacejka tepesi civarında (iyi hızlanma) tutar ama yanal tutuşu
-    // korur (kararlılık). Yalnız TAHRİKLİ tekerlek etkilenir → ön direksiyon
-    // yetkisi ve fren/ABS yolu (drive_torque≈0) değişmez; hız arttıkça
-    // (ref_vel↑) izin verilen ω da büyür → araç normal hızlanır.
+/// The traction control: a driven wheel's spin held within the target slip of the contact's
+/// speed.
+///
+/// A driven wheel's `drive_torque` can exceed the reaction torque the tyre's grip gives back
+/// (at most `μ·Fz·r`) many times over, and then ω does not settle — it RUNS AWAY (`ω·r ≫ v_long`,
+/// 109 m/s once). A slip ratio like that fills the friction circle LENGTHWAYS, and through the
+/// Lorentzian cross-weight (`gy`) takes the tyre's SIDEWAYS grip to almost nothing: the driven
+/// axle makes no lateral force, the smallest yaw disturbance grows, and the car spins by itself
+/// at full throttle in a straight line (and wheelspins on the spot at a launch). Holding ω at the
+/// target slip keeps the longitudinal force near the curve's peak (good acceleration) and keeps
+/// some lateral grip — about 45 % of it at the target for the default tyre, not all of it: floored
+/// with the wheel turned, a rear-driven car still power-oversteers. Only DRIVEN wheels are held,
+/// so the front's steering and the brake/ABS path (`drive_torque ≈ 0`) are untouched; the
+/// allowed ω grows with `ref_vel`, so the car accelerates normally.
+fn traction_control(wheel: &mut Wheel, vehicle_entity: BodyHandle, tyre: &Tyre) {
     if wheel.drive_torque.abs() > 1.0 && wheel.radius > 1e-4 {
         const TC_TARGET_SLIP: f32 = 0.2; // ~Pacejka tepe slip'i
-        let spin_margin = TC_TARGET_SLIP * ref_vel;
-        let hi = (v_long + spin_margin) / wheel.radius;
-        let lo = (v_long - spin_margin) / wheel.radius;
+        let spin_margin = TC_TARGET_SLIP * tyre.ref_vel;
+        let hi = (tyre.v_long + spin_margin) / wheel.radius;
+        let lo = (tyre.v_long - spin_margin) / wheel.radius;
         let pre_clamp_ω = wheel.angular_velocity;
         wheel.angular_velocity = wheel.angular_velocity.clamp(lo, hi);
         if (wheel.angular_velocity - pre_clamp_ω).abs() > 1e-3 {
@@ -910,30 +980,23 @@ fn step_grounded_wheel(
                 is_left = wheel.is_left,
                 omega_before = pre_clamp_ω,
                 omega_after = wheel.angular_velocity,
-                v_long,
+                v_long = tyre.v_long,
                 "[Vehicle] traction control — clamped driven-wheel spin to target slip"
             );
         }
     }
+}
 
-    lock_braked_wheel(wheel, brake_input, effective_inertia, dt);
-
-    // The slip the wheel has now, after its update and the traction control's and the
-    // brake's say: the lateral force is taken at it, and it caps the solved force —
-    // a first-order step that ran past the curve's peak (a big torque on a light wheel),
-    // or a spin the clamps changed after the solve, leaves the tyre with what the curve
-    // gives there and no more.
-    let slip_ratio = (wheel.angular_velocity * wheel.radius - v_long) / ref_vel;
-    let (at_slip, final_lat) = pacejka_combined_weighted(
-        &wheel.pacejka_long,
-        &wheel.pacejka_lat,
-        slip_ratio,
-        slip_angle,
-        normal_load,
-        wheel.sliding_grip_floor,
-        fx_weight,
-    );
-    let at_slip = at_slip * grip;
+/// The tyre's longitudinal force for the step, and its lateral force before `grip`, at the slip the
+/// wheel has now — after its update and the traction control's and the brake's say.
+///
+/// The lateral force is taken at that slip, and it caps the solved force: a first-order step that
+/// ran past the curve's peak (a big torque on a light wheel), or a spin the clamps changed after
+/// the solve, leaves the tyre with what the curve gives there and no more.
+fn settled_tyre_forces(wheel: &Wheel, tyre: &Tyre, solved_force: f32, solved_spin: f32) -> (f32, f32) {
+    let slip_ratio = tyre.slip_ratio(wheel);
+    let (at_slip, final_lat) = tyre.forces_at(wheel, slip_ratio);
+    let at_slip = at_slip * tyre.grip;
     // A spin the traction control or the brake's lock set after the solve is held there,
     // not free to take the slip up as the solve assumed (`r²/I`): the tyre then gives what
     // the curve gives at it — a locked wheel slides at its full sliding grip.
@@ -943,43 +1006,55 @@ fn step_grounded_wheel(
     } else {
         solved_force
     };
-    // **The tyre never pushes the contact past standing still sideways in one step**:
-    // the lateral half of the same stiffness, limited to what stops the contact's
-    // sideways velocity through its effective mass, shared among the grounded wheels.
-    // At speed the limit is far above any tyre force and nothing changes.
-    let tire_force = {
-        let at_most = |dir: Vec3, force: f32, v: f32| -> f32 {
-            if force * v >= 0.0 {
-                return force;
-            }
-            let inv_mass = inv_mass_along(dir);
-            if inv_mass <= 0.0 {
-                return force;
-            }
-            let stop = v.abs() / (inv_mass * dt * grounded_share);
-            force.clamp(-stop, stop)
-        };
-        // Rolling resistance (`Wheel::rolling_resistance`): what a free-rolling tyre's
-        // `Crr·Fz·r` comes to at the contact — a force against the contact's motion of
-        // at most `Crr·Fz`, and at most what stops it. As a torque on the wheel it was a
-        // light wheel crossing zero and being caught there every other step, and the car
-        // crept on at a fraction of a millimetre a second.
-        let rolling = if v_long == 0.0 {
-            0.0
-        } else {
-            at_most(wheel_forward, -v_long.signum() * wheel.rolling_resistance * normal_load, v_long)
-        };
-        wheel_forward * (long_force + rolling) + wheel_right * at_most(wheel_right, final_lat * grip, v_lat)
+    (long_force, final_lat)
+}
+
+/// The force the tyre puts on the chassis at the contact: `long_force` plus the rolling resistance
+/// along the wheel, and the lateral force across it.
+///
+/// **The tyre never pushes the contact past standing still sideways in one step**:
+/// the lateral half of the same stiffness, limited to what stops the contact's
+/// sideways velocity through its effective mass, shared among the grounded wheels.
+/// At speed the limit is far above any tyre force and nothing changes.
+fn contact_force(
+    wheel: &Wheel,
+    tyre: &Tyre,
+    step: &WheelStep,
+    vehicle_rb: &RigidBody,
+    hit_point: Vec3,
+    long_force: f32,
+    final_lat: f32,
+) -> Vec3 {
+    let WheelStep { vehicle_transform, com, grounded_share, dt, .. } = *step;
+    let r_contact = hit_point - com;
+    let inv_inertia = vehicle_rb.inv_world_inertia_tensor(vehicle_transform.rotation);
+    let inv_mass_along = |dir: Vec3| {
+        let rn = r_contact.cross(dir);
+        vehicle_rb.inv_mass() + rn.dot(inv_inertia * rn)
     };
-    apply_force_at_point(
-        vehicle_rb,
-        kick,
-        com,
-        vehicle_transform.rotation,
-        tire_force,
-        hit_point,
-        dt,
-    );
+    let at_most = |dir: Vec3, force: f32, v: f32| -> f32 {
+        if force * v >= 0.0 {
+            return force;
+        }
+        let inv_mass = inv_mass_along(dir);
+        if inv_mass <= 0.0 {
+            return force;
+        }
+        let stop = v.abs() / (inv_mass * dt * grounded_share);
+        force.clamp(-stop, stop)
+    };
+    // Rolling resistance (`Wheel::rolling_resistance`): what a free-rolling tyre's
+    // `Crr·Fz·r` comes to at the contact — a force against the contact's motion of
+    // at most `Crr·Fz`, and at most what stops it. As a torque on the wheel it was a
+    // light wheel crossing zero and being caught there every other step, and the car
+    // crept on at a fraction of a millimetre a second.
+    let v_long = tyre.v_long;
+    let rolling = if v_long == 0.0 {
+        0.0
+    } else {
+        at_most(tyre.forward, -v_long.signum() * wheel.rolling_resistance * tyre.normal_load, v_long)
+    };
+    tyre.forward * (long_force + rolling) + tyre.right * at_most(tyre.right, final_lat * tyre.grip, tyre.v_lat)
 }
 
 /// A wheel in the air, for one step: the engine and the brake turn it, and no spring holds it.
