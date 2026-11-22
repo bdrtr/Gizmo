@@ -132,8 +132,19 @@ impl World {
             }
         };
 
+        let (target_arch_id, bundle_types) = self.bundle_target(old_arch_id, &infos);
+        if old_arch_id == target_arch_id {
+            self.overwrite_bundle_in_place(eid, target_arch_id, bundle, &infos, &bundle_types);
+        } else {
+            self.migrate_with_bundle(entity, old_arch_id, target_arch_id, bundle, &bundle_types);
+        }
+    }
+
+    /// The archetype `add_bundle` lands in — the entity's own types and the bundle's, created if no
+    /// archetype has that set yet — and the bundle's types.
+    fn bundle_target(&mut self, old_arch_id: usize, infos: &[ComponentInfo]) -> (usize, Vec<ComponentKey>) {
         let mut new_types = self.archetype_index.archetypes[old_arch_id].sorted_component_types();
-        for info in &infos {
+        for info in infos {
             if let Err(pos) = new_types.binary_search(&info.key) {
                 new_types.insert(pos, info.key);
             }
@@ -159,166 +170,187 @@ impl World {
             self.archetype_index.set_to_id.insert(new_types, id);
             id
         };
+        (target_arch_id, bundle_types)
+    }
 
-        if old_arch_id == target_arch_id {
-            // SADECE ÜZERİNE YAZMA — no migration, and therefore no staged row to abandon.
-            //
-            // Every column this bundle is about to write already holds a LIVE value — same
-            // archetype, same row — and `write_to_archetype` copies raw bytes, so it cannot
-            // drop what it replaces. Dropping is therefore this function's job, and it has to
-            // be: the same write also lands on the uninitialised holes `move_entity_to` leaves
-            // behind (see the migration path below), where dropping would be undefined. From
-            // inside the write the two are indistinguishable — both sit below the column's
-            // `len` — so only the caller can tell them apart.
-            //
-            // WHAT THIS USED TO DO WAS DROP THEM FIRST. `drop_live_bundle_rows` walked the
-            // bundle's types calling each column's drop glue, and the write refilled them one
-            // statement later. Both are user code — a component's `Drop`, and a public trait
-            // method any caller may implement — so a panic out of either left slots that
-            // `entities` and the column's own `len` both still counted holding a destroyed or
-            // uninitialised value, and the world's teardown ran the drop glue over them. No
-            // `unsafe` from the caller, no contract broken, and no assertion fires along the
-            // way: every column length still equals `entities.len()`, so
-            // `debug_assert_consistent` passes and `assert_inv` passes.
-            //
-            // THE FIX IS TO PUT THE OLD VALUE OUT OF REACH BEFORE THE WRITE, NOT AFTER IT.
-            // `Archetype::len` is `entities.len()` and every query bounds itself by it, so a
-            // column longer than `entities` is a row nothing can see — the same fact the
-            // migration branch's staged row rests on. Here it is used the other way round: each
-            // of the bundle's columns gets a bytewise DUPLICATE of the live row appended above
-            // `entities`, the bundle writes over the live copy exactly as it always did, and the
-            // duplicate is then dropped by a `swap_remove_and_drop` of the last index, which
-            // does its bookkeeping before it runs the drop glue.
-            //
-            // The panic algebra has only two outcomes, and no third:
-            //   · a panic in the write — every live slot still holds either its original value
-            //     or the new one, and `forget_rows_above` abandons the duplicates. Since they
-            //     are duplicates, the slots the write did not reach lose nothing at all.
-            //   · a panic in the drop loop — the bundle is fully applied, and the old values not
-            //     yet reached are abandoned. A leak on a panic path is safe.
-            // Neither ever leaves a slot both counted and destroyed, which is the only thing
-            // that was ever undefined here.
-            //
-            // Writing the bundle into the duplicate row instead, and swapping afterwards, also
-            // works and was tried. It is worse: it moves every same-archetype `add_bundle` onto
-            // `write_to_archetype`'s append branch, which nothing else in the crate reaches from
-            // this function, and it makes "an implementation must append for every type
-            // `get_infos` names" a new obligation on out-of-crate implementors. This workspace
-            // already ships five `Bundle` impls whose `write_to_archetype` body is empty. Writing
-            // at the live row keeps tick stamping, duplicate-type leak semantics and ZST
-            // handling byte-identical to today by construction rather than by argument.
-            let loc = self.entity_locations[eid as usize];
-            let row = loc.row as usize;
-            let tick = self.tick;
+    /// `add_bundle` when the entity's archetype does not change: every column the bundle writes
+    /// already holds a live value at the entity's row.
+    fn overwrite_bundle_in_place<B: crate::component::Bundle>(
+        &mut self,
+        eid: u32,
+        target_arch_id: usize,
+        bundle: B,
+        infos: &[ComponentInfo],
+        bundle_types: &[ComponentKey],
+    ) {
+        // SADECE ÜZERİNE YAZMA — no migration, and therefore no staged row to abandon.
+        //
+        // Every column this bundle is about to write already holds a LIVE value — same
+        // archetype, same row — and `write_to_archetype` copies raw bytes, so it cannot
+        // drop what it replaces. Dropping is therefore this function's job, and it has to
+        // be: the same write also lands on the uninitialised holes `move_entity_to` leaves
+        // behind (see the migration path below), where dropping would be undefined. From
+        // inside the write the two are indistinguishable — both sit below the column's
+        // `len` — so only the caller can tell them apart.
+        //
+        // WHAT THIS USED TO DO WAS DROP THEM FIRST. `drop_live_bundle_rows` walked the
+        // bundle's types calling each column's drop glue, and the write refilled them one
+        // statement later. Both are user code — a component's `Drop`, and a public trait
+        // method any caller may implement — so a panic out of either left slots that
+        // `entities` and the column's own `len` both still counted holding a destroyed or
+        // uninitialised value, and the world's teardown ran the drop glue over them. No
+        // `unsafe` from the caller, no contract broken, and no assertion fires along the
+        // way: every column length still equals `entities.len()`, so
+        // `debug_assert_consistent` passes and `assert_inv` passes.
+        //
+        // THE FIX IS TO PUT THE OLD VALUE OUT OF REACH BEFORE THE WRITE, NOT AFTER IT.
+        // `Archetype::len` is `entities.len()` and every query bounds itself by it, so a
+        // column longer than `entities` is a row nothing can see — the same fact the
+        // migration branch's staged row rests on. Here it is used the other way round: each
+        // of the bundle's columns gets a bytewise DUPLICATE of the live row appended above
+        // `entities`, the bundle writes over the live copy exactly as it always did, and the
+        // duplicate is then dropped by a `swap_remove_and_drop` of the last index, which
+        // does its bookkeeping before it runs the drop glue.
+        //
+        // The panic algebra has only two outcomes, and no third:
+        //   · a panic in the write — every live slot still holds either its original value
+        //     or the new one, and `forget_rows_above` abandons the duplicates. Since they
+        //     are duplicates, the slots the write did not reach lose nothing at all.
+        //   · a panic in the drop loop — the bundle is fully applied, and the old values not
+        //     yet reached are abandoned. A leak on a panic path is safe.
+        // Neither ever leaves a slot both counted and destroyed, which is the only thing
+        // that was ever undefined here.
+        //
+        // Writing the bundle into the duplicate row instead, and swapping afterwards, also
+        // works and was tried. It is worse: it moves every same-archetype `add_bundle` onto
+        // `write_to_archetype`'s append branch, which nothing else in the crate reaches from
+        // this function, and it makes "an implementation must append for every type
+        // `get_infos` names" a new obligation on out-of-crate implementors. This workspace
+        // already ships five `Bundle` impls whose `write_to_archetype` body is empty. Writing
+        // at the live row keeps tick stamping, duplicate-type leak semantics and ZST
+        // handling byte-identical to today by construction rather than by argument.
+        let loc = self.entity_locations[eid as usize];
+        let row = loc.row as usize;
+        let tick = self.tick;
 
-            // Deduplicated by `TypeId`, in bundle order — the same rule `drop_live_bundle_rows`
-            // uses, and load-bearing for the same reason: one column must be duplicated once and
-            // dropped once. A bundle may legitimately name a type twice (`BundleExt::with`
-            // appends rather than substitutes).
-            let mut dedup: Vec<ComponentKey> = Vec::with_capacity(bundle_types.len());
-            for &t in &bundle_types {
-                if !dedup.contains(&t) {
-                    dedup.push(t);
-                }
+        // Deduplicated by `TypeId`, in bundle order — the same rule `drop_live_bundle_rows`
+        // uses, and load-bearing for the same reason: one column must be duplicated once and
+        // dropped once. A bundle may legitimately name a type twice (`BundleExt::with`
+        // appends rather than substitutes).
+        let mut dedup: Vec<ComponentKey> = Vec::with_capacity(bundle_types.len());
+        for &t in bundle_types {
+            if !dedup.contains(&t) {
+                dedup.push(t);
             }
+        }
 
-            // THE EVERY-FRAME CASE PAYS NOTHING. If no column this bundle writes has drop glue
-            // there is no old value to drop, no user `Drop` can run, and the plain write was
-            // already sound: whatever a panicking `Bundle` impl does, every slot ends holding a
-            // valid value of the right type — the old one or the new one. This is the shape this
-            // function's own rustdoc calls the "set these fields" call.
-            if dedup.is_empty() || infos.iter().all(|i| i.drop_fn.is_none()) {
-                let arch = &mut self.archetype_index.archetypes[target_arch_id];
-                // SAFETY: as the general path below, minus the duplicates — `target_arch_id ==
-                // old_arch_id`, so every one of the bundle's columns exists here and `row` is
-                // the entity's live row in all of them.
-                unsafe { bundle.write_to_archetype(arch, row, tick) };
-                return;
-            }
-
+        // THE EVERY-FRAME CASE PAYS NOTHING. If no column this bundle writes has drop glue
+        // there is no old value to drop, no user `Drop` can run, and the plain write was
+        // already sound: whatever a panicking `Bundle` impl does, every slot ends holding a
+        // valid value of the right type — the old one or the new one. This is the shape this
+        // function's own rustdoc calls the "set these fields" call.
+        if dedup.is_empty() || infos.iter().all(|i| i.drop_fn.is_none()) {
             let arch = &mut self.archetype_index.archetypes[target_arch_id];
-            let base_len = arch.len();
-            debug_assert!(row < base_len);
-            #[cfg(debug_assertions)]
-            arch.debug_assert_consistent();
-            // Buy the duplicate row's capacity up front. Not needed for the sound path — every
-            // panic below is caught — but it means a release build whose `Bundle` impl grew a
-            // column behind our back still indexes inside the allocation.
-            arch.reserve_row();
-
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                // 1. Duplicate each of the bundle's live slots above `entities`. Raw memcpy of
-                //    data and tick alike: no clone, no user code, no panic point.
-                for &t in &dedup {
-                    // SAFETY: `&mut Archetype` here, and each type is visited once, so no two
-                    // `&mut Column` overlap.
-                    if let Some(col) = unsafe { arch.get_column_mut(t) } {
-                        // SAFETY: the archetype has a column for every bundle type (same
-                        // archetype) and `row` is the entity's live row in it. Every duplicate
-                        // made here is either dropped by step 3 or abandoned by
-                        // `forget_rows_above` — exactly one of the two copies, which is
-                        // `push_copy_of_row`'s obligation.
-                        unsafe { col.push_copy_of_row(row) };
-                    }
-                }
-
-                // 2. The write, at the LIVE row and unchanged from what it always was. Every
-                //    column is now one row longer than `entities`, so `col.len() > row` holds
-                //    for the bundle's columns exactly as it did before — the same overwrite
-                //    branch, the same tick stamp, the same duplicate-type behaviour.
-                //
-                // SAFETY: `write_to_archetype`'s contract is that the bundle writes every column
-                // it names at this row; the archetype was chosen for this bundle's component set
-                // and `row` is the entity's live row.
-                unsafe { bundle.write_to_archetype(arch, row, tick) };
-
-                // 3. Drop the duplicates, which are the OLD values. `base_len` is the last
-                //    index, so this is a pop-and-drop: `Column::swap_remove_and_drop` shortens
-                //    ticks and data before it calls any drop glue, so a panicking `Drop` leaks
-                //    the values not yet reached rather than leaving one counted and destroyed.
-                for &t in &dedup {
-                    // SAFETY: as step 1 — `&mut Archetype`, one visit per type, so no two
-                    // `&mut Column` overlap.
-                    let col = unsafe { arch.get_column_mut(t) };
-                    let Some(col) = col else { continue };
-                    debug_assert_eq!(
-                        col.len(),
-                        base_len + 1,
-                        "add_bundle: a Bundle impl changed a column's length behind the write"
-                    );
-                    if col.len() != base_len + 1 {
-                        continue;
-                    }
-                    // SAFETY: `base_len` is the duplicate pushed in step 1 and is the column's
-                    // last index; it is out of `entities`' range, so nothing else can see it.
-                    unsafe { col.swap_remove_and_drop(base_len) };
-                }
-            }));
-
-            if let Err(payload) = outcome {
-                // Nothing above ever touched `entities`, so `base_len` is still the entity count
-                // and the only thing that can be out of step is a column one row long. A no-op
-                // for every column that never grew, `entities` included. The entity keeps its
-                // row, its location and its archetype entry — there is nothing else to undo.
-                //
-                // SAFETY: `base_len == entities.len()` and every column is `base_len` or
-                // `base_len + 1` long, which is `forget_rows_above`'s precondition.
-                unsafe {
-                    self.archetype_index.archetypes[target_arch_id].forget_rows_above(base_len)
-                };
-                tracing::warn!(
-                    entity = eid,
-                    "add_bundle: a component `Drop` or `Bundle` impl panicked during a \
-                     same-archetype overwrite; the entity keeps its row and every column holds \
-                     a live value, but some old or new values were abandoned"
-                );
-                std::panic::resume_unwind(payload);
-            }
-            #[cfg(debug_assertions)]
-            self.archetype_index.archetypes[target_arch_id].debug_assert_consistent();
+            // SAFETY: as the general path below, minus the duplicates — `target_arch_id ==
+            // old_arch_id`, so every one of the bundle's columns exists here and `row` is
+            // the entity's live row in all of them.
+            unsafe { bundle.write_to_archetype(arch, row, tick) };
             return;
         }
 
+        let arch = &mut self.archetype_index.archetypes[target_arch_id];
+        let base_len = arch.len();
+        debug_assert!(row < base_len);
+        #[cfg(debug_assertions)]
+        arch.debug_assert_consistent();
+        // Buy the duplicate row's capacity up front. Not needed for the sound path — every
+        // panic below is caught — but it means a release build whose `Bundle` impl grew a
+        // column behind our back still indexes inside the allocation.
+        arch.reserve_row();
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            // 1. Duplicate each of the bundle's live slots above `entities`. Raw memcpy of
+            //    data and tick alike: no clone, no user code, no panic point.
+            for &t in &dedup {
+                // SAFETY: `&mut Archetype` here, and each type is visited once, so no two
+                // `&mut Column` overlap.
+                if let Some(col) = unsafe { arch.get_column_mut(t) } {
+                    // SAFETY: the archetype has a column for every bundle type (same
+                    // archetype) and `row` is the entity's live row in it. Every duplicate
+                    // made here is either dropped by step 3 or abandoned by
+                    // `forget_rows_above` — exactly one of the two copies, which is
+                    // `push_copy_of_row`'s obligation.
+                    unsafe { col.push_copy_of_row(row) };
+                }
+            }
+
+            // 2. The write, at the LIVE row and unchanged from what it always was. Every
+            //    column is now one row longer than `entities`, so `col.len() > row` holds
+            //    for the bundle's columns exactly as it did before — the same overwrite
+            //    branch, the same tick stamp, the same duplicate-type behaviour.
+            //
+            // SAFETY: `write_to_archetype`'s contract is that the bundle writes every column
+            // it names at this row; the archetype was chosen for this bundle's component set
+            // and `row` is the entity's live row.
+            unsafe { bundle.write_to_archetype(arch, row, tick) };
+
+            // 3. Drop the duplicates, which are the OLD values. `base_len` is the last
+            //    index, so this is a pop-and-drop: `Column::swap_remove_and_drop` shortens
+            //    ticks and data before it calls any drop glue, so a panicking `Drop` leaks
+            //    the values not yet reached rather than leaving one counted and destroyed.
+            for &t in &dedup {
+                // SAFETY: as step 1 — `&mut Archetype`, one visit per type, so no two
+                // `&mut Column` overlap.
+                let col = unsafe { arch.get_column_mut(t) };
+                let Some(col) = col else { continue };
+                debug_assert_eq!(
+                    col.len(),
+                    base_len + 1,
+                    "add_bundle: a Bundle impl changed a column's length behind the write"
+                );
+                if col.len() != base_len + 1 {
+                    continue;
+                }
+                // SAFETY: `base_len` is the duplicate pushed in step 1 and is the column's
+                // last index; it is out of `entities`' range, so nothing else can see it.
+                unsafe { col.swap_remove_and_drop(base_len) };
+            }
+        }));
+
+        if let Err(payload) = outcome {
+            // Nothing above ever touched `entities`, so `base_len` is still the entity count
+            // and the only thing that can be out of step is a column one row long. A no-op
+            // for every column that never grew, `entities` included. The entity keeps its
+            // row, its location and its archetype entry — there is nothing else to undo.
+            //
+            // SAFETY: `base_len == entities.len()` and every column is `base_len` or
+            // `base_len + 1` long, which is `forget_rows_above`'s precondition.
+            unsafe {
+                self.archetype_index.archetypes[target_arch_id].forget_rows_above(base_len)
+            };
+            tracing::warn!(
+                entity = eid,
+                "add_bundle: a component `Drop` or `Bundle` impl panicked during a \
+                 same-archetype overwrite; the entity keeps its row and every column holds \
+                 a live value, but some old or new values were abandoned"
+            );
+            std::panic::resume_unwind(payload);
+        }
+        #[cfg(debug_assertions)]
+        self.archetype_index.archetypes[target_arch_id].debug_assert_consistent();
+    }
+
+    /// `add_bundle` when the bundle moves the entity to another archetype: the row is staged in the
+    /// target, written while nothing can see it, and committed.
+    fn migrate_with_bundle<B: crate::component::Bundle>(
+        &mut self,
+        entity: Entity,
+        old_arch_id: usize,
+        target_arch_id: usize,
+        bundle: B,
+        bundle_types: &[ComponentKey],
+    ) {
+        let eid = entity.id();
         tracing::trace!(
             entity = eid,
             from = old_arch_id,
