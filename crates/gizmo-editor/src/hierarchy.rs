@@ -179,21 +179,17 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         // one passed `None` for an unnamed entity where the other passes `"Entity_<id>"` — and
         // `is_editor_only` reduces both to the marker alone, so they were the same test written
         // twice. Deleting it changed no test, which is what made it safe to delete.
+        let view = HierarchyView {
+            world,
+            names: &names,
+            children_comp: &children_comp,
+            is_hidden_comp: &is_hidden_comp,
+            is_deleted_comp: &is_deleted_comp,
+            editor_only_markers: &editor_only_markers,
+            filter_lower: &filter_lower,
+        };
         for entity in root_entities {
-            draw_entity_node(
-                ui,
-                world,
-                entity,
-                state,
-                &names,
-                &children_comp,
-                &is_hidden_comp,
-                &is_deleted_comp,
-                &editor_only_markers,
-                &filter_lower,
-                &mut listed,
-                &mut visited,
-            );
+            draw_entity_node(ui, &view, entity, state, &mut listed, &mut visited);
         }
         listed
     }).inner;
@@ -213,18 +209,35 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // panel invites the reader to work out why they differ.
 }
 
+/// What every node of one hierarchy draw reads: the world, its component views, the name filter
+/// (lowercased once).
+#[derive(Clone, Copy)]
+struct HierarchyView<'a> {
+    world: &'a World,
+    names: &'a gizmo_core::Query<'a, &'a EntityName>,
+    children_comp: &'a gizmo_core::Query<'a, &'a Children>,
+    is_hidden_comp: &'a gizmo_core::Query<'a, &'a gizmo_core::component::IsHidden>,
+    is_deleted_comp: &'a gizmo_core::Query<'a, &'a gizmo_core::component::IsDeleted>,
+    editor_only_markers: &'a gizmo_core::Query<'a, &'a gizmo_core::component::EditorOnly>,
+    filter_lower: &'a str,
+}
+
+/// One row of the list: its entity, and what the row shows about it.
+#[derive(Clone, Copy)]
+struct Row<'a> {
+    entity: gizmo_core::entity::Entity,
+    entity_name: &'a String,
+    is_selected: bool,
+    has_children: bool,
+    is_hidden: bool,
+}
+
 /// Draws a single entity node, recursively
 fn draw_entity_node(
     ui: &mut egui::Ui,
-    world: &World,
+    view: &HierarchyView,
     entity: gizmo_core::entity::Entity,
     state: &mut EditorState,
-    names: &gizmo_core::Query<&EntityName>,
-    children_comp: &gizmo_core::Query<&Children>,
-    is_hidden_comp: &gizmo_core::Query<&gizmo_core::component::IsHidden>,
-    is_deleted_comp: &gizmo_core::Query<&gizmo_core::component::IsDeleted>,
-    editor_only_markers: &gizmo_core::Query<&gizmo_core::component::EditorOnly>,
-    filter_lower: &str,
     listed: &mut usize,
     // Ids this draw has already descended into — the cycle guard.
     //
@@ -254,6 +267,7 @@ fn draw_entity_node(
     // drawn once rather than duplicated in the list.
     visited: &mut std::collections::HashSet<u32>,
 ) {
+    let HierarchyView { names, children_comp, is_hidden_comp, is_deleted_comp, editor_only_markers, filter_lower, .. } = *view;
     // Already drawn on this pass — through another root, another parent, or the way back
     // round a cycle. Returning here is what bounds the recursion: `insert` answers false for an
     // id already in the set, and every descent below runs *after* this line.
@@ -281,29 +295,7 @@ fn draw_entity_node(
     // Filtre uygulaması
     if !filter_lower.is_empty() && !entity_name.to_lowercase().contains(filter_lower) {
         // Bu entity filtrede yoksa ama child'ları olabilir — onları kontrol et
-        if let Some(children) = children_comp.get(entity) {
-            for &child_id in &children.0 {
-                // Generation güvenliği sağlandı, world üzerinden çekildi
-                if let Some(child_ent) = Some(child_id).filter(|c| world.is_alive(*c)) {
-                    if world.is_alive(child_ent) {
-                        draw_entity_node(
-                            ui,
-                            world,
-                            child_ent,
-                            state,
-                            names,
-                            children_comp,
-                            is_hidden_comp,
-                            is_deleted_comp,
-                            editor_only_markers,
-                            filter_lower,
-                            listed,
-                            visited,
-                        );
-                    }
-                }
-            }
-        }
+        draw_children(ui, view, entity, state, listed, visited);
         return;
     }
 
@@ -320,234 +312,7 @@ fn draw_entity_node(
 
     let is_hidden = is_hidden_comp.get(entity).is_some();
 
-    // Düğüm Çizimi + Drag Drop Kapsüllemesi
-    let mut draw_row = |ui: &mut egui::Ui| {
-        // The prototype's row: an indent, a type square, the name, then the component badges
-        // and a visibility dot pinned to the right edge.
-        let _row_id = egui::Id::new("hierarchy_row").with(entity.id());
-        let desired_size = egui::vec2(ui.available_width(), 19.0);
-        let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
-        let painter = ui.painter();
-
-        // Selection is a full-width accent fill, as in the prototype — not a tinted label. It is
-        // the strongest thing on the panel because "which entity am I editing" is the question the
-        // hierarchy exists to answer.
-        if is_selected {
-            painter.rect_filled(rect, 0.0, ACCENT);
-        } else if response.hovered() {
-            painter.rect_filled(rect, 0.0, SURFACE);
-        }
-
-        let dim = is_hidden || is_deleted_comp.get(entity).is_some();
-        let name_color = if is_selected {
-            TEXT_BRIGHT
-        } else if dim {
-            TEXT_DIM
-        } else if has_children {
-            TEXT_BRIGHT
-        } else {
-            TEXT_BODY
-        };
-
-        // The type square. A filled corner marks a group, mirroring the prototype's disclosure.
-        let sq = egui::Rect::from_center_size(
-            egui::pos2(rect.left() + 12.0, rect.center().y),
-            egui::vec2(7.0, 7.0),
-        );
-        painter.rect_stroke(
-            sq,
-            0.0,
-            egui::Stroke::new(1.0_f32, if is_selected { TEXT_BRIGHT } else { BORDER_HOT }),
-            egui::StrokeKind::Inside,
-        );
-        if has_children {
-            painter.rect_filled(sq.shrink(2.0), 0.0, if is_selected { TEXT_BRIGHT } else { BORDER_HOT });
-        }
-
-        let font = egui::FontId::proportional(11.0);
-        let name_pos = egui::pos2(rect.left() + 22.0, rect.center().y);
-        // Anchor the right-hand column to the CLIP rect, not to the row rect: inside a scroll
-        // area the row is allocated the content width, which is wider than what is visible, so
-        // anchoring to `rect.right()` pushes the dot and the badges out past the panel edge —
-        // which is exactly where they went the first time.
-        let right = rect.right().min(ui.clip_rect().right() - 4.0);
-
-        // The visibility dot, clickable. It was buried in the context menu; the prototype puts it
-        // on the row because it is the one per-entity action you take constantly.
-        let dot_c = egui::pos2(right - 8.0, rect.center().y);
-        let dot_color = if is_selected { TEXT_BRIGHT } else if is_hidden { TEXT_DIM } else { TEXT_MUTED };
-        if is_hidden {
-            painter.circle_stroke(dot_c, 3.5, egui::Stroke::new(1.0_f32, dot_color));
-        } else {
-            painter.circle_filled(dot_c, 3.0, dot_color);
-        }
-        let dot_hit = egui::Rect::from_center_size(dot_c, egui::vec2(16.0, 16.0));
-        if ui.rect_contains_pointer(dot_hit) && ui.input(|i| i.pointer.primary_pressed()) {
-            state.toggle_visibility_requests.push(entity);
-        }
-
-        // Component badges, derived from what the entity actually has rather than from its name.
-        let badge_color = if is_selected { TEXT_BRIGHT } else { ACCENT_LIGHT };
-        let mut badge_x = right - 20.0;
-        for tag in entity_badges(world, entity).into_iter().rev() {
-            let bg = painter.layout_no_wrap(tag.to_string(), egui::FontId::proportional(9.0), badge_color);
-            badge_x -= bg.size().x + 6.0;
-            painter.galley(egui::pos2(badge_x, rect.center().y - bg.size().y * 0.5), bg, badge_color);
-        }
-
-        // The name goes in LAST, clipped to whatever the badges left. Drawing it first is what put
-        // "Directional Light" underneath its own `lit` tag: a long name in a 175 px panel runs
-        // straight through the right-hand column.
-        let name_max = (badge_x - 6.0 - name_pos.x).max(24.0);
-        let mut job = egui::text::LayoutJob::single_section(
-            entity_name.clone(),
-            egui::TextFormat { font_id: font, color: name_color, ..Default::default() },
-        );
-        job.wrap = egui::text::TextWrapping {
-            max_width: name_max,
-            max_rows: 1,
-            break_anywhere: true,
-            overflow_character: Some('…'),
-        };
-        let galley = painter.layout_job(job);
-        painter.galley(
-            egui::pos2(name_pos.x, name_pos.y - galley.size().y * 0.5),
-            galley.clone(),
-            name_color,
-        );
-        // Hidden entities are struck through, the way the prototype shows a disabled row — a
-        // greyed name alone reads as "unimportant" rather than "not in the scene right now".
-        if dim {
-            painter.line_segment(
-                [
-                    egui::pos2(name_pos.x, name_pos.y),
-                    egui::pos2(name_pos.x + galley.size().x, name_pos.y),
-                ],
-                egui::Stroke::new(1.0_f32, TEXT_DIM),
-            );
-        }
-
-        // Tıklama — seçim
-        if response.clicked() {
-            state.log_info(&format!("Hiyerarşiden tıklandı: {}", entity_name));
-            if ui.input(|i| i.modifiers.command) {
-                state.toggle_selection(entity);
-            } else {
-                state.select_exclusive(entity);
-            }
-        }
-
-        // --- Sürükle Bırak (Drag & Drop) --- aynı response üzerinden
-        if response.drag_started() {
-            ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("dragged_ent"), entity));
-        }
-
-        if response.hovered() {
-            if let Some(dragged) = ui.memory(|m| {
-                m.data
-                    .get_temp::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent"))
-            }) {
-                // Vurgu rengi ile bırakılabilecek yeri göster
-                ui.painter().rect_stroke(
-                    rect,
-                    2,
-                    egui::Stroke::new(1.0_f32, egui::Color32::YELLOW),
-                    egui::StrokeKind::Inside,
-                );
-                if ui.input(|i| i.pointer.any_released()) && dragged != entity {
-                    state.reparent_request = Some((dragged, entity));
-                    ui.memory_mut(|m| {
-                        m.data
-                            .remove::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent"))
-                    });
-                }
-            }
-        }
-
-        response.context_menu(|ui| {
-            // === GÖRÜNÜRLÜK ===
-            let hide_text = if is_hidden {
-                "👁 Görünür Yap (Göster)"
-            } else {
-                "🙈 Gizle (H)"
-            };
-            if ui.button(hide_text).clicked() {
-                state.toggle_visibility_requests.push(entity);
-                ui.close();
-            }
-
-            ui.separator();
-
-            // === DÜZENLEME ===
-            if ui.button("📑 Çoğalt (Ctrl+D)").clicked() {
-                state.duplicate_requests.push(entity);
-                ui.close();
-            }
-
-            if ui.button("🗑 Sil (Delete)").clicked() {
-                state.despawn_requests.push(entity);
-                ui.close();
-            }
-
-            ui.separator();
-
-            // === HİYERARŞİ ===
-            if ui.button("➕ Çocuk Entity Ekle").clicked() {
-                // Boş child entity oluştur ve bu entity'nin altına bağla
-                state.spawn_request = Some(crate::editor_state::SpawnKind::Empty);
-                // spawn sonrası reparent yapılacak → spawn_request işlenirken
-                // parent'ı ayarlamak için pending_child_parent kullanılacak
-                state.pending_child_parent = Some(entity);
-                ui.close();
-            }
-
-            // Dövüş oyunu kısayolları
-            if ui.button("🥊 Hitbox Ekle (Çocuk)").clicked() {
-                state.spawn_request = Some(crate::editor_state::SpawnKind::Empty);
-                state.pending_child_parent = Some(entity);
-                state.pending_child_components.push("Hitbox".to_string());
-                ui.close();
-            }
-
-            if ui.button("🛡 Hurtbox Ekle (Çocuk)").clicked() {
-                state.spawn_request = Some(crate::editor_state::SpawnKind::Empty);
-                state.pending_child_parent = Some(entity);
-                state.pending_child_components.push("Hurtbox".to_string());
-                ui.close();
-            }
-
-            ui.separator();
-
-            if ui.button("🔗 Kökten Ayır (Unparent)").clicked() {
-                state.unparent_request = Some(entity);
-                ui.close();
-            }
-
-            // Seçili birden fazla obje varsa gruplama butonu
-            if state.selection.entities.len() > 1
-                && ui.button("📂 Seçilileri Grupla").clicked() {
-                    // Boş bir parent entity oluştur, sonra seçili objeleri ona bağla. The second
-                    // half is `pending_group_members`: without it this button spawned a stray
-                    // empty entity and left the selection untouched, which is what it did for as
-                    // long as it existed.
-                    state.pending_group_members = state.selection.entities.iter().copied().collect();
-                    state.spawn_request = Some(crate::editor_state::SpawnKind::Group);
-                    ui.close();
-                }
-
-            ui.separator();
-
-            // === DIŞA AKTARMA ===
-            if ui.button("💾 Prefab Olarak Kaydet").clicked() {
-                let path = format!(
-                    "demo/assets/prefabs/{}.prefab",
-                    entity_name.replace(" ", "_")
-                );
-                state.prefab_save_request = Some((entity, path));
-                ui.close();
-            }
-        });
-    };
+    let row = Row { entity, entity_name: &entity_name, is_selected, has_children, is_hidden };
 
     if has_children {
         // Katlanabilir ağaç düğümü — Toggle ve Label ayrı click alanı
@@ -588,41 +353,280 @@ fn draw_entity_node(
                 collapsing_state.toggle(ui);
             }
             // Seçilebilir label (ayrı click alanı — seçim burada)
-            draw_row(ui);
+            draw_row(ui, view, &row, state);
         });
 
         collapsing_state.store(ui.ctx());
 
         // Açıksa çocukları girintili çiz
         if is_open {
-            ui.indent(id, |ui| {
-                if let Some(children) = children_comp.get(entity) {
-                    for &child_id in &children.0 {
-                        if let Some(child_ent) = Some(child_id).filter(|c| world.is_alive(*c)) {
-                            if world.is_alive(child_ent) {
-                                draw_entity_node(
-                                    ui,
-                                    world,
-                                    child_ent,
-                                    state,
-                                    names,
-                                    children_comp,
-                                    is_hidden_comp,
-                                    is_deleted_comp,
-                                    editor_only_markers,
-                                    filter_lower,
-                                    listed,
-                                    visited,
-                                );
-                            }
-                        }
-                    }
-                }
-            });
+            ui.indent(id, |ui| draw_children(ui, view, entity, state, listed, visited));
         }
     } else {
         // Alt elemanı olmayan düz düğüm
-        draw_row(ui);
+        draw_row(ui, view, &row, state);
+    }
+}
+
+/// Draws `entity`'s living children, each with its subtree.
+fn draw_children(
+    ui: &mut egui::Ui,
+    view: &HierarchyView,
+    entity: gizmo_core::entity::Entity,
+    state: &mut EditorState,
+    listed: &mut usize,
+    visited: &mut std::collections::HashSet<u32>,
+) {
+    if let Some(children) = view.children_comp.get(entity) {
+        for &child_id in &children.0 {
+            if view.world.is_alive(child_id) {
+                draw_entity_node(ui, view, child_id, state, listed, visited);
+            }
+        }
+    }
+}
+
+/// One row: painted (`paint_row`), then the click that selects, the drag that reparents, and the
+/// context menu.
+fn draw_row(ui: &mut egui::Ui, view: &HierarchyView, row: &Row, state: &mut EditorState) {
+    let Row { entity, entity_name, .. } = *row;
+    let (rect, response) = paint_row(ui, view, row, state);
+
+    // Tıklama — seçim
+    if response.clicked() {
+        state.log_info(&format!("Hiyerarşiden tıklandı: {}", entity_name));
+        if ui.input(|i| i.modifiers.command) {
+            state.toggle_selection(entity);
+        } else {
+            state.select_exclusive(entity);
+        }
+    }
+
+    // --- Sürükle Bırak (Drag & Drop) --- aynı response üzerinden
+    if response.drag_started() {
+        ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("dragged_ent"), entity));
+    }
+
+    if response.hovered() {
+        if let Some(dragged) = ui.memory(|m| {
+            m.data
+                .get_temp::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent"))
+        }) {
+            // Vurgu rengi ile bırakılabilecek yeri göster
+            ui.painter().rect_stroke(
+                rect,
+                2,
+                egui::Stroke::new(1.0_f32, egui::Color32::YELLOW),
+                egui::StrokeKind::Inside,
+            );
+            if ui.input(|i| i.pointer.any_released()) && dragged != entity {
+                state.reparent_request = Some((dragged, entity));
+                ui.memory_mut(|m| {
+                    m.data
+                        .remove::<gizmo_core::entity::Entity>(egui::Id::new("dragged_ent"))
+                });
+            }
+        }
+    }
+
+    response.context_menu(|ui| row_context_menu(ui, row, state));
+}
+
+/// Paints one row — the selection fill, the type square, the visibility dot (which toggles on a
+/// press), the component badges, the name — and returns its rect and response.
+fn paint_row(ui: &mut egui::Ui, view: &HierarchyView, row: &Row, state: &mut EditorState) -> (egui::Rect, egui::Response) {
+    let Row { entity, entity_name, is_selected, has_children, is_hidden } = *row;
+    let HierarchyView { world, is_deleted_comp, .. } = *view;
+    // The prototype's row: an indent, a type square, the name, then the component badges
+    // and a visibility dot pinned to the right edge.
+    let _row_id = egui::Id::new("hierarchy_row").with(entity.id());
+    let desired_size = egui::vec2(ui.available_width(), 19.0);
+    let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
+    let painter = ui.painter();
+
+    // Selection is a full-width accent fill, as in the prototype — not a tinted label. It is
+    // the strongest thing on the panel because "which entity am I editing" is the question the
+    // hierarchy exists to answer.
+    if is_selected {
+        painter.rect_filled(rect, 0.0, ACCENT);
+    } else if response.hovered() {
+        painter.rect_filled(rect, 0.0, SURFACE);
+    }
+
+    let dim = is_hidden || is_deleted_comp.get(entity).is_some();
+    let name_color = if is_selected {
+        TEXT_BRIGHT
+    } else if dim {
+        TEXT_DIM
+    } else if has_children {
+        TEXT_BRIGHT
+    } else {
+        TEXT_BODY
+    };
+
+    // The type square. A filled corner marks a group, mirroring the prototype's disclosure.
+    let sq = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 12.0, rect.center().y),
+        egui::vec2(7.0, 7.0),
+    );
+    painter.rect_stroke(
+        sq,
+        0.0,
+        egui::Stroke::new(1.0_f32, if is_selected { TEXT_BRIGHT } else { BORDER_HOT }),
+        egui::StrokeKind::Inside,
+    );
+    if has_children {
+        painter.rect_filled(sq.shrink(2.0), 0.0, if is_selected { TEXT_BRIGHT } else { BORDER_HOT });
+    }
+
+    let font = egui::FontId::proportional(11.0);
+    let name_pos = egui::pos2(rect.left() + 22.0, rect.center().y);
+    // Anchor the right-hand column to the CLIP rect, not to the row rect: inside a scroll
+    // area the row is allocated the content width, which is wider than what is visible, so
+    // anchoring to `rect.right()` pushes the dot and the badges out past the panel edge —
+    // which is exactly where they went the first time.
+    let right = rect.right().min(ui.clip_rect().right() - 4.0);
+
+    // The visibility dot, clickable. It was buried in the context menu; the prototype puts it
+    // on the row because it is the one per-entity action you take constantly.
+    let dot_c = egui::pos2(right - 8.0, rect.center().y);
+    let dot_color = if is_selected { TEXT_BRIGHT } else if is_hidden { TEXT_DIM } else { TEXT_MUTED };
+    if is_hidden {
+        painter.circle_stroke(dot_c, 3.5, egui::Stroke::new(1.0_f32, dot_color));
+    } else {
+        painter.circle_filled(dot_c, 3.0, dot_color);
+    }
+    let dot_hit = egui::Rect::from_center_size(dot_c, egui::vec2(16.0, 16.0));
+    if ui.rect_contains_pointer(dot_hit) && ui.input(|i| i.pointer.primary_pressed()) {
+        state.toggle_visibility_requests.push(entity);
+    }
+
+    // Component badges, derived from what the entity actually has rather than from its name.
+    let badge_color = if is_selected { TEXT_BRIGHT } else { ACCENT_LIGHT };
+    let mut badge_x = right - 20.0;
+    for tag in entity_badges(world, entity).into_iter().rev() {
+        let bg = painter.layout_no_wrap(tag.to_string(), egui::FontId::proportional(9.0), badge_color);
+        badge_x -= bg.size().x + 6.0;
+        painter.galley(egui::pos2(badge_x, rect.center().y - bg.size().y * 0.5), bg, badge_color);
+    }
+
+    // The name goes in LAST, clipped to whatever the badges left. Drawing it first is what put
+    // "Directional Light" underneath its own `lit` tag: a long name in a 175 px panel runs
+    // straight through the right-hand column.
+    let name_max = (badge_x - 6.0 - name_pos.x).max(24.0);
+    let mut job = egui::text::LayoutJob::single_section(
+        entity_name.clone(),
+        egui::TextFormat { font_id: font, color: name_color, ..Default::default() },
+    );
+    job.wrap = egui::text::TextWrapping {
+        max_width: name_max,
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    let galley = painter.layout_job(job);
+    painter.galley(
+        egui::pos2(name_pos.x, name_pos.y - galley.size().y * 0.5),
+        galley.clone(),
+        name_color,
+    );
+    // Hidden entities are struck through, the way the prototype shows a disabled row — a
+    // greyed name alone reads as "unimportant" rather than "not in the scene right now".
+    if dim {
+        painter.line_segment(
+            [
+                egui::pos2(name_pos.x, name_pos.y),
+                egui::pos2(name_pos.x + galley.size().x, name_pos.y),
+            ],
+            egui::Stroke::new(1.0_f32, TEXT_DIM),
+        );
+    }
+    (rect, response)
+}
+
+/// The row's context menu: visibility, duplicate and delete, children and groups, unparent, prefab.
+fn row_context_menu(ui: &mut egui::Ui, row: &Row, state: &mut EditorState) {
+    let Row { entity, entity_name, is_hidden, .. } = *row;
+    // === GÖRÜNÜRLÜK ===
+    let hide_text = if is_hidden {
+        "👁 Görünür Yap (Göster)"
+    } else {
+        "🙈 Gizle (H)"
+    };
+    if ui.button(hide_text).clicked() {
+        state.toggle_visibility_requests.push(entity);
+        ui.close();
+    }
+
+    ui.separator();
+
+    // === DÜZENLEME ===
+    if ui.button("📑 Çoğalt (Ctrl+D)").clicked() {
+        state.duplicate_requests.push(entity);
+        ui.close();
+    }
+
+    if ui.button("🗑 Sil (Delete)").clicked() {
+        state.despawn_requests.push(entity);
+        ui.close();
+    }
+
+    ui.separator();
+
+    // === HİYERARŞİ ===
+    if ui.button("➕ Çocuk Entity Ekle").clicked() {
+        // Boş child entity oluştur ve bu entity'nin altına bağla
+        state.spawn_request = Some(crate::editor_state::SpawnKind::Empty);
+        // spawn sonrası reparent yapılacak → spawn_request işlenirken
+        // parent'ı ayarlamak için pending_child_parent kullanılacak
+        state.pending_child_parent = Some(entity);
+        ui.close();
+    }
+
+    // Dövüş oyunu kısayolları
+    if ui.button("🥊 Hitbox Ekle (Çocuk)").clicked() {
+        state.spawn_request = Some(crate::editor_state::SpawnKind::Empty);
+        state.pending_child_parent = Some(entity);
+        state.pending_child_components.push("Hitbox".to_string());
+        ui.close();
+    }
+
+    if ui.button("🛡 Hurtbox Ekle (Çocuk)").clicked() {
+        state.spawn_request = Some(crate::editor_state::SpawnKind::Empty);
+        state.pending_child_parent = Some(entity);
+        state.pending_child_components.push("Hurtbox".to_string());
+        ui.close();
+    }
+
+    ui.separator();
+
+    if ui.button("🔗 Kökten Ayır (Unparent)").clicked() {
+        state.unparent_request = Some(entity);
+        ui.close();
+    }
+
+    // Seçili birden fazla obje varsa gruplama butonu
+    if state.selection.entities.len() > 1
+        && ui.button("📂 Seçilileri Grupla").clicked() {
+            // Boş bir parent entity oluştur, sonra seçili objeleri ona bağla. The second
+            // half is `pending_group_members`: without it this button spawned a stray
+            // empty entity and left the selection untouched, which is what it did for as
+            // long as it existed.
+            state.pending_group_members = state.selection.entities.iter().copied().collect();
+            state.spawn_request = Some(crate::editor_state::SpawnKind::Group);
+            ui.close();
+        }
+
+    ui.separator();
+
+    // === DIŞA AKTARMA ===
+    if ui.button("💾 Prefab Olarak Kaydet").clicked() {
+        let path = format!(
+            "demo/assets/prefabs/{}.prefab",
+            entity_name.replace(" ", "_")
+        );
+        state.prefab_save_request = Some((entity, path));
+        ui.close();
     }
 }
 
