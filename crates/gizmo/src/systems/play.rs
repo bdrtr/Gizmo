@@ -573,11 +573,12 @@ impl PlayLoop {
                         entity,
                         script.file_path.clone(),
                         script.properties.clone(),
+                        script.initialized,
                     ));
                 }
             }
 
-            for (entity_id, path, properties) in entity_calls {
+            for (entity_id, path, properties, initialized) in entity_calls {
                 match reload_edge(failed, &path, engine.reload_if_changed(&path)) {
                     Some(ReloadEdge::Broke(e)) => report(PlayReport::ScriptBroke {
                         path: &path,
@@ -587,6 +588,24 @@ impl PlayLoop {
                         report(PlayReport::ScriptRecovered { path: &path })
                     }
                     None => {}
+                }
+                // `on_init` first, once: before the entity's first update, on the frame it starts
+                // playing — the first frame, or the frame it was spawned. A script whose file has
+                // not loaded is not initialised yet, so it is tried again when the file is there.
+                // One whose `on_init` failed is: the error is reported once, not every frame.
+                if !initialized {
+                    let done = match engine.init_entity_in(world, entity_id.id(), &path, &properties) {
+                        Ok(loaded) => loaded,
+                        Err(e) => {
+                            report(PlayReport::EntityScriptError { entity: entity_id, path: &path, error: &e });
+                            true
+                        }
+                    };
+                    if done {
+                        if let Some(mut script) = world.query_mut::<&mut crate::scripting::Script>().get_mut(entity_id) {
+                            script.initialized = true;
+                        }
+                    }
                 }
                 if let Err(e) = engine.update_entity_in(world, entity_id.id(), &path, dt, &properties) {
                     report(PlayReport::EntityScriptError {

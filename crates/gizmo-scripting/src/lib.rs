@@ -50,10 +50,20 @@
 //! - `entity` — read/write position, rotation, scale, velocity; spawn (returns the new id during
 //!   `on_update`) / destroy; `set_mesh`, `set_color` (the colour is applied by the host)
 //! - `input` — query key and mouse state
-//! - `physics` — apply forces and impulses
+//! - `physics` — apply forces and impulses; add bodies and colliders, set a collider's friction
+//!   and restitution (`set_material`); read the trigger and collision events of every physics
+//!   step since the script's last update, each once (`triggers`, `collisions`)
 //! - `scene` — save/load scenes, look up entities
 //! - `audio` — play 2D/3D sounds
 //! - `time` — delta time, elapsed time, FPS
+//!
+//! ## Hooks a script defines
+//! - `on_update(dt)` — once a frame, for every loaded script.
+//! - `on_init(id, props)` — once per entity carrying a [`Script`], before that entity's first
+//!   `on_entity_update`: on the first frame, or the frame it was spawned
+//!   ([`ScriptEngine::init_entity_in`]).
+//! - `on_entity_update(id, dt, props)` — every frame, per entity. Entities running the same file
+//!   share its environment; `props` is the entity's own [`Script::properties`].
 
 pub mod api_ai;
 pub mod api_animation;

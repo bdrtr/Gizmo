@@ -209,7 +209,8 @@ pub struct Script {
     /// Path of the Lua file. It is also the identity a script is loaded under: two entities with
     /// the same path share one environment.
     pub file_path: String,
-    /// Has `on_init` run for this entity yet?
+    /// Has `on_init` run for this entity yet? The play loop runs it before the entity's first
+    /// `on_entity_update` and sets this ([`ScriptEngine::init_entity_in`]).
     ///
     /// `#[serde(default, skip)]`, so it is never written to a scene and always starts false on
     /// load — which is what makes `on_init` run again when a scene is opened.
@@ -745,6 +746,35 @@ impl ScriptEngine {
         self.call_entity_update(Some(world), entity_id, script_path, dt, properties)
     }
 
+    /// Runs `on_init(entity_id, props)` for one entity — what its script does once, when the entity
+    /// starts playing — with the world in reach, as [`update_entity_in`](Self::update_entity_in).
+    ///
+    /// Returns whether the script is loaded: `Ok(true)` means the entity is initialised (its
+    /// `on_init` ran, or the script has none) and its [`Script::initialized`] can be set;
+    /// `Ok(false)` means the file has not loaded yet, so the call must be made again once it does.
+    /// The play loop calls this before an entity's first `on_entity_update`. Until 2026-11-22
+    /// nothing called `on_init` at all, though `Script::initialized` documented it.
+    pub fn init_entity_in(
+        &mut self,
+        world: &World,
+        entity_id: u32,
+        script_path: &str,
+        properties: &std::collections::BTreeMap<String, ScriptValue>,
+    ) -> Result<bool, String> {
+        let Some((_, key)) = self.loaded_scripts.get(script_path) else {
+            trace!(entity_id, script_path, "[Scripting] init_entity: script yüklü değil, sonraya kaldı");
+            return Ok(false);
+        };
+        let env: mlua::Table = self.lua.registry_value(key).map_err(|e| e.to_string())?;
+        if let Ok(func) = env.get::<LuaFunction>("on_init") {
+            let props = self.props_table(properties)?;
+            self.arm_budget();
+            self.call_hook(Some(world), || func.call::<()>((entity_id, props)))
+                .map_err(|e| self.hook_error("on_init", entity_id, script_path, &e))?;
+        }
+        Ok(true)
+    }
+
     fn call_entity_update(
         &mut self,
         world: Option<&World>,
@@ -758,36 +788,47 @@ impl ScriptEngine {
 
             // on_entity_update(entity_id, dt, props) çağır (varsa)
             if let Ok(func) = env.get::<LuaFunction>("on_entity_update") {
-                let props = self.lua.create_table().map_err(|e| e.to_string())?;
-                for (name, value) in properties {
-                    let set = match value {
-                        ScriptValue::Num(n) => props.set(name.as_str(), *n),
-                        ScriptValue::Bool(b) => props.set(name.as_str(), *b),
-                        ScriptValue::Text(t) => props.set(name.as_str(), t.as_str()),
-                    };
-                    set.map_err(|e| e.to_string())?;
-                }
+                let props = self.props_table(properties)?;
                 self.arm_budget();
-                let call = || func.call::<()>((entity_id, dt, props));
-                let result = match world {
-                    Some(world) => {
-                        let (lua, queue) = (&self.lua, &self.command_queue);
-                        api_physics::with_call_time_queries(lua, world, || api_entity::with_spawn_ids(lua, world, queue, call))
-                    }
-                    None => call(),
-                };
-                result.map_err(|e| {
-                    warn!(entity_id, script_path, error = %e, "[Scripting] on_entity_update çalışma-zamanı hatası");
-                    format!(
-                        "Lua on_entity_update hatası (entity {} mod {}): {}",
-                        entity_id, script_path, e
-                    )
-                })?;
+                self.call_hook(world, || func.call::<()>((entity_id, dt, props)))
+                    .map_err(|e| self.hook_error("on_entity_update", entity_id, script_path, &e))?;
             }
         } else {
             trace!(entity_id, script_path, "[Scripting] update_entity: script yüklü değil, atlandı");
         }
         Ok(())
+    }
+
+    /// An entity's property overrides, as the Lua table its hooks take as `props`.
+    fn props_table(&self, properties: &std::collections::BTreeMap<String, ScriptValue>) -> Result<mlua::Table, String> {
+        let props = self.lua.create_table().map_err(|e| e.to_string())?;
+        for (name, value) in properties {
+            let set = match value {
+                ScriptValue::Num(n) => props.set(name.as_str(), *n),
+                ScriptValue::Bool(b) => props.set(name.as_str(), *b),
+                ScriptValue::Text(t) => props.set(name.as_str(), t.as_str()),
+            };
+            set.map_err(|e| e.to_string())?;
+        }
+        Ok(props)
+    }
+
+    /// Calls a per-entity hook; with the world, `entity.spawn` returns the new id and
+    /// `physics.ground_at` answers during the call.
+    fn call_hook(&self, world: Option<&World>, call: impl FnOnce() -> mlua::Result<()>) -> mlua::Result<()> {
+        match world {
+            Some(world) => {
+                let (lua, queue) = (&self.lua, &self.command_queue);
+                api_physics::with_call_time_queries(lua, world, || api_entity::with_spawn_ids(lua, world, queue, call))
+            }
+            None => call(),
+        }
+    }
+
+    /// A per-entity hook's runtime error, logged and worded for the report.
+    fn hook_error(&self, hook: &str, entity_id: u32, script_path: &str, e: &mlua::Error) -> String {
+        warn!(entity_id, script_path, hook, error = %e, "[Scripting] betik kancası çalışma-zamanı hatası");
+        format!("Lua {hook} hatası (entity {entity_id} mod {script_path}): {e}")
     }
 
     /// Applies every command in the queue to the World and returns the ones left for game
@@ -1687,6 +1728,24 @@ mod tests {
             ColliderShape::Sphere(s) => assert!((s.radius - 4.0).abs() < 1e-6),
             other => panic!("beklenen Sphere, gelen {other:?}"),
         }
+    }
+
+    /// `init_entity_in`'s three answers: not loaded (`Ok(false)`, try again), loaded with or without
+    /// an `on_init` (`Ok(true)`), and an `on_init` that fails (`Err`, naming the hook).
+    #[test]
+    fn init_entity_says_whether_the_entity_is_initialised() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let world = World::new();
+        let none = Default::default();
+        assert_eq!(engine.init_entity_in(&world, 1, "absent.lua", &none), Ok(false));
+        engine.load_script_source("plain.lua", "function on_entity_update(id, dt, props) end".into()).unwrap();
+        assert_eq!(engine.init_entity_in(&world, 1, "plain.lua", &none), Ok(true), "no on_init is nothing to wait for");
+        engine.load_script_source("count.lua", "n = 0\nfunction on_init(id, props) n = n + id end".into()).unwrap();
+        assert_eq!(engine.init_entity_in(&world, 5, "count.lua", &none), Ok(true));
+        assert_eq!(engine.eval_number("count.lua", "n"), Some(5.0), "on_init ran with the entity's id");
+        engine.load_script_source("bad.lua", "function on_init(id, props) error('boom') end".into()).unwrap();
+        let err = engine.init_entity_in(&world, 1, "bad.lua", &none).unwrap_err();
+        assert!(err.contains("on_init") && err.contains("boom"), "{err}");
     }
 
     /// `physics.set_material` reaches the collider a script added on the same frame: the commands

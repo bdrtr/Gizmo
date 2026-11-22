@@ -696,3 +696,67 @@ fn a_material_set_from_a_script_reaches_a_collider_already_simulated() {
     assert!(bouncy > 2.0, "a perfectly bouncy ball comes back up near its 3 m: {bouncy:.2} m (the default material: {plain:.2} m)");
     assert!(plain < 1.0, "and the default material does not: {plain:.2} m");
 }
+
+/// A script's `on_init(id, props)` runs once per entity, before that entity's first
+/// `on_entity_update`: for two entities sharing the file, for one that joins mid-game, and for one
+/// whose file was missing until it appeared. `Script::initialized` documented the hook from the
+/// start, and nothing called it — a script's set-up never ran, in the editor's ▶ or in an exported
+/// game.
+#[test]
+fn on_init_runs_once_per_entity_before_its_first_update() {
+    use gizmo::scripting::{Script, ScriptEngine, ScriptValue};
+    const STARTER: &str = r#"
+inits = 0
+updates_before_init = 0
+started = {}
+function on_init(id, props)
+    inits = inits + 1
+    started[id] = true
+    entity.set_position(id, props.x or 0, 1, 0)
+end
+function on_entity_update(id, dt, props)
+    if not started[id] then updates_before_init = updates_before_init + 1 end
+end
+"#;
+    let script = TempScript::new("starter", STARTER);
+    let path = script.path();
+    let mut world = World::new();
+    world.insert_resource(gizmo::physics::world::PhysicsWorld::new());
+    world.insert_resource(ScriptEngine::new().expect("Lua"));
+    let with_x = |x: f64| {
+        let mut s = Script::new(&path);
+        s.properties.insert("x".into(), ScriptValue::Num(x));
+        s
+    };
+    let a = world.spawn_bundle((Transform::new(Vec3::ZERO), with_x(2.0)));
+    let b = world.spawn_bundle((Transform::new(Vec3::ZERO), with_x(3.0)));
+    let input = Input::default();
+    let mut play = PlayLoop::new();
+    let global = |world: &mut World, name: &str| world.get_resource_mut::<ScriptEngine>().and_then(|mut e| e.get_global(&path, name));
+    play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+    assert_eq!(global(&mut world, "inits"), Some(ScriptValue::Num(2.0)), "one on_init for each of the two entities");
+    assert_eq!(position_of(&world, a), Vec3::new(2.0, 1.0, 0.0), "on_init ran with a's own props, on the first frame");
+    assert_eq!(position_of(&world, b), Vec3::new(3.0, 1.0, 0.0));
+    for _ in 0..5 {
+        play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+    }
+    assert_eq!(global(&mut world, "inits"), Some(ScriptValue::Num(2.0)), "and once: not again on later frames");
+
+    // One that joins mid-game.
+    let c = world.spawn_bundle((Transform::new(Vec3::ZERO), with_x(4.0)));
+    play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+    assert_eq!(global(&mut world, "inits"), Some(ScriptValue::Num(3.0)), "an entity spawned mid-game is initialised on its first frame");
+    assert_eq!(position_of(&world, c), Vec3::new(4.0, 1.0, 0.0));
+    assert_eq!(global(&mut world, "updates_before_init"), Some(ScriptValue::Num(0.0)), "no entity was updated before it was initialised");
+
+    // One whose file does not exist yet: initialised when it appears, not marked done before.
+    let late = std::env::temp_dir().join(format!("gizmo_late_{}.lua", std::process::id()));
+    let _ = std::fs::remove_file(&late);
+    let late_path = late.to_string_lossy().to_string();
+    let d = world.spawn_bundle((Transform::new(Vec3::ZERO), Script::new(&late_path)));
+    play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+    std::fs::write(&late, "function on_init(id, props) entity.set_position(id, 0, 7, 0) end").expect("write");
+    play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
+    let _ = std::fs::remove_file(&late);
+    assert_eq!(position_of(&world, d), Vec3::new(0.0, 7.0, 0.0), "a script that loads late still gets its on_init");
+}
