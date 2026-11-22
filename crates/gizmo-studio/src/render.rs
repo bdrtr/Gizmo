@@ -344,6 +344,27 @@ fn load_prefab(
     }
 }
 
+/// Where a duplicate of `ent_id` goes through: the system's temporary directory, named for this
+/// process, the entity and the moment. It was `demo/assets/prefabs/`, relative to wherever the
+/// studio was started: a project's own assets folder had a file appear and vanish in it on every
+/// Ctrl+D, and the directory was created from scratch under any other working directory.
+///
+/// Named from the entity's NUMBERS, not its `Display` (`Entity(3:0)`): a colon in an NTFS file name
+/// is an alternate data stream, so on Windows the save wrote a stream of a file called
+/// `…_Entity(3`, the removal deleted only the stream, and the file stayed in the temp folder.
+fn duplicate_temp_path(ent_id: Entity, time_ns: u32) -> String {
+    std::env::temp_dir()
+        .join(format!(
+            "gizmo_duplicate_{}_{}v{}_{}.prefab",
+            std::process::id(),
+            ent_id.id(),
+            ent_id.generation(),
+            time_ns
+        ))
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// `Ctrl+D`: duplicates `ent_id` by a round trip through a temporary prefab, and selects the copy.
 fn duplicate_entity(world: &mut World, ent_id: Entity, scene_registry: &gizmo::scene::registry::SceneRegistry) {
     // Çakışmaları(Race condition) engellemek için temp dosyasını entity id ve zaman damgasıyla eşsiz(unique) yapıyoruz
@@ -352,14 +373,7 @@ fn duplicate_entity(world: &mut World, ent_id: Entity, scene_registry: &gizmo::s
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    // In the system's temporary directory, named for this process too. It was
-    // `demo/assets/prefabs/`, relative to wherever the studio was started: a project's own assets
-    // folder had a file appear and vanish in it on every Ctrl+D, and the directory was created
-    // from scratch under any other working directory (a test's, a game's).
-    let temp_path = std::env::temp_dir()
-        .join(format!("gizmo_duplicate_{}_{}_{}.prefab", std::process::id(), ent_id, time_ns))
-        .to_string_lossy()
-        .into_owned();
+    let temp_path = duplicate_temp_path(ent_id, time_ns);
 
     // Duplicate is a round trip through a temporary prefab: save the entity out, read it back
     // in. Either half can fail, and this used to drop the save's result and announce "Obje
@@ -790,6 +804,16 @@ mod file_request_tests {
             world.query::<(Entity, &Transform)>().iter().map(|(e, t)| (e, t.position)).collect();
         assert!(positions.iter().any(|&(e, p)| e == lamp && p == at), "the original moved: {positions:?}");
         assert!(positions.iter().any(|&(e, p)| e != lamp && p == drop), "the instance is not at the drop: {positions:?}");
+    }
+
+    /// The duplicate's temporary file name is one every file system takes: nothing Windows reserves.
+    /// It held `Entity(3:0)` once, and the colon made it an NTFS stream the removal did not reach.
+    #[test]
+    fn the_duplicate_temp_file_name_is_valid_on_windows() {
+        let path = duplicate_temp_path(Entity::new(3, 7), 123);
+        let name = std::path::Path::new(&path).file_name().unwrap().to_string_lossy().into_owned();
+        assert!(!name.chars().any(|c| "<>:\"/\\|?*".contains(c)), "a character Windows refuses in {name:?}");
+        assert!(name.contains("3v7"), "the entity is not in the name: {name:?}");
     }
 
     /// Ctrl+D: the copy exists and is selected, and the temporary prefab it went through is gone —
