@@ -28,6 +28,8 @@ pub mod rigid_body;
 pub mod velocity;
 
 pub use breakable::{Breakable, Debris};
+#[cfg(feature = "ecs")]
+pub use breakable::BreakEvent;
 pub use explosion::{Explosion, ExplosionFalloff};
 pub use external_force::{EnvironmentForce, ExternalForce};
 pub use kinematic_target::KinematicTarget;

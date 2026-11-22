@@ -56,12 +56,12 @@ pub struct Explosion {
     /// that breakable's `threshold`, so a blast too weak to move an object cannot chip it
     /// either.
     pub damage: f32,
-    /// Intended reach of the damage effect in metres, kept separate from
-    /// [`force_radius`](Self::force_radius) so a blast could shove further than it hurts.
+    /// Reach of the damage in metres, separate from [`force_radius`](Self::force_radius) so a
+    /// blast can shove further than it hurts: a [`Breakable`](super::Breakable) takes
+    /// [`damage`](Self::damage) scaled by the falloff over this radius. Damage still needs the
+    /// push to clear the breakable's threshold, so past `force_radius` nothing is hurt.
     ///
-    /// **Not currently honoured.** No system in this workspace reads this field; the
-    /// built-in explosion pass tests breakables against `force_radius`. Setting it changes
-    /// nothing in the simulation today.
+    /// Until 2026-11-22 nothing read this field and the damage rode on `force_radius`.
     pub damage_radius: f32,
     /// Which [`ExplosionFalloff`] curve weights [`force`](Self::force) and
     /// [`damage`](Self::damage) at a given distance — one curve for both.

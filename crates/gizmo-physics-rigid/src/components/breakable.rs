@@ -9,8 +9,14 @@
 /// Every **bounded** collider shatters — sphere, box, capsule, convex hull and compound. The
 /// Voronoi cells are cut out of the collider's local bounding box, so the debris field has the
 /// silhouette of that box rather than of the shape itself: a sphere breaks like the cube around
-/// it. That is the same order of approximation as the debris already carries, since each cell is
-/// then replaced by a sphere of matching volume whatever its real geometry.
+/// it. Each piece is then a body of its cell's own shape — a convex hull of the cell, the same
+/// geometry `gizmo` draws it with — with the cell's mass.
+///
+/// A breakable breaks whether or not it is a body: a pane of glass or a wall standing as bare
+/// collider (static geometry) shatters as a crate does, its pieces starting at rest.
+///
+/// What broke is told by a [`BreakEvent`], into `Events<BreakEvent>` when the world has that
+/// queue (`world.init_events::<BreakEvent>()`).
 ///
 /// [`Plane`](gizmo_physics_core::ColliderShape::Plane) and
 /// [`TriMesh`](gizmo_physics_core::ColliderShape::TriMesh) do **not** shatter: the first is an
@@ -65,14 +71,11 @@ pub struct Breakable {
     /// its [`Debris::age`] reaches this. Zero or less keeps the pieces forever. (Through
     /// 2026-11-03 this was metadata nobody read and every piece stayed in the solver for good.)
     pub debris_lifetime: f32,
-    /// Asset identifier for the sound to play when the body breaks. Carried for a game's
-    /// audio layer to resolve — this crate has no audio dependency and never plays it.
-    /// `None` means the caller has nothing to play.
+    /// The name of a loaded sound to play, at the body, when it breaks. This crate has no audio;
+    /// `gizmo`'s physics step plays it (with its `audio` and `render` features, where there is a
+    /// listener), and the [`BreakEvent`] carries it for a game that plays its own. `None` plays
+    /// nothing.
     pub break_sound: Option<String>,
-    /// Asset identifier for a prefab to spawn per piece instead of the procedurally
-    /// shattered geometry. Metadata only — the built-in path always spawns procedural
-    /// chunks and never consults this.
-    pub piece_prefab: Option<String>,
     /// Latched `true` once the body has shattered, so later contacts cannot shatter it a
     /// second time. Nothing in the engine clears it again.
     ///
@@ -94,7 +97,6 @@ impl Default for Breakable {
             max_health: 100.0,
             debris_lifetime: 5.0,
             break_sound: None,
-            piece_prefab: None,
             is_broken: false,
         }
     }
@@ -141,3 +143,26 @@ pub struct Debris {
 
 #[cfg(feature = "ecs")]
 gizmo_core::impl_component!(Debris);
+
+/// A [`Breakable`] has just shattered: which, where, into how many pieces, and the sound it asked
+/// for.
+///
+/// Sent by the fracture step into `Events<BreakEvent>` when the world has that queue. Until
+/// 2026-11-22 nothing said a body broke — it was despawned by the same step — so a game could only
+/// notice a breakable gone missing.
+#[cfg(feature = "ecs")]
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct BreakEvent {
+    /// The body that broke. Despawned by the step that sent this, so it is a name, not a handle
+    /// to look up; its pieces carry its id as [`Debris::source`].
+    pub body: gizmo_core::Entity,
+    /// Where the body was when it broke, world space.
+    pub position: gizmo_math::Vec3,
+    /// Where it was struck: the deepest contact of the hit, or the blast's centre.
+    pub impact_point: gizmo_math::Vec3,
+    /// How many pieces it broke into.
+    pub pieces: u32,
+    /// [`Breakable::break_sound`].
+    pub sound: Option<String>,
+}

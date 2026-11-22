@@ -929,7 +929,21 @@ fn dispatch_events(world: &World, physics_world: &PhysicsWorld) {
 }
 
 /// System that processes collision events and breaks objects that exceed their threshold.
+///
+/// [`fracture_step`] without its answer; the breaks still reach `Events<BreakEvent>` when the
+/// world has that queue.
 pub fn physics_fracture_system(world: &World, dt: f32) {
+    let _ = fracture_step(world, dt);
+}
+
+/// One fracture step: ages the debris, breaks every [`Breakable`](crate::components::Breakable)
+/// the step's collisions broke, and returns what broke, in the order it broke — each break once,
+/// also sent into `Events<BreakEvent>` when the world has that queue.
+///
+/// The return value is for the caller that answers a break itself (`gizmo` plays its
+/// `break_sound`): a broken body is despawned only when the commands are applied, so looking for
+/// latched `is_broken` bodies would see one break again on a second step of the same frame.
+pub fn fracture_step(world: &World, dt: f32) -> Vec<crate::components::BreakEvent> {
     use crate::components::Breakable;
     use gizmo_core::commands::Commands;
     use gizmo_core::system::SystemParam;
@@ -939,7 +953,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
         // No physics world ⇒ nothing to fracture. Optional-resource absence, not a bug → trace.
         Err(_) => {
             tracing::trace!("[Physics] fracture system: no PhysicsWorld resource, skipping");
-            return;
+            return Vec::new();
         }
     };
 
@@ -949,17 +963,21 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
         // silently dropped — a hidden failure worth surfacing (debug: infra-level).
         Err(e) => {
             tracing::debug!(error = ?e, "[Physics] fracture system: Commands unavailable, fractures dropped this frame");
-            return;
+            return Vec::new();
         }
     };
 
     age_debris(world, &mut commands, dt);
 
     let mut shattered = std::collections::HashSet::new();
+    let mut breaks = Vec::new();
 
+    // `Velocity` is optional: a breakable standing as bare collider (static geometry — a pane, a
+    // wall) has none, and requiring it made such a body immune to every hit. Its pieces start at
+    // rest.
     // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
     let query_opt = unsafe {
-        world.query_filtered_unchecked::<(&mut Breakable, &Transform, &Collider, &Velocity), gizmo_core::query::Without<gizmo_core::pool::Pooled>>()
+        world.query_filtered_unchecked::<(&mut Breakable, &Transform, &Collider, Option<&Velocity>), gizmo_core::query::Without<gizmo_core::pool::Pooled>>()
     };
     let mut query = query_opt;
 
@@ -1037,19 +1055,19 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
                     breakable.current_health -= max_impulse;
                     if breakable.current_health <= 0.0 {
                         // Latch only if it really broke — see `shatter_entity`.
-                        let broke = shatter_entity(
+                        let pieces = shatter_entity(
                             &mut commands,
                             entity_a,
                             &breakable,
                             transform,
                             collider,
-                            vel,
+                            vel.copied().unwrap_or_default(),
                             -impact_normal,
-                            impact_point,
                         );
-                        if broke {
+                        if let Some(pieces) = pieces {
                             breakable.is_broken = true;
                             shattered.insert(event.entity_a.id());
+                            breaks.push(report_break(world, entity_a, &breakable, transform.position, impact_point, pieces));
                         }
                     }
                 }
@@ -1066,19 +1084,19 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
                     if breakable.current_health <= 0.0 {
-                        let broke = shatter_entity(
+                        let pieces = shatter_entity(
                             &mut commands,
                             entity_b,
                             &breakable,
                             transform,
                             collider,
-                            vel,
+                            vel.copied().unwrap_or_default(),
                             impact_normal,
-                            impact_point,
                         );
-                        if broke {
+                        if let Some(pieces) = pieces {
                             breakable.is_broken = true;
                             shattered.insert(event.entity_b.id());
+                            breaks.push(report_break(world, entity_b, &breakable, transform.position, impact_point, pieces));
                         }
                     }
                 }
@@ -1086,6 +1104,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
         }
     }
     drop(query);
+    breaks
 }
 
 /// The local-space box the Voronoi cells are cut out of: `(center, half_extents)`.
@@ -1202,15 +1221,12 @@ fn shatter_entity(
     breakable: &crate::components::Breakable,
     transform: &Transform,
     collider: &Collider,
-    vel: &Velocity,
+    vel: Velocity,
     impact_direction: gizmo_math::Vec3,
-    _impact_point: gizmo_math::Vec3,
-) -> bool {
+) -> Option<u32> {
     use crate::fracture::voronoi_shatter;
 
-    let Some((center, extents)) = shatter_bounds(collider) else {
-        return false;
-    };
+    let (center, extents) = shatter_bounds(collider)?;
 
     // Despawn the original entity
     commands.entity(entity).despawn();
@@ -1219,13 +1235,9 @@ fn shatter_entity(
     // two objects breaking under identical conditions produce different debris while a given
     // object still breaks the same way on every replay — see `shatter_seed`.
     let chunks = voronoi_shatter(extents, breakable.max_pieces, shatter_seed(entity.id()));
+    let pieces = chunks.len() as u32;
 
     for chunk in chunks {
-        // Create new convex hull colliders or approximated boxes for the chunks.
-        // For simplicity, we approximate each chunk with a small sphere or box based on its volume.
-        // A full implementation would use ConvexHull shapes.
-        let radius = (chunk.volume * 0.1).powf(1.0 / 3.0).max(0.1);
-
         // Offset chunk center by parent's transform. `center` is where the shatter box sits in
         // the collider's own frame — zero for every shape whose geometry is built about the
         // origin, non-zero only for an off-centre hull or compound.
@@ -1237,15 +1249,19 @@ fn shatter_entity(
         new_transform.scale = gizmo_math::Vec3::ONE;
 
         // Give chunks a slight explosive velocity outwards from the center of mass
-        let mut new_vel = *vel;
+        let mut new_vel = vel;
         let outward = chunk.center_of_mass.normalize_or_zero();
         new_vel.linear += outward * 2.0 + impact_direction * 5.0; // Explosion effect
 
-        let chunk_collider = Collider::sphere(radius).with_material(collider.material);
+        // The piece is a body of the cell's own shape, the hull the facade draws it with. It used
+        // to be a sphere of radius `(0.1 · volume)^(1/3)` — 42 % of the cell's volume — which the
+        // drawn cell sank into, and which, having no rolling friction, rolled on forever: measured,
+        // a broken crate's ten pieces were still rolling at 1.7 m/s after eight seconds and had
+        // spread 14 m, where hulls come to rest within four seconds and 3.3 m.
+        let local = center_of_mass_frame(&chunk);
+        let chunk_collider = Collider::convex_hull(&local).with_material(collider.material);
         let mut rb = RigidBody::new(chunk.volume * collider.material.density, true);
         rb.update_inertia_from_collider(&chunk_collider);
-
-        let local = center_of_mass_frame(&chunk);
         commands
             .spawn()
             .insert(rb)
@@ -1262,7 +1278,24 @@ fn shatter_entity(
             });
     }
 
-    true
+    Some(pieces)
+}
+
+/// The [`BreakEvent`](crate::components::BreakEvent) for a body that has just shattered, also
+/// sent into the world's `Events<BreakEvent>` when it has that queue.
+fn report_break(
+    world: &World,
+    body: Entity,
+    breakable: &crate::components::Breakable,
+    position: gizmo_math::Vec3,
+    impact_point: gizmo_math::Vec3,
+    pieces: u32,
+) -> crate::components::BreakEvent {
+    let event = crate::components::BreakEvent { body, position, impact_point, pieces, sound: breakable.break_sound.clone() };
+    if let Ok(mut events) = world.try_get_resource_mut::<gizmo_core::event::Events<crate::components::BreakEvent>>() {
+        events.send(event.clone());
+    }
+    event
 }
 
 /// A chunk's vertices moved into its own frame: about its centre of mass, where its body sits.
@@ -1286,7 +1319,17 @@ fn age_debris(world: &World, commands: &mut gizmo_core::commands::Commands, dt: 
 
 /// System that checks for Explosion components and applies outward forces
 /// to all rigid bodies and soft body nodes within the radius.
+///
+/// [`explosion_step`] without its answer; the breaks still reach `Events<BreakEvent>` when the
+/// world has that queue.
 pub fn physics_explosion_system(world: &World, dt: f32) {
+    let _ = explosion_step(world, dt);
+}
+
+/// One explosion pass: every active [`Explosion`](crate::components::Explosion) pushes the bodies
+/// in its `force_radius`, damages the breakables in its `damage_radius`, and is despawned. Returns
+/// what broke, as [`fracture_step`] does.
+pub fn explosion_step(world: &World, dt: f32) -> Vec<crate::components::BreakEvent> {
     use crate::components::{Explosion, ExplosionFalloff};
     use gizmo_core::commands::Commands;
     use gizmo_core::system::SystemParam;
@@ -1296,7 +1339,7 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
         // Without Commands the explosion despawns/impulses can't be issued — surface it.
         Err(e) => {
             tracing::debug!(error = ?e, "[Physics] explosion system: Commands unavailable, skipping");
-            return;
+            return Vec::new();
         }
     };
 
@@ -1323,10 +1366,11 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     }
 
     if active_explosions.is_empty() {
-        return; // Nothing to explode
+        return Vec::new(); // Nothing to explode
     }
 
     let mut shattered = std::collections::HashSet::new();
+    let mut breaks = Vec::new();
 
     // Helper closure to calculate falloff intensity
     let calculate_intensity = |dist: f32, radius: f32, falloff: ExplosionFalloff| -> f32 {
@@ -1346,7 +1390,7 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     // Check for Breakables that should shatter
     // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
     let mut breakable_query_opt = unsafe {
-        world.query_filtered_unchecked::<(Entity, &mut crate::components::Breakable, &Transform, &Collider, &Velocity), gizmo_core::query::Without<gizmo_core::pool::Pooled>>()
+        world.query_filtered_unchecked::<(Entity, &mut crate::components::Breakable, &Transform, &Collider, Option<&Velocity>), gizmo_core::query::Without<gizmo_core::pool::Pooled>>()
     };
     {
         let breakable_query = &mut breakable_query_opt;
@@ -1364,12 +1408,15 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
                     let intensity =
                         calculate_intensity(dist, explosion.force_radius, explosion.falloff);
                     let impulse_mag = explosion.force * intensity;
+                    // The damage reaches as far as `damage_radius`, on its own falloff — until
+                    // 2026-11-22 a field nothing read, the damage riding on the push's radius.
+                    let hurt = calculate_intensity(dist, explosion.damage_radius, explosion.falloff);
 
-                    if impulse_mag > breakable.threshold {
-                        breakable.current_health -= explosion.damage * intensity;
+                    if hurt > 0.0 && impulse_mag > breakable.threshold {
+                        breakable.current_health -= explosion.damage * hurt;
                         if breakable.current_health <= 0.0 {
                             let dir = diff / dist;
-                            let mut exp_vel = *vel;
+                            let mut exp_vel = vel.copied().unwrap_or_default();
                             exp_vel.linear += dir * impulse_mag * 0.1; // Estimate mass
                             // Resolved, not fabricated. A generation-0 handle to a recycled
                             // slot makes `shatter_entity`'s despawn a silent no-op while the
@@ -1377,19 +1424,11 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
                             // original in the scene beside its own debris and, since every
                             // damage path is gated on `!is_broken` and nothing clears it,
                             // permanently undamageable.
-                            let broke = shatter_entity(
-                                &mut commands,
-                                entity,
-                                &breakable,
-                                transform,
-                                collider,
-                                &exp_vel,
-                                dir,
-                                transform.position,
-                            );
-                            if broke {
+                            let pieces = shatter_entity(&mut commands, entity, &breakable, transform, collider, exp_vel, dir);
+                            if let Some(pieces) = pieces {
                                 breakable.is_broken = true;
                                 shattered.insert(entity);
+                                breaks.push(report_break(world, entity, &breakable, transform.position, *exp_pos, pieces));
                             }
                         }
                     }
@@ -1461,6 +1500,7 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     for (exp_entity, _, _) in active_explosions {
         commands.entity(exp_entity).despawn();
     }
+    breaks
 }
 
 
