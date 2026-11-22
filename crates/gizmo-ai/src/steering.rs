@@ -114,14 +114,16 @@ pub fn arrive(
 /// are ignored, so this is a proximity repulsion and not a predictive avoidance — it never
 /// looks ahead along `current_vel` and cannot steer around an obstacle it has not yet reached.
 ///
-/// Each contribution is `(agent - center) / distance²`, i.e. an escape direction of magnitude
-/// `1/distance`, and the contributions of overlapping obstacles are summed. The sum's direction
-/// is then kept while its magnitude is remapped to `min(|sum|, 1) * max_speed`, so the escape
-/// speed grows as the agent closes in and saturates at `max_speed`. Because `|sum|` is measured
-/// in inverse metres, that saturation knee sits at a hard-coded 1 m: a single obstacle closer
-/// than 1 m always yields full `max_speed`, and beyond 1 m the response falls off as
-/// `1/distance`. The behaviour is therefore not scale-invariant — on a world built at a very
-/// different unit scale, tune `max_force` and the radii accordingly.
+/// Each contribution is the escape direction scaled by `radius / distance - 1` — zero at the edge
+/// of the obstacle's radius, 1 at half of it, growing without bound towards its centre — and the
+/// contributions of overlapping obstacles are summed. The sum's direction is then kept while its
+/// magnitude is remapped to `min(|sum|, 1) * max_speed`: the escape speed rises **continuously**
+/// from nothing at the radius to full `max_speed` within half of it, the same at any scale.
+///
+/// It used to be `1 / distance` in inverse metres, which had two faults (see [`separate`], where
+/// they were measured): a jump at the radius, from `max_speed / radius` straight to nothing, and a
+/// saturation knee at a hard-coded 1 m, so the response depended on the world's unit — under a
+/// 1 m radius it was all-or-nothing.
 ///
 /// Returns [`Vec3::ZERO`] when no obstacle is in range. An obstacle whose centre coincides with
 /// the agent (distance at or below `f32::EPSILON`) is skipped instead of dividing by zero, so a
@@ -141,8 +143,8 @@ pub fn avoid_obstacles(
         let dist = diff.length();
 
         if dist > f32::EPSILON && dist < obs_radius {
-            // Engele yaklaşıldıkça kaçış kuvveti artar (ters-kare yasası ile yakınlık ölçeklenir)
-            let force = diff / (dist * dist);
+            // Engele yaklaşıldıkça kaçış artar: yarıçapta sıfır, yarısında 1.
+            let force = diff / dist * (obs_radius / dist - 1.0);
             desired_velocity += force;
             count += 1;
         }
@@ -168,9 +170,16 @@ pub fn avoid_obstacles(
 ///
 /// `neighbors` are world-space positions in metres; only those with
 /// `0 < distance < separation_radius` contribute. The accumulation and remapping are identical
-/// to [`avoid_obstacles`]: each neighbour adds `(agent - neighbour) / distance²`, and the sum is
-/// rescaled to `min(|sum|, 1) * max_speed`, which saturates at full `max_speed` for any single
-/// neighbour closer than 1 m.
+/// to [`avoid_obstacles`]: each neighbour adds its escape direction scaled by
+/// `separation_radius / distance - 1`, and the sum is rescaled to `min(|sum|, 1) * max_speed`.
+/// A single neighbour pushes with nothing at the radius and full `max_speed` within half of it.
+///
+/// It used to add `(agent - neighbour) / distance²` — a push of `max_speed / distance` that
+/// jumped from `max_speed / separation_radius` to nothing as a neighbour crossed the radius, and
+/// saturated at a hard-coded 1 m whatever the radius. A flock packed near its radius chattered
+/// across that edge and never came to rest: measured in `coban`, twelve sheep penned and braking
+/// to graze still moved at 0.04 m/s after a minute; with the push falling to zero at the radius
+/// they settle (0.007 m/s).
 ///
 /// Returns [`Vec3::ZERO`] when no neighbour is inside `separation_radius`. Neighbours exactly
 /// coincident with the agent (distance at or below `f32::EPSILON`) are skipped rather than
@@ -192,8 +201,7 @@ pub fn separate(
         let dist = diff.length();
 
         if dist > f32::EPSILON && dist < separation_radius {
-            // Ters-kare yasası: komşu yakınlaştıkça itme büyüklüğü artar.
-            let force = diff / (dist * dist);
+            let force = diff / dist * (separation_radius / dist - 1.0);
             desired_velocity += force;
             count += 1;
         }
@@ -250,17 +258,22 @@ pub fn cohesion(
     Vec3::ZERO
 }
 
-/// Flocking alignment: matches the agent's heading to the average heading of its neighbours.
+/// Flocking alignment: matches the agent's velocity to the average velocity of its neighbours —
+/// Reynolds' *velocity matching*, heading and speed both.
 ///
 /// `neighbors` are `(position, linear_velocity)` pairs in metres and m/s; only those within
-/// `alignment_radius` metres of the agent contribute. The mean neighbour velocity is
-/// **normalised** before use, so the agent matches the flock's *direction* at full `max_speed`
-/// however slowly the flock is actually moving — this behaviour copies heading, not speed.
+/// `alignment_radius` metres of the agent contribute. The desired velocity is their mean, capped
+/// at `max_speed`: a flock walking slowly asks for a slow walk, and a flock at rest asks for rest
+/// (the result is `-current_vel` clamped to `max_force`, so the agent brakes with it).
 ///
-/// Returns [`Vec3::ZERO`] when no neighbour is in range. When neighbours are in range but their
-/// velocities cancel out (opposing headings, or a stationary flock), the desired velocity is
-/// zero and the result is `-current_vel` clamped to `max_force`: the agent brakes rather than
-/// doing nothing.
+/// It used to **normalise** the mean, asking for full `max_speed` along the flock's heading
+/// however slowly the flock moved. Nothing could then bring a flock to a stop: measured in
+/// `coban`, six sheep that had split from the flock walked on at 0.47 m/s for over a minute, the
+/// dog 46 m away and each sheep braking to graze — every bit of speed the brake took, the
+/// alignment asked back.
+///
+/// Returns [`Vec3::ZERO`] when no neighbour is in range. Opposing headings cancel to a zero mean,
+/// and the agent brakes.
 pub fn alignment(
     current_pos: Vec3,
     current_vel: Vec3,
@@ -282,7 +295,7 @@ pub fn alignment(
 
     if count > 0 {
         avg_vel /= count as f32;
-        let desired_velocity = avg_vel.normalize_or_zero() * max_speed;
+        let desired_velocity = avg_vel.clamp_length_max(max_speed);
         let steering = desired_velocity - current_vel;
         return clamp_force(steering, max_force);
     }
@@ -314,12 +327,17 @@ pub struct SteeringWeights {
     /// evaluation but contributes nothing.
     pub seek: f32,
 
-    /// Intended weight for an arrival/braking term. Default `1.0`.
+    /// Weight on the [`arrive`] term toward the optional target, which slows the agent inside
+    /// [`slowing_radius`](Self::slowing_radius) and stops it on the target. Default `0.0` (off).
     ///
-    /// **Currently dead**: [`combined_steering`] never reads this field and always uses [`seek`]
-    /// toward the target, never [`arrive`], so changing it has no effect on anything in this
-    /// crate. Blend [`arrive`] yourself if you need the agent to stop.
+    /// Gated like the flocking weights. To steer to a stop, set this and set
+    /// [`seek`](Self::seek) to `0.0`: with both, the seek term still pulls at full speed. Until
+    /// 2026-11-22 this field was read by nothing — it defaulted to `1.0` and the target term was
+    /// always a seek — so its default is now the `0.0` that matches what every caller got.
     pub arrive: f32,
+    /// The radius in metres inside which the [`arrive`](Self::arrive) term slows down. Default
+    /// `2.0`.
+    pub slowing_radius: f32,
 
     /// Weight on [`avoid_obstacles`]. Default `5.0`.
     ///
@@ -342,8 +360,8 @@ pub struct SteeringWeights {
 
     /// Weight on [`alignment`]. Default `1.0`.
     ///
-    /// Note that [`alignment`] always requests full `max_speed` along the flock's mean heading,
-    /// so this weight scales a full-speed heading correction rather than a small nudge.
+    /// [`alignment`] asks for the neighbours' mean velocity, so this weights how strongly an agent
+    /// keeps the flock's pace — a flock at rest included.
     pub alignment: f32,
 }
 
@@ -351,7 +369,8 @@ impl Default for SteeringWeights {
     fn default() -> Self {
         Self {
             seek: 1.0,
-            arrive: 1.0,
+            arrive: 0.0,
+            slowing_radius: 2.0,
             avoid: 5.0,
             separate: 1.5,
             cohesion: 1.0,
@@ -364,8 +383,10 @@ impl Default for SteeringWeights {
 /// once more to `max_force`.
 ///
 /// Arguments:
-/// - `target_pos` — `None` drops the goal term entirely. `Some` always runs [`seek`], never
-///   [`arrive`], so this entry point does not brake on arrival.
+/// - `target_pos` — `None` drops the goal terms. `Some` runs [`seek`] weighted by
+///   [`SteeringWeights::seek`], and [`arrive`] weighted by [`SteeringWeights::arrive`] when that
+///   is positive; set the seek weight to `0.0` and the arrive weight above it to steer to a
+///   stop.
 /// - `obstacles` — `(center, avoidance_radius)` pairs in metres, forwarded to
 ///   [`avoid_obstacles`]; only consulted when the slice is non-empty.
 /// - `neighbors` — `(position, linear_velocity)` pairs in metres and m/s. The positions are
@@ -400,6 +421,10 @@ pub fn combined_steering(
 
     if let Some(target) = target_pos {
         total_force += seek(current_pos, target, current_vel, max_speed, max_force) * weights.seek;
+        if weights.arrive > 0.0 {
+            total_force += arrive(current_pos, target, current_vel, max_speed, max_force, weights.slowing_radius)
+                * weights.arrive;
+        }
     }
 
     if weights.avoid > 0.0 && !obstacles.is_empty() {
@@ -484,6 +509,72 @@ mod tests {
             near.length(),
             far.length()
         );
+    }
+
+    /// Alignment matches the neighbours' velocity, speed included: a slow flock asks for its slow
+    /// pace, not for full speed along its heading. And a group whose agents brake comes to a stop
+    /// with alignment on — before, the normalised heading asked back every bit of speed the brake
+    /// took, and two braking agents settled at a steady walk of 1.11 m/s forever.
+    #[test]
+    fn alignment_matches_speed_so_a_braking_flock_stops() {
+        let slow = [(Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.1, 0.0, 0.0))];
+        let s = alignment(Vec3::ZERO, Vec3::ZERO, &slow, 3.0, 2.0, 100.0);
+        assert!((s - Vec3::new(0.1, 0.0, 0.0)).length() < 1e-6, "asks for the flock's 0.1 m/s, got {s:?}");
+        let fast = [(Vec3::new(1.0, 0.0, 0.0), Vec3::new(9.0, 0.0, 0.0))];
+        let s = alignment(Vec3::ZERO, Vec3::ZERO, &fast, 3.0, 2.0, 100.0);
+        assert!((s.length() - 2.0).abs() < 1e-6, "capped at max_speed, got {s:?}");
+
+        // Two agents walking side by side, each braking (−0.8 v), aligned with each other.
+        let mut agents = [(Vec3::ZERO, Vec3::new(0.5, 0.0, 0.0)), (Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.5, 0.0, 0.0))];
+        let dt = 1.0 / 60.0;
+        for _ in 0..600 {
+            let before = agents;
+            for (i, agent) in agents.iter_mut().enumerate() {
+                let other = [before[1 - i]];
+                let steer = alignment(agent.0, agent.1, &other, 3.0, 2.0, 4.0) - agent.1 * 0.8;
+                agent.1 = (agent.1 + steer.clamp_length_max(4.0) * dt).clamp_length_max(2.0);
+                agent.0 += agent.1 * dt;
+            }
+        }
+        let speed = agents[0].1.length().max(agents[1].1.length());
+        assert!(speed < 0.01, "ten seconds of braking stops an aligned pair: {speed:.3} m/s");
+    }
+
+    /// The push falls to nothing at the radius — no jump as a neighbour or an obstacle crosses it —
+    /// reaches full speed at half the radius, and is the same at any scale. Before, a neighbour
+    /// just inside a 1.2 m radius pushed at 84 % of `max_speed` and one just outside at nothing,
+    /// and the saturation knee sat at 1 m whatever the radius.
+    #[test]
+    fn separation_and_avoidance_fall_to_zero_at_the_radius_and_ignore_scale() {
+        let (speed, force) = (2.0, 1000.0);
+        let sep = |d: f32, r: f32| separate(Vec3::ZERO, Vec3::ZERO, &[Vec3::new(d, 0.0, 0.0)], r, speed, force).length();
+        let avoid = |d: f32, r: f32| avoid_obstacles(Vec3::ZERO, Vec3::ZERO, &[(Vec3::new(d, 0.0, 0.0), r)], speed, force).length();
+        for push in [&sep as &dyn Fn(f32, f32) -> f32, &avoid] {
+            assert!(push(1.19, 1.2) < 0.02 * speed, "just inside the radius: {:.3}", push(1.19, 1.2));
+            assert!((push(0.6, 1.2) - speed).abs() < 1e-4, "full speed at half the radius: {:.3}", push(0.6, 1.2));
+            assert!(push(0.9, 1.2) > push(1.1, 1.2), "closer pushes harder");
+            // Ten times the size, the same push.
+            for (d, r) in [(0.3, 1.2), (0.9, 1.2), (1.1, 1.2)] {
+                assert!((push(d, r) - push(10.0 * d, 10.0 * r)).abs() < 1e-4, "scale-free at d = {d}");
+            }
+        }
+    }
+
+    /// The arrive weight steers an agent to a stop on its target. It was read by nothing, and the
+    /// target term was always a seek: with the seek weight at zero the agent never moved.
+    #[test]
+    fn the_arrive_weight_brings_an_agent_to_a_stop_on_its_target() {
+        let weights = SteeringWeights { seek: 0.0, arrive: 1.0, ..Default::default() };
+        let target = Vec3::new(6.0, 0.0, 0.0);
+        let (mut pos, mut vel) = (Vec3::ZERO, Vec3::ZERO);
+        let dt = 1.0 / 60.0;
+        for _ in 0..60 * 20 {
+            let steer = combined_steering(pos, vel, Some(target), &[], &[], &weights, 3.0, 6.0, (1.0, 1.0, 1.0));
+            vel = (vel + steer * dt).clamp_length_max(3.0);
+            pos += vel * dt;
+        }
+        assert!(pos.distance(target) < 0.05 && vel.length() < 0.05, "stopped on the target: at {pos:?}, {vel:?}");
+        assert_eq!(SteeringWeights::default().arrive, 0.0, "off by default, as it was in effect");
     }
 
     #[test]
