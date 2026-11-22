@@ -166,10 +166,22 @@ mod tests {
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
-        let sync = code.find("let side = gpu.sync();").expect("the frame has a sync point");
-        let end = code.find("self.input.begin_frame();").expect("the frame clears its input");
+        // One method's body: from its `fn` to the brace that closes it.
+        let body = |name: &str| -> &str {
+            let start = code.find(name).unwrap_or_else(|| panic!("`{name}` is gone"));
+            let end = code[start..].find("\n    }\n").map(|e| start + e).expect("its body ends");
+            &code[start..end]
+        };
+        // The frame (`redraw`) syncs with the draw in `sync_and_draw` and clears its input after it;
+        // nothing between the two, and nothing in the draw half, leaves the frame.
+        let redraw = body("fn redraw(");
+        let sync = redraw.find("self.sync_and_draw(").expect("the frame has a sync point");
+        let end = redraw.find("self.input.begin_frame();").expect("the frame clears its input");
         assert!(sync < end);
-        assert!(!code[sync..end].contains("return"), "the frame can leave the loop before its input is cleared");
+        assert!(!redraw[sync..end].contains("return"), "the frame can leave the loop before its input is cleared");
+        let draw_half = body("fn sync_and_draw(");
+        assert!(draw_half.contains("let side = gpu.sync();"), "the sync point is not in the frame's draw half");
+        assert!(!draw_half.contains("return"), "the draw half can leave the frame before its input is cleared");
     }
 
     /// A render stage draws on a render thread unless the app says otherwise; a hook that is handed
