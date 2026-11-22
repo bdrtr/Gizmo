@@ -179,56 +179,58 @@ fn alt_shortcuts(world: &mut World, editor_state: &mut EditorState, input: &Inpu
 /// meaning, an instant jump to the selection's local positions at a reset distance, on the same
 /// press as the scene view's smooth focus.
 fn plain_shortcuts(world: &mut World, editor_state: &mut EditorState, state: &StudioState, input: &Input, shift_pressed: bool) {
-        // Delete → Seçili objeleri sil
-        if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Delete as u32) {
-            let count = editor_state.selection.entities.len();
-            for &entity in editor_state.selection.entities.iter() {
-                editor_state.despawn_requests.push(entity);
-            }
+    // Delete → Seçili objeleri sil — unless the pointer is over a timeline, whose Delete removes
+    // its selected keyframe (`EditorState::timeline_hovered`, the last frame's): a press there took
+    // the keyframe and the entity with it.
+    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Delete as u32) && !editor_state.timeline_hovered {
+        let count = editor_state.selection.entities.len();
+        for &entity in editor_state.selection.entities.iter() {
+            editor_state.despawn_requests.push(entity);
+        }
+        editor_state.clear_selection();
+        if count > 0 {
+            editor_state.status_message = format!("🗑️ {} obje silindi", count);
+        }
+    }
+
+    // H → Seçili objeleri gizle
+    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyH as u32) {
+        let selected: Vec<gizmo::core::entity::Entity> =
+            editor_state.selection.entities.iter().copied().collect();
+        let count = selected.len();
+        for entity in selected {
+            editor_state.toggle_visibility_requests.push(entity);
+        }
+        editor_state.clear_selection();
+        if count > 0 {
+            editor_state.status_message = format!("👁‍🗨 {} obje gizlendi (Alt+H ile göster)", count);
+        }
+    }
+
+    // Numpad 5 → Ortho/Perspektif geçişi (Blender tarzı)
+    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad5 as u32) {
+        let mut cam_mut = world.query_mut::<&mut gizmo::renderer::components::Camera>();
+        if let Some(mut cam) = cam_mut.get_mut(state.editor_camera) {
+            cam.toggle_projection(editor_state.prefs.camera_focus_distance.max(1.0));
+            let mode = if cam.projection.is_orthographic() { "Ortografik" } else { "Perspektif" };
+            editor_state.status_message = format!("📐 Kamera: {} (Numpad5)", mode);
+        }
+    }
+
+    // Escape → Seçimi temizle
+    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Escape as u32)
+        && !editor_state.selection.entities.is_empty() {
             editor_state.clear_selection();
-            if count > 0 {
-                editor_state.status_message = format!("🗑️ {} obje silindi", count);
-            }
+            editor_state.status_message = "Seçim temizlendi".to_string();
         }
 
-        // H → Seçili objeleri gizle
-        if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyH as u32) {
-            let selected: Vec<gizmo::core::entity::Entity> =
-                editor_state.selection.entities.iter().copied().collect();
-            let count = selected.len();
-            for entity in selected {
-                editor_state.toggle_visibility_requests.push(entity);
-            }
-            editor_state.clear_selection();
-            if count > 0 {
-                editor_state.status_message = format!("👁‍🗨 {} obje gizlendi (Alt+H ile göster)", count);
-            }
+    // Space → Play/Stop geçiş
+    if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Space as u32)
+        && shift_pressed {
+            editor_state.toggle_play();
+            let mode_str = if editor_state.is_playing() { "▶ Başladı" } else { "⏹ Durdu" };
+            editor_state.status_message = format!("Simülasyon {}", mode_str);
         }
-
-        // Numpad 5 → Ortho/Perspektif geçişi (Blender tarzı)
-        if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad5 as u32) {
-            let mut cam_mut = world.query_mut::<&mut gizmo::renderer::components::Camera>();
-            if let Some(mut cam) = cam_mut.get_mut(state.editor_camera) {
-                cam.toggle_projection(editor_state.prefs.camera_focus_distance.max(1.0));
-                let mode = if cam.projection.is_orthographic() { "Ortografik" } else { "Perspektif" };
-                editor_state.status_message = format!("📐 Kamera: {} (Numpad5)", mode);
-            }
-        }
-
-        // Escape → Seçimi temizle
-        if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Escape as u32)
-            && !editor_state.selection.entities.is_empty() {
-                editor_state.clear_selection();
-                editor_state.status_message = "Seçim temizlendi".to_string();
-            }
-
-        // Space → Play/Stop geçiş
-        if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Space as u32)
-            && shift_pressed {
-                editor_state.toggle_play();
-                let mode_str = if editor_state.is_playing() { "▶ Başladı" } else { "⏹ Durdu" };
-                editor_state.status_message = format!("Simülasyon {}", mode_str);
-            }
 }
 
 
@@ -252,6 +254,30 @@ mod tests {
             session: None,
             game: None,
         }
+    }
+
+    /// Delete over a timeline is the timeline's — it removes the selected keyframe — and leaves the
+    /// selected entity alone; anywhere else it deletes the selection. A press there deleted both.
+    #[test]
+    fn delete_over_a_timeline_leaves_the_entity() {
+        use gizmo::winit::keyboard::KeyCode;
+        let mut world = World::new();
+        let e = world.spawn();
+        let mut ed = EditorState::default();
+        let delete = || {
+            let mut input = Input::default();
+            input.on_key_pressed(KeyCode::Delete as u32);
+            input
+        };
+        ed.select_exclusive(e);
+        ed.timeline_hovered = true;
+        handle_editor_shortcuts(&mut world, &mut ed, &studio_state(), &delete());
+        assert!(ed.despawn_requests.is_empty(), "the entity was deleted with the keyframe");
+        assert!(ed.is_selected(e));
+
+        ed.timeline_hovered = false;
+        handle_editor_shortcuts(&mut world, &mut ed, &studio_state(), &delete());
+        assert_eq!(ed.despawn_requests, vec![e]);
     }
 
     /// Ctrl+A selects the scene and gives the selection a primary — the entity the inspector shows.

@@ -171,6 +171,10 @@ pub struct EditorState {
     pub scene_view_visible: bool,
     /// Is the game view tab visible this frame?
     pub game_view_visible: bool,
+    /// Is the pointer over a timeline — the animation panel's or the keyed transforms' — this
+    /// frame? A timeline owns Delete while it is: the selected keyframe goes, and the host's
+    /// entity Delete stands down. Cleared each frame by `draw_editor`, like the two above.
+    pub timeline_hovered: bool,
     /// Where the scene view sits on screen, for turning a click into a ray.
     pub scene_view_rect: Option<egui::Rect>,
     /// Where the game view sits on screen.
@@ -392,6 +396,7 @@ impl EditorState {
             key_property_requests: Vec::new(),
 
             scene_view_visible: true,
+            timeline_hovered: false,
             game_view_visible: false,
             scene_view_rect: None,
             game_view_rect: None,

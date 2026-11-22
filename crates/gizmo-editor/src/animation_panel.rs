@@ -349,8 +349,13 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // Delete removes the selected keyframe. Gated on the panel actually having the pointer:
     // Delete is also "despawn the selected entity" in the viewport, and a global key that means
     // two things depending on where you last clicked is how you lose an object.
+    //
+    // The host has to know too (`EditorState::timeline_hovered`): its own Delete, the studio's
+    // shortcut, despawned the selected entity on the same press, keyframe and object together.
+    let over = rect.contains(ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.max));
+    state.timeline_hovered |= over;
     let delete_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete));
-    if delete_pressed && rect.contains(ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.max)) {
+    if delete_pressed && over {
         if let Some(sel) = state.anim_edit.selected {
             let before = player.animations.clone();
             if remove(&mut player, sel.channel, sel.track, sel.keyframe) {
@@ -629,6 +634,31 @@ mod tests {
     fn an_empty_track_moves_on_nothing() {
         assert_eq!(varying_axes(&[]), [false; 3]);
         assert_eq!(varying_axes(&[Vec3::ONE]), [false; 3], "a single key is a constant");
+    }
+
+    /// The timeline says when the pointer is over it, so the host's Delete stands down and only the
+    /// keyframe goes; away from it the flag stays down.
+    #[test]
+    fn the_timeline_claims_delete_only_under_the_pointer() {
+        let mut world = gizmo_core::World::new();
+        let e = world.spawn();
+        world.add_component(e, player(2.0, &[0.0, 1.0, 2.0]));
+        let mut state = crate::EditorState::default();
+        state.select_exclusive(e);
+        let ctx = egui::Context::default();
+        let frame = |state: &mut crate::EditorState, at: egui::Pos2| {
+            let input = egui::RawInput { events: vec![egui::Event::PointerMoved(at)], ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                let mut panel = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 200.0))));
+                super::ui_animation(&mut panel, &world, state);
+            })
+            .drop_without_applying_deltas();
+        };
+        frame(&mut state, egui::pos2(300.0, 50.0));
+        assert!(state.timeline_hovered, "the pointer is over the timeline");
+        state.timeline_hovered = false;
+        frame(&mut state, egui::pos2(300.0, 190.0));
+        assert!(!state.timeline_hovered, "the pointer is below it");
     }
 
     /// The panel's whole editing contract in one test: the key moves, the list stays sorted, the

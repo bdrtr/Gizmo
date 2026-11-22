@@ -135,6 +135,7 @@ pub fn draw_editor(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // once", which is not a question anyone was asking.
     state.scene_view_visible = false;
     state.game_view_visible = false;
+    state.timeline_hovered = false;
 
     let ctx = ui.ctx().clone();
     // ==== The tool keys, Q W E R — bound here and nowhere else ====

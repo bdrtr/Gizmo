@@ -274,6 +274,9 @@ pub(crate) fn ui_keyed_animation(ui: &mut egui::Ui, world: &World, state: &mut E
     // Delete removes the selected key, only with the pointer over the timeline (Delete is also the
     // viewport's despawn).
     let over = rect.contains(ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.max));
+    // Said out loud, for the host's own Delete (`EditorState::timeline_hovered`): it despawned the
+    // selected entity on the same press.
+    state.timeline_hovered |= over;
     if over && ui.input(|i| i.key_pressed(egui::Key::Delete)) {
         if let Some(sel) = state.anim_edit.selected {
             if remove_key(&mut player, state, entity, sel.track, sel.keyframe) {
