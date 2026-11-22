@@ -148,10 +148,6 @@ pub struct EditorState {
     /// of "group the selection", which used to create the group and then leave the selection
     /// exactly where it was.
     pub pending_group_members: Vec<gizmo_core::entity::Entity>,
-    /// An asset dragged into the viewport, waiting to be spawned.
-    pub spawn_asset_request: Option<String>,
-    /// Where that asset was dropped, in world space.
-    pub spawn_asset_position: Option<gizmo_math::Vec3>,
     /// "Load this glTF", with an optional position to place it at.
     pub gltf_load_request: Option<(String, Option<gizmo_math::Vec3>)>,
     /// glTF imports handed to the background loader, and where each should land when it arrives.
@@ -246,6 +242,42 @@ pub struct EditedWorldState {
 }
 
 impl EditorState {
+    /// Opens the scene at `path` — after asking, when the open one has unsaved changes.
+    ///
+    /// Every way of opening a scene comes through here. The asset browser's click asked first; its
+    /// context menu and a scene dropped on the viewport did not, and threw the unsaved work away.
+    pub fn request_scene_load(&mut self, path: String) {
+        if self.has_unsaved_changes {
+            self.scene.load_confirm_dialog = Some(path);
+        } else {
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            self.status_message = format!("Sahne yükleniyor: {name}");
+            self.scene.load_request = Some(path);
+        }
+    }
+
+    /// Puts the asset at `path` into the scene, at `position` when it was dropped somewhere: a
+    /// prefab is instantiated, a model imported and a scene opened ([`Self::request_scene_load`]).
+    ///
+    /// The drop sites call this. They used to leave the path in a `spawn_asset_request` for the
+    /// studio to sort out a frame later, and the drop point in a `spawn_asset_position` beside it
+    /// that nothing cleared: an asset dropped on the hierarchy, or added from the browser's menu,
+    /// landed where the one before it had been dropped on the viewport.
+    pub fn add_asset_to_scene(&mut self, path: String, position: Option<gizmo_math::Vec3>) {
+        use crate::asset_browser::{asset_kind, is_importable_model, AssetKind};
+        match asset_kind(&path) {
+            AssetKind::Prefab => self.prefab_load_request = Some((path, None, position)),
+            AssetKind::Scene => self.request_scene_load(path),
+            AssetKind::Mesh if is_importable_model(&path) => self.gltf_load_request = Some((path, position)),
+            _ => self.log_error(&format!(
+                "Desteklenmeyen dosya türü. Sadece Prefab, Sahne veya 3D Modeller eklenebilir: {path}"
+            )),
+        }
+    }
+
     /// Sets aside what refers to the edited world's entities (see [`EditedWorldState`]) and leaves
     /// an empty history, selection and clipboard, and no entity request pending, for the play world.
     pub fn enter_play(&mut self) -> EditedWorldState {
@@ -351,8 +383,6 @@ impl EditorState {
             pending_child_parent: None,
             pending_child_components: Vec::new(),
             pending_group_members: Vec::new(),
-            spawn_asset_request: None,
-            spawn_asset_position: None,
             gltf_load_request: None,
             pending_async_gltfs: std::collections::HashMap::new(),
             reparent_request: None,

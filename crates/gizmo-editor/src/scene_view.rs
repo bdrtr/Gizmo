@@ -141,8 +141,7 @@ fn drop_dragged_asset(ui: &egui::Ui, rect: egui::Rect, state: &mut EditorState) 
         }
 
         state.log_info(&format!("Model sahneye bırakıldı: {} ({:.1}, {:.1}, {:.1})", dragged_path, spawn_pos.x, spawn_pos.y, spawn_pos.z));
-        state.spawn_asset_request = Some(dragged_path);
-        state.spawn_asset_position = Some(spawn_pos);
+        state.add_asset_to_scene(dragged_path, Some(spawn_pos));
     }
     state.dragged_asset = None; // Her ihtimale karşı sıfırla
 }

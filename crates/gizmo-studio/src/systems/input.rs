@@ -105,28 +105,6 @@ pub fn handle_input_and_scene_view(
             editor_state.debug_draw_requests.clear();
         }
     }
-
-    // Asset browser sürükle bırak spawn işlemi
-    if let Some(asset_path) = editor_state.spawn_asset_request.take() {
-        let final_pos = editor_state.spawn_asset_position;
-
-        let lower_path = asset_path.to_lowercase();
-        if lower_path.ends_with(".prefab") {
-            editor_state.prefab_load_request = Some((asset_path, None, final_pos));
-        } else if lower_path.ends_with(".gizmo") {
-            editor_state.scene.load_request = Some(asset_path);
-        } else if lower_path.ends_with(".glb")
-            || lower_path.ends_with(".gltf")
-            || lower_path.ends_with(".obj")
-        {
-            editor_state.gltf_load_request = Some((asset_path, final_pos));
-        } else {
-            editor_state.log_error(&format!(
-                "Desteklenmeyen dosya türü. Sadece Prefab, Sahne veya 3D Modeller eklenebilir: {}",
-                asset_path
-            ));
-        }
-    }
 }
 
 #[cfg(test)]

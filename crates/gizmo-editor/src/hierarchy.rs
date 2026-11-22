@@ -73,7 +73,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
                 egui::StrokeKind::Inside,
             );
             if ui.input(|i| i.pointer.any_released()) {
-                state.spawn_asset_request = Some(dragged_path);
+                state.add_asset_to_scene(dragged_path, None);
                 state.dragged_asset = None;
             }
         }

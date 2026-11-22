@@ -22,121 +22,11 @@ pub(crate) fn prefab_file_name(stem: &str) -> String {
 
 /// Draws the asset browser tab.
 pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
-let mut finished = false;
-    if let Some(rx) = &state.assets.workspace_rx {
-        // Poison-recovery: mutex zehirlenmişse panik yerine iç değeri kurtar.
-        match rx.lock().unwrap_or_else(|e| e.into_inner()).try_recv() {
-            Ok(path) => {
-                if !path.is_empty() {
-                    state.assets.root = path;
-                }
-                finished = true;
-            }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                finished = true;
-            }
-            _ => {}
-        }
-    }
-
-    if finished {
-        state.assets.workspace_rx = None;
-    }
-
-    ui.horizontal(|ui| {
-        ui.heading("🗂️ Asset Browser");
-        ui.separator();
-
-        // Geri git
-        if ui.button("⬅").on_hover_text("Üst Dizin (Geri)").clicked() {
-            if let Some(parent) = Path::new(&state.assets.root).parent() {
-                state.assets.root = parent.to_string_lossy().to_string();
-            }
-        }
-
-        // Workspace seçici
-        if state.assets.workspace_rx.is_none() {
-            if ui
-                .button("📁 Workspace Aç")
-                .on_hover_text("Bilgisayardan bir çalışma dizini seçin")
-                .clicked()
-            {
-                let (tx, rx) = std::sync::mpsc::channel();
-                state.assets.workspace_rx = Some(std::sync::Mutex::new(rx));
-                std::thread::spawn(move || {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                        let _ = tx.send(folder.to_string_lossy().to_string());
-                    }
-                    #[cfg(target_arch = "wasm32")]
-                    let _ = tx.send("".to_string());
-                });
-            }
-        } else {
-            let _ = ui
-                .add_enabled(false, egui::Button::new("📁 Workspace Aç"))
-                .on_hover_text("Dizin seçimi bekleniyor...");
-        }
-
-        ui.separator();
-
-        ui.add(
-            egui::TextEdit::singleline(&mut state.assets.filter)
-                .desired_width(140.0)
-                .hint_text("Filter assets…"),
-        );
-        ui.separator();
-
-    });
-
-    // The type chips get their own row, as in the prototype — a 28 px filter strip under the
-    // header. Squeezed onto the end of the header they simply ran off the right edge of the panel.
-    ui.horizontal(|ui| {
-        for (kind, label) in AssetKind::CHIPS {
-            let mut on = state.assets.kind_filter == kind;
-            if crate::theme::toggle(ui, &mut on, label) {
-                // Clicking the active chip turns it off, which lands back on All.
-                state.assets.kind_filter = if on { kind } else { None };
-            }
-        }
-    });
-
-    ui.horizontal(|ui| {
-        // Breadcrumb tarzında yol gösterimi
-        let current_root = state.assets.root.clone();
-        ui.horizontal(|ui| {
-            let components: Vec<_> = Path::new(&current_root).components().collect();
-            let mut current_path = std::path::PathBuf::new();
-
-            for (i, comp) in components.iter().enumerate() {
-                current_path.push(comp);
-                let part_str = comp.as_os_str().to_string_lossy();
-
-                if ui.add(egui::Button::new(part_str).frame(false)).clicked() {
-                    state.assets.root = current_path.to_string_lossy().to_string();
-                }
-
-                if i < components.len() - 1 {
-                    ui.label("›"); // Breadcrumb separator
-                }
-            }
-        });
-    });
-
-    // Hızlı aksiyon butonu satırı
-    ui.horizontal(|ui| {
-        if ui.small_button("📦 Sahneden Prefab Oluştur").clicked() {
-            if let Some(&selected) = state.selection.entities.iter().next() {
-                // From the entity's numbers: its `Display` (`Entity(3:0)`) holds a colon, which NTFS
-                // takes for an alternate data stream.
-                let stem = format!("prefab_{}v{}", selected.id(), selected.generation());
-                let path = Path::new(&state.assets.root).join(prefab_file_name(&stem));
-                state.prefab_save_request = Some((selected, path.to_string_lossy().to_string()));
-            } else {
-                state.log_warning("Önce bir entity seçin.");
-            }
-        }
-    });
+    poll_workspace_pick(state);
+    header(ui, state);
+    kind_chips(ui, state);
+    breadcrumbs(ui, state);
+    quick_actions(ui, state);
 
     ui.separator();
 
@@ -168,174 +58,346 @@ let mut finished = false;
     }
 
     egui::ScrollArea::both().show(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            let root = Path::new(&state.assets.root);
-            if !root.exists() || !root.is_dir() {
-                ui.label(
-                    egui::RichText::new("⚠ Asset dizini bulunamadı").color(egui::Color32::YELLOW),
-                );
-                return;
-            }
+        ui.horizontal_wrapped(|ui| asset_grid(ui, state));
+    });
+}
 
-            let now = Instant::now();
-            let mut need_refresh = true;
-            if let Some((cached_path, last_update, _)) = &state.assets.cached_dir {
-                if cached_path == &state.assets.root
-                    && now.duration_since(*last_update).as_secs_f32() < 1.0
-                {
-                    need_refresh = false;
+/// Takes the folder the workspace dialog chose, once it has answered.
+fn poll_workspace_pick(state: &mut EditorState) {
+    let mut finished = false;
+    if let Some(rx) = &state.assets.workspace_rx {
+        // Poison-recovery: mutex zehirlenmişse panik yerine iç değeri kurtar.
+        match rx.lock().unwrap_or_else(|e| e.into_inner()).try_recv() {
+            Ok(path) => {
+                if !path.is_empty() {
+                    state.assets.root = path;
                 }
+                finished = true;
             }
-
-            if need_refresh {
-                if let Ok(entries) = std::fs::read_dir(root) {
-                    let mut file_cache = Vec::new();
-                    for entry in entries.filter_map(|e| e.ok()) {
-                        let is_dir = entry.path().is_dir();
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        file_cache.push((entry.path(), name, is_dir));
-                    }
-                    file_cache.sort_by(|a, b| b.2.cmp(&a.2).then(a.1.cmp(&b.1)));
-                    state.assets.cached_dir = Some((state.assets.root.clone(), now, file_cache));
-                }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                finished = true;
             }
+            _ => {}
+        }
+    }
 
-            let file_entries = if let Some((_, _, cache)) = &state.assets.cached_dir {
-                cache.clone()
-            } else {
-                return;
-            };
+    if finished {
+        state.assets.workspace_rx = None;
+    }
+}
 
-            let filter_lower = state.assets.filter.to_lowercase();
+/// The title row: back, the workspace picker and the text filter.
+fn header(ui: &mut egui::Ui, state: &mut EditorState) {
+    ui.horizontal(|ui| {
+        ui.heading("🗂️ Asset Browser");
+        ui.separator();
 
-            for (path, name, is_dir) in file_entries {
-                // Filtre
-                if !entry_passes(&name, is_dir, &filter_lower, state.assets.kind_filter) {
-                    continue;
+        // Geri git
+        if ui.button("⬅").on_hover_text("Üst Dizin (Geri)").clicked() {
+            if let Some(parent) = Path::new(&state.assets.root).parent() {
+                state.assets.root = parent.to_string_lossy().to_string();
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        workspace_button(ui, state);
+
+        ui.separator();
+
+        ui.add(
+            egui::TextEdit::singleline(&mut state.assets.filter)
+                .desired_width(140.0)
+                .hint_text("Filter assets…"),
+        );
+        ui.separator();
+
+    });
+}
+
+/// "Open workspace": a native folder dialog, on a thread of its own so the editor keeps drawing.
+///
+/// Native only. A browser has no folder dialog, and wasm has no threads to wait on one: the button
+/// was there on wasm too, and its `std::thread::spawn` panicked.
+#[cfg(not(target_arch = "wasm32"))]
+fn workspace_button(ui: &mut egui::Ui, state: &mut EditorState) {
+    if state.assets.workspace_rx.is_none() {
+        if ui
+            .button("📁 Workspace Aç")
+            .on_hover_text("Bilgisayardan bir çalışma dizini seçin")
+            .clicked()
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            state.assets.workspace_rx = Some(std::sync::Mutex::new(rx));
+            std::thread::spawn(move || {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    let _ = tx.send(folder.to_string_lossy().to_string());
+                }
+            });
+        }
+    } else {
+        let _ = ui
+            .add_enabled(false, egui::Button::new("📁 Workspace Aç"))
+            .on_hover_text("Dizin seçimi bekleniyor...");
+    }
+}
+
+/// The type chips.
+///
+/// They get their own row, as in the prototype — a 28 px filter strip under the header. Squeezed
+/// onto the end of the header they simply ran off the right edge of the panel.
+fn kind_chips(ui: &mut egui::Ui, state: &mut EditorState) {
+    ui.horizontal(|ui| {
+        for (kind, label) in AssetKind::CHIPS {
+            let mut on = state.assets.kind_filter == kind;
+            if crate::theme::toggle(ui, &mut on, label) {
+                // Clicking the active chip turns it off, which lands back on All.
+                state.assets.kind_filter = if on { kind } else { None };
+            }
+        }
+    });
+}
+
+/// The current folder as a path of buttons, each going back to that folder.
+fn breadcrumbs(ui: &mut egui::Ui, state: &mut EditorState) {
+    ui.horizontal(|ui| {
+        // Breadcrumb tarzında yol gösterimi
+        let current_root = state.assets.root.clone();
+        ui.horizontal(|ui| {
+            let components: Vec<_> = Path::new(&current_root).components().collect();
+            let mut current_path = std::path::PathBuf::new();
+
+            for (i, comp) in components.iter().enumerate() {
+                current_path.push(comp);
+                let part_str = comp.as_os_str().to_string_lossy();
+
+                if ui.add(egui::Button::new(part_str).frame(false)).clicked() {
+                    state.assets.root = current_path.to_string_lossy().to_string();
                 }
 
-                let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
-                let is_prefab = ext == "prefab";
-                let is_scene = ext == "gizmo" || ext == "giz";
-                let is_model = ext == "glb" || ext == "gltf" || ext == "obj";
-                let is_script = ext == "lua";
-
-                let icon = get_file_icon(&name);
-                let path_str = path.to_string_lossy().to_string();
-
-                ui.vertical(|ui| {
-                    ui.set_width(82.0);
-
-                    // Renk: prefab=yeşilimsi, scene=mavimsi, dir=sarı, script=turuncu
-                    let icon_color = if is_dir {
-                        egui::Color32::from_rgb(255, 220, 80)
-                    } else if is_prefab {
-                        egui::Color32::from_rgb(100, 255, 160)
-                    } else if is_scene {
-                        egui::Color32::from_rgb(100, 180, 255)
-                    } else if is_script {
-                        egui::Color32::from_rgb(255, 160, 80)
-                    } else {
-                        egui::Color32::from_rgb(200, 200, 200)
-                    };
-
-                    let btn_text = egui::RichText::new(icon).size(30.0).color(icon_color);
-                    let response = ui.add(
-                        egui::Button::new(btn_text)
-                            .min_size(egui::vec2(72.0, 52.0))
-                            .fill(egui::Color32::from_rgba_premultiplied(30, 30, 30, 180)),
-                    );
-
-                    // Tooltip (Reassign response because on_hover_text consumes it)
-                    let response = response.on_hover_text(format!(
-                        "{}\n{}",
-                        name,
-                        if is_prefab {
-                            "Tek tık: Sahneye ekle"
-                        } else if is_scene {
-                            "Tek tık: Sahneyi yükle"
-                        } else if is_dir {
-                            "Çift tık: Klasöre gir"
-                        } else {
-                            "Sağ tık: Seçenekler"
-                        }
-                    ));
-
-                    // Sağ tık menüsü en sonda atanacak
-
-                    // Drag & Drop başlatma (viewport'ta yakalanır)
-                    let drag_id = egui::Id::new("drag_asset").with(path.as_os_str());
-                    let drag_response = ui.interact(response.rect, drag_id, egui::Sense::drag());
-                    
-                    if drag_response.drag_started() {
-                        state.dragged_asset = Some(path_str.clone());
-                    }
-
-                    if response.double_clicked() {
-                        if is_dir {
-                            // Klasöre gir (çift tık)
-                            state.assets.root = path_str.clone();
-                        }
-                    } else if response.clicked() {
-                        if is_prefab {
-                            // ✅ TEK TIKLA prefab sahneye ekle
-                            state.prefab_load_request = Some((path_str.clone(), None, None));
-                            state.status_message = format!("Prefab eklendi: {}", name);
-                        } else if is_scene {
-                            // ✅ TEK TIKLA sahneyi yükle
-                            if state.has_unsaved_changes {
-                                state.scene.load_confirm_dialog = Some(path_str.clone());
-                            } else {
-                                state.scene.load_request = Some(path_str.clone());
-                                state.status_message = format!("Sahne yükleniyor: {}", name);
-                            }
-                        } else if is_model {
-                            state.status_message = format!("Seçilen: {} (Model)", name);
-                        } else {
-                            state.status_message = format!("Seçilen: {}", name);
-                        }
-                        // Every click selects, whatever else it also did — the detail pane
-                        // describes what you last touched.
-                        state.assets.selected = Some(path.clone());
-                    }
-
-                    // Dosya adı (kısa gösterim)
-                    let char_count = name.chars().count();
-                    let short_name = if char_count > 11 {
-                        let truncated: String = name.chars().take(9).collect();
-                        format!("{}...", truncated)
-                    } else {
-                        name.clone()
-                    };
-                    ui.label(
-                        egui::RichText::new(short_name)
-                            .small()
-                            .color(egui::Color32::from_rgb(200, 200, 200)),
-                    );
-
-                    // Context Menu tüketimini güvenli hale getirmek için scope'un en sonunda çağrılır
-                    response.context_menu(|ui| {
-                        if is_model && ui.button("⚙️ Sahneye Ekle").clicked() {
-                            state.spawn_asset_request = Some(path_str.clone());
-                            ui.close();
-                        }
-                        if is_prefab && ui.button("⚙️ Prefab Olarak Ekle").clicked() {
-                            state.prefab_load_request = Some((path_str.clone(), None, None));
-                            ui.close();
-                        }
-                        if is_scene && ui.button("📂 Bu Sahneyi Yükle").clicked() {
-                            state.scene.load_request = Some(path_str.clone());
-                            ui.close();
-                        }
-                        if ui.button("📋 Yolu Kopyala").clicked() {
-                            ui.output_mut(|o| o.commands.push(egui::OutputCommand::CopyText(path_str.clone())));
-                            ui.close();
-                        }
-                    });
-                });
+                if i < components.len() - 1 {
+                    ui.label("›"); // Breadcrumb separator
+                }
             }
         });
     });
+}
+
+/// The quick actions row.
+fn quick_actions(ui: &mut egui::Ui, state: &mut EditorState) {
+    ui.horizontal(|ui| {
+        if ui.small_button("📦 Sahneden Prefab Oluştur").clicked() {
+            save_selection_as_prefab(state);
+        }
+    });
+}
+
+/// Asks for the selection's primary — the one the inspector shows — to be saved as a prefab in the
+/// folder on show.
+///
+/// It took any member of the selection set, and with several selected that was whichever one the
+/// hash put first.
+fn save_selection_as_prefab(state: &mut EditorState) {
+    if let Some(selected) = state.selection.primary {
+        // From the entity's numbers: its `Display` (`Entity(3:0)`) holds a colon, which NTFS
+        // takes for an alternate data stream.
+        let stem = format!("prefab_{}v{}", selected.id(), selected.generation());
+        let path = Path::new(&state.assets.root).join(prefab_file_name(&stem));
+        state.prefab_save_request = Some((selected, path.to_string_lossy().to_string()));
+    } else {
+        state.log_warning("Önce bir entity seçin.");
+    }
+}
+
+/// The tiles of `state.assets.root`'s entries that pass the filters.
+fn asset_grid(ui: &mut egui::Ui, state: &mut EditorState) {
+    let root = std::path::PathBuf::from(&state.assets.root);
+    if !root.exists() || !root.is_dir() {
+        ui.label(
+            egui::RichText::new("⚠ Asset dizini bulunamadı").color(egui::Color32::YELLOW),
+        );
+        return;
+    }
+
+    let entries = match take_listing(&mut state.assets, &root) {
+        Ok(entries) => entries,
+        Err(e) => {
+            ui.label(
+                egui::RichText::new(format!("⚠ Klasör okunamadı: {e}")).color(egui::Color32::YELLOW),
+            );
+            return;
+        }
+    };
+
+    let filter_lower = state.assets.filter.to_lowercase();
+
+    for (path, name, is_dir) in &entries {
+        // Filtre
+        if !entry_passes(name, *is_dir, &filter_lower, state.assets.kind_filter) {
+            continue;
+        }
+        asset_tile(ui, state, path, name, *is_dir);
+    }
+
+    // The listing goes back into the cache it was taken from. A tile may have moved the browser to
+    // another folder meanwhile; then the cache is stale and the next frame reads the new one.
+    if let Some((_, _, cache)) = &mut state.assets.cached_dir {
+        if cache.is_empty() {
+            *cache = entries;
+        }
+    }
+}
+
+/// `root`'s entries, folders first and then by name — from the cache while it is under a second
+/// old, read again otherwise.
+///
+/// Taken OUT of the cache, so the grid can walk it while its tiles change the state; the grid puts
+/// it back. It was cloned instead, every entry's path and name, every frame the browser was open.
+///
+/// A folder that cannot be read is an error, never the listing of another folder: a failed read
+/// kept the cache, and an unreadable folder showed the files of the one before it under its own
+/// path.
+fn take_listing(
+    assets: &mut crate::editor_state::AssetBrowserState,
+    root: &Path,
+) -> std::io::Result<Vec<(std::path::PathBuf, String, bool)>> {
+    let now = Instant::now();
+    let fresh = matches!(
+        &assets.cached_dir,
+        Some((cached_path, last_update, _))
+            if cached_path == &assets.root && now.duration_since(*last_update).as_secs_f32() < 1.0
+    );
+    if !fresh {
+        assets.cached_dir = None;
+        let mut file_cache = Vec::new();
+        for entry in std::fs::read_dir(root)?.filter_map(|e| e.ok()) {
+            let is_dir = entry.path().is_dir();
+            let name = entry.file_name().to_string_lossy().to_string();
+            file_cache.push((entry.path(), name, is_dir));
+        }
+        file_cache.sort_by(|a, b| b.2.cmp(&a.2).then(a.1.cmp(&b.1)));
+        assets.cached_dir = Some((assets.root.clone(), now, file_cache));
+    }
+    Ok(assets.cached_dir.as_mut().map(|(_, _, cache)| std::mem::take(cache)).unwrap_or_default())
+}
+
+/// One entry's tile: its icon and short name, and what a click, a double click, a drag and a right
+/// click on it do.
+fn asset_tile(ui: &mut egui::Ui, state: &mut EditorState, path: &Path, name: &str, is_dir: bool) {
+    let kind = entry_kind(name, is_dir);
+    let path_str = path.to_string_lossy().to_string();
+
+    ui.vertical(|ui| {
+        ui.set_width(82.0);
+
+        let btn_text = egui::RichText::new(kind.icon()).size(30.0).color(icon_color(kind));
+        let response = ui.add(
+            egui::Button::new(btn_text)
+                .min_size(egui::vec2(72.0, 52.0))
+                .fill(egui::Color32::from_rgba_premultiplied(30, 30, 30, 180)),
+        );
+
+        // Tooltip (Reassign response because on_hover_text consumes it)
+        let response = response.on_hover_text(format!("{}\n{}", name, tile_hint(kind)));
+
+        // Sağ tık menüsü en sonda atanacak
+
+        // Drag & Drop başlatma (viewport'ta yakalanır)
+        let drag_id = egui::Id::new("drag_asset").with(path.as_os_str());
+        let drag_response = ui.interact(response.rect, drag_id, egui::Sense::drag());
+
+        if drag_response.drag_started() {
+            state.dragged_asset = Some(path_str.clone());
+        }
+
+        if response.double_clicked() {
+            if is_dir {
+                // Klasöre gir (çift tık)
+                state.assets.root = path_str.clone();
+            }
+        } else if response.clicked() {
+            open_on_click(state, kind, &path_str, name);
+            // Every click selects, whatever else it also did — the detail pane
+            // describes what you last touched.
+            state.assets.selected = Some(path.to_path_buf());
+        }
+
+        ui.label(
+            egui::RichText::new(short_name(name))
+                .small()
+                .color(egui::Color32::from_rgb(200, 200, 200)),
+        );
+
+        // Context Menu tüketimini güvenli hale getirmek için scope'un en sonunda çağrılır
+        response.context_menu(|ui| tile_menu(ui, state, kind, &path_str, name));
+    });
+}
+
+/// The icon's colour: folders yellow, prefabs green, scenes blue, scripts orange, the rest grey.
+fn icon_color(kind: AssetKind) -> egui::Color32 {
+    match kind {
+        AssetKind::Folder => egui::Color32::from_rgb(255, 220, 80),
+        AssetKind::Prefab => egui::Color32::from_rgb(100, 255, 160),
+        AssetKind::Scene => egui::Color32::from_rgb(100, 180, 255),
+        AssetKind::Script => egui::Color32::from_rgb(255, 160, 80),
+        _ => egui::Color32::from_rgb(200, 200, 200),
+    }
+}
+
+/// The tooltip's second line: what clicking does.
+fn tile_hint(kind: AssetKind) -> &'static str {
+    match kind {
+        AssetKind::Prefab => "Tek tık: Sahneye ekle",
+        AssetKind::Scene => "Tek tık: Sahneyi yükle",
+        AssetKind::Folder => "Çift tık: Klasöre gir",
+        _ => "Sağ tık: Seçenekler",
+    }
+}
+
+/// A single click: a prefab goes into the scene and a scene opens; anything else is only named in
+/// the status bar.
+fn open_on_click(state: &mut EditorState, kind: AssetKind, path: &str, name: &str) {
+    match kind {
+        AssetKind::Prefab => {
+            // ✅ TEK TIKLA prefab sahneye ekle
+            state.add_asset_to_scene(path.to_string(), None);
+            state.status_message = format!("Prefab eklendi: {}", name);
+        }
+        // ✅ TEK TIKLA sahneyi yükle
+        AssetKind::Scene => state.request_scene_load(path.to_string()),
+        AssetKind::Mesh => state.status_message = format!("Seçilen: {} (Model)", name),
+        _ => state.status_message = format!("Seçilen: {}", name),
+    }
+}
+
+/// A tile's right-click menu.
+fn tile_menu(ui: &mut egui::Ui, state: &mut EditorState, kind: AssetKind, path: &str, name: &str) {
+    if kind == AssetKind::Mesh && is_importable_model(name) && ui.button("⚙️ Sahneye Ekle").clicked() {
+        state.add_asset_to_scene(path.to_string(), None);
+        ui.close();
+    }
+    if kind == AssetKind::Prefab && ui.button("⚙️ Prefab Olarak Ekle").clicked() {
+        state.add_asset_to_scene(path.to_string(), None);
+        ui.close();
+    }
+    if kind == AssetKind::Scene && ui.button("📂 Bu Sahneyi Yükle").clicked() {
+        state.request_scene_load(path.to_string());
+        ui.close();
+    }
+    if ui.button("📋 Yolu Kopyala").clicked() {
+        ui.output_mut(|o| o.commands.push(egui::OutputCommand::CopyText(path.to_string())));
+        ui.close();
+    }
+}
+
+/// The name under a tile: up to 11 characters whole, longer ones cut to 9 and an ellipsis.
+fn short_name(name: &str) -> String {
+    // Dosya adı (kısa gösterim)
+    if name.chars().count() > 11 {
+        let truncated: String = name.chars().take(9).collect();
+        format!("{}...", truncated)
+    } else {
+        name.to_string()
+    }
 }
 
 /// What an asset file is, decided from its extension.
@@ -405,6 +467,9 @@ impl AssetKind {
 }
 
 /// Classifies a file name. The single extension table.
+///
+/// A name alone never says "folder": a name without an extension is [`AssetKind::Other`], and only
+/// [`entry_kind`], which is told, knows a folder.
 pub fn asset_kind(filename: &str) -> AssetKind {
     let ext = filename.rsplit('.').next().unwrap_or("");
     let is = |c: &str| ext.eq_ignore_ascii_case(c);
@@ -427,15 +492,32 @@ pub fn asset_kind(filename: &str) -> AssetKind {
         AssetKind::Scene
     } else if is("wgsl") || is("glsl") || is("hlsl") {
         AssetKind::Shader
-    } else if filename.contains('.') {
-        AssetKind::Other
     } else {
-        AssetKind::Folder
+        AssetKind::Other
     }
 }
 
-fn get_file_icon(filename: &str) -> &'static str {
-    asset_kind(filename).icon()
+/// What a directory entry is: a folder when it is one, whatever its name, and what its extension
+/// says otherwise.
+///
+/// The browser asked the name alone. A folder called `v1.2` was a grey file tile, a file called
+/// `LICENSE` a folder, and a single click on a folder called `door.prefab` instantiated it as a
+/// prefab.
+pub fn entry_kind(name: &str, is_dir: bool) -> AssetKind {
+    if is_dir {
+        AssetKind::Folder
+    } else {
+        asset_kind(name)
+    }
+}
+
+/// Can the model importer read this file? `.obj`, `.gltf` and `.glb`.
+///
+/// Narrower than [`AssetKind::Mesh`] on purpose: an `.fbx` is geometry, and the browser shows it
+/// with the meshes, but nothing in the engine reads one.
+pub fn is_importable_model(filename: &str) -> bool {
+    let ext = filename.rsplit('.').next().unwrap_or("");
+    ["obj", "gltf", "glb"].iter().any(|e| ext.eq_ignore_ascii_case(e))
 }
 
 /// Does one directory entry survive the browser's two filters?
@@ -673,7 +755,7 @@ fn draw_asset_detail(ui: &mut egui::Ui, state: &mut EditorState) {
         });
     };
 
-    row(ui, "type", format!("{:?}", asset_kind(&name)).to_lowercase(), false);
+    row(ui, "type", format!("{:?}", entry_kind(&name, path.is_dir())).to_lowercase(), false);
 
     match std::fs::metadata(&path) {
         Ok(m) => row(ui, "size", format_size(m.len()), false),
@@ -750,6 +832,117 @@ mod tests {
     }
 
     use super::{asset_kind, entry_passes, AssetKind};
+
+    /// The browser's "prefab from the scene" saves the primary — the entity the inspector shows —
+    /// and not whichever member of the selection set the hash puts first.
+    #[test]
+    fn a_prefab_from_the_selection_is_the_primary() {
+        use gizmo_core::entity::Entity;
+        let mut state = crate::EditorState::default();
+        let ids: Vec<Entity> = (1..=8).map(|i| Entity::new(i, 0)).collect();
+        state.select_exclusive(ids[0]);
+        for &e in &ids[1..] {
+            state.toggle_selection(e);
+        }
+        let primary = state.selection.primary.expect("the last one clicked is the primary");
+        super::save_selection_as_prefab(&mut state);
+        let (saved, path) = state.prefab_save_request.take().expect("a prefab was asked for");
+        assert_eq!(saved, primary, "with eight selected the prefab was of {saved:?}, not the primary");
+        assert!(path.ends_with(&format!("prefab_{}v0.prefab", primary.id())), "{path}");
+    }
+
+    /// An asset goes into the scene where it was dropped, and one that was not dropped somewhere
+    /// goes nowhere in particular — not to the spot the previous drop on the viewport left behind.
+    #[test]
+    fn an_asset_lands_where_it_was_dropped_and_not_where_the_last_one_was() {
+        use gizmo_math::Vec3;
+        let mut state = crate::EditorState::default();
+        let here = Vec3::new(3.0, 0.0, -2.0);
+        state.add_asset_to_scene("props/chair.glb".into(), Some(here));
+        assert_eq!(state.gltf_load_request.take(), Some(("props/chair.glb".to_string(), Some(here))));
+        // Dropped on the hierarchy, or added from the browser's menu.
+        state.add_asset_to_scene("props/table.GLB".into(), None);
+        assert_eq!(state.gltf_load_request.take(), Some(("props/table.GLB".to_string(), None)));
+        state.add_asset_to_scene("door.prefab".into(), Some(here));
+        assert_eq!(state.prefab_load_request.take(), Some(("door.prefab".to_string(), None, Some(here))));
+        // Geometry the browser lists with the meshes, but that nothing in the engine reads.
+        state.add_asset_to_scene("rig.fbx".into(), None);
+        assert_eq!(state.gltf_load_request, None);
+    }
+
+    /// Every way of opening a scene asks first when there is unsaved work: the browser's context
+    /// menu and a scene dropped on the viewport loaded it straight away and lost that work.
+    #[test]
+    fn every_way_of_opening_a_scene_asks_about_unsaved_work() {
+        let mut state = crate::EditorState { has_unsaved_changes: true, ..Default::default() };
+        state.add_asset_to_scene("levels/forest.gizmo".into(), None);
+        assert_eq!(state.scene.load_confirm_dialog.as_deref(), Some("levels/forest.gizmo"));
+        assert_eq!(state.scene.load_request, None);
+        state.scene.load_confirm_dialog = None;
+        state.request_scene_load("levels/forest.giz".into());
+        assert_eq!(state.scene.load_confirm_dialog.as_deref(), Some("levels/forest.giz"));
+        assert_eq!(state.scene.load_request, None);
+
+        state.scene.load_confirm_dialog = None;
+        state.has_unsaved_changes = false;
+        state.request_scene_load("levels/forest.gizmo".into());
+        assert_eq!(state.scene.load_request.as_deref(), Some("levels/forest.gizmo"));
+        assert_eq!(state.status_message, "Sahne yükleniyor: forest.gizmo");
+    }
+
+    /// The texts a browser frame painted.
+    fn painted_texts(state: &mut crate::EditorState) -> Vec<String> {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut panel = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(900.0, 500.0),
+            )));
+            super::ui_asset_browser(&mut panel, state);
+        });
+        fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+                egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+                _ => {}
+            }
+        }
+        let mut texts = Vec::new();
+        output.shapes.iter().for_each(|s| collect(&s.shape, &mut texts));
+        output.drop_without_applying_deltas();
+        texts
+    }
+
+    /// A folder that cannot be read says so. It showed the files of the folder before it, under
+    /// its own path: the failed read kept the old listing in the cache.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_folder_does_not_show_the_previous_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("gizmo_unreadable_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (open, shut) = (dir.join("open"), dir.join("shut"));
+        std::fs::create_dir_all(&open).unwrap();
+        std::fs::create_dir_all(&shut).unwrap();
+        std::fs::write(open.join("grass.png"), b"x").unwrap();
+        std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let readable_anyway = std::fs::read_dir(&shut).is_ok(); // root reads everything
+
+        let mut state = crate::EditorState::default();
+        state.assets.root = open.to_string_lossy().to_string();
+        state.assets.workspace_root = state.assets.root.clone();
+        assert!(painted_texts(&mut state).iter().any(|t| t == "grass.png"), "the readable folder lists");
+        state.assets.root = shut.to_string_lossy().to_string();
+        let texts = painted_texts(&mut state);
+
+        std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        if readable_anyway {
+            return;
+        }
+        assert!(!texts.iter().any(|t| t == "grass.png"), "the unreadable folder showed the other one's files: {texts:?}");
+        assert!(texts.iter().any(|t| t.starts_with("⚠ Klasör okunamadı")), "{texts:?}");
+    }
 
     use super::{cached_subfolders, tree_dir_is_listable, tree_root_for, TREE_MAX_CHILDREN};
 
@@ -871,7 +1064,9 @@ mod tests {
         }
     }
 
-    use super::get_file_icon;
+    fn get_file_icon(name: &str) -> &'static str {
+        asset_kind(name).icon()
+    }
 
     #[test]
     fn model_extensions_map_to_statue() {
@@ -903,11 +1098,18 @@ mod tests {
         assert_eq!(get_file_icon("SHADER.WGSL"), "🎨");
     }
 
-    /// A name with no extension (no dot) gets the folder icon.
+    /// A folder is known by being one, not by its name — and a file without an extension is a
+    /// file. The name alone was asked: `LICENSE` was a folder, a folder `v1.2` a file, and a folder
+    /// `door.prefab` a prefab that a click instantiated.
     #[test]
-    fn no_extension_is_folder() {
-        assert_eq!(get_file_icon("assets"), "📁");
-        assert_eq!(get_file_icon(""), "📁");
+    fn a_folder_is_known_by_being_one_not_by_its_name() {
+        use super::entry_kind;
+        assert_eq!(entry_kind("assets", true), AssetKind::Folder);
+        assert_eq!(entry_kind("v1.2", true), AssetKind::Folder);
+        assert_eq!(entry_kind("door.prefab", true), AssetKind::Folder);
+        assert_eq!(entry_kind("LICENSE", false), AssetKind::Other);
+        assert_eq!(entry_kind("door.prefab", false), AssetKind::Prefab);
+        assert_eq!(get_file_icon(""), "📄");
     }
 
     /// An unknown but dotted extension gets the generic file icon.
