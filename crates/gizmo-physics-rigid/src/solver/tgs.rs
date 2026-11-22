@@ -163,6 +163,104 @@ impl ConstraintSolver {
     ) {
         let inv_dt = if dt > 0.0 { 1.0 / dt } else { 0.0 };
 
+        let coeffs = self.soft_coefficients(dt, inv_dt);
+        let (vn0_off, vn0) = Self::approach_speeds(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
+        self.warm_start_tgs(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
+        let real_bodies = Self::real_contact_bodies(manifolds, entity_index_map);
+
+        let h = if n_iterations > 0 {
+            dt / n_iterations as f32
+        } else {
+            dt
+        };
+
+        let mut prepared = Self::prepare_contacts(manifolds, rigid_bodies, transforms, entity_index_map, &vn0_off, &vn0);
+        let block_groups = if self.block_solver { self.block_groups(&prepared) } else { Vec::new() };
+
+        // ── Whole-chain DIRECT solve setup ──
+        // For a tall, bucklable chain (support-depth ≥ 5) small enough to solve densely,
+        // assemble the FULL island Delassus matrix and solve all normal impulses jointly
+        // each sweep → the inter-manifold support coupling is resolved EXACTLY (not left to
+        // iterate), eliminating the tall-tower buckling the iterative path can't robustly fix.
+        // A[i][j] = coupling of contacts i,j through any shared body: for each shared body X,
+        // s_i(X)·s_j(X)·[invM_X (n_i·n_j) + (invI_X (r_{X,j}×n_j))·(r_{X,i}×n_i)], with sign
+        // −1 on the contact's body A and +1 on body B. Symmetric; regularised on the diagonal
+        // (coplanar rank-deficiency, as in the per-manifold block).
+        let nprep = prepared.len();
+        let use_direct = self.direct_chain_solve
+            && self.block_solver
+            && island_depth >= 5
+            && (2..=Self::DIRECT_SOLVE_CAP).contains(&nprep);
+        let island_a = if use_direct { self.island_delassus(&prepared) } else { Vec::new() };
+        let direct = use_direct.then_some(island_a.as_slice());
+
+        // Per-body position-delta scratch (dp), indexed by GLOBAL body index but sized once
+        // per thread and RESET only for `island_bodies` — no per-island full-world allocation.
+        // Islands are disjoint (a body is in exactly one island), so resetting just this
+        // island's entries fully isolates the reused thread-local across islands/substeps.
+        thread_local! {
+            static DP: std::cell::RefCell<Vec<(Vec3, Vec3)>> =
+                const { std::cell::RefCell::new(Vec::new()) };
+        }
+        DP.with(|cell| {
+            let mut dp = cell.borrow_mut();
+            if dp.len() < velocities.len() {
+                dp.resize(velocities.len(), (Vec3::ZERO, Vec3::ZERO));
+            }
+            for &i in island_bodies {
+                dp[i] = (Vec3::ZERO, Vec3::ZERO);
+            }
+
+            // ── 3) BIASED soft solve + iterasyon-arası pozisyon entegrasyonu ──
+            // Her iterasyondan sonra pozisyon-delta'sı güncel hızla ilerletilir; bir sonraki
+            // iterasyonun bias'ı GÜNCEL penetrasyonu görür → düzeltme yığın boyunca yayılır
+            // (SI'nin yapamadığı; uzun/çarpan yığınları ayakta tutan temel mekanizma).
+            let _sweep = crate::profile::Scope::new(&crate::profile::PHASES.sweep);
+            for iter in 0..n_iterations {
+                self.sweep(&mut prepared, &block_groups, direct, velocities, dp.as_slice(), iter % 2 == 1, Some(coeffs), inv_dt);
+                for &i in island_bodies {
+                    if real_bodies.contains(&i) && rigid_bodies[i].is_dynamic() {
+                        dp[i].0 += velocities[i].linear * h;
+                        dp[i].1 += velocities[i].angular * h;
+                    }
+                }
+            }
+
+            // ── 4) RELAX (bias=0) — soft bias hızını temizle + restitution ──
+            drop(_sweep);
+            let _relax = crate::profile::Scope::new(&crate::profile::PHASES.relax);
+            for iter in 0..self.relax_iterations {
+                self.sweep(&mut prepared, &block_groups, direct, velocities, dp.as_slice(), iter % 2 == 1, None, inv_dt);
+            }
+
+            // ── 5) Pozisyon düzeltmesi = dp − (relaxed hız)·dt ──
+            // dp, biased çözümün TGS-entegre GERÇEK pozisyon değişimidir (penetrasyon
+            // düzeltmesi yığın boyunca yayılmış). position_integration relaxed·dt ekleyecek;
+            // farkı burada ekleyince toplam = dp olur → penetrasyon düzelir, hız temiz kalır
+            // (resting jitter yok, uyuyabilir). Restitution relax içinde uygulandığından
+            // sekme hızı `velocities`'tedir; çıkarılması sekme yer-değişimini bu kareye değil
+            // SONRAKİ kareye taşır (kararlı). Yalnız aktif dinamik gövdelere uygulanır.
+            for &i in island_bodies {
+                if real_bodies.contains(&i) && rigid_bodies[i].is_dynamic() {
+                    let dlin = dp[i].0 - velocities[i].linear * dt;
+                    let dang = dp[i].1 - velocities[i].angular * dt;
+                    pos_corrections[i] = (dlin, dang);
+                }
+            }
+        });
+
+        // Impulse birikimcilerini manifold'a geri yaz (warm-start sürekliliği: bir sonraki
+        // substep bu değerleri okur). Eski kod bunu her sweep'te yazıyordu; `prepared` bunları
+        // bellekte tuttuğu için tek bir yazma yeterli, sonuç aynı.
+        for p in &prepared {
+            manifolds[p.mid].contacts[p.cid].normal_impulse = p.acc_n;
+            manifolds[p.mid].contacts[p.cid].tangent_impulse = p.acc_t;
+        }
+    }
+
+    /// The soft contact's coefficients for a substep of `dt`: `(bias_rate, mass_scale,
+    /// impulse_scale)`.
+    fn soft_coefficients(&self, dt: f32, inv_dt: f32) -> (f32, f32, f32) {
         // ── Soft constraint katsayıları (Box2D v3 formülü) ──
         // hertz'i substep oranının çeyreğine clamp'le (ω·dt makul kalsın).
         let hertz = self.contact_hertz.min(0.25 * inv_dt);
@@ -173,7 +271,19 @@ impl ConstraintSolver {
         let bias_rate = if denom > 1e-9 { omega / denom } else { 0.0 };
         let mass_scale = if c > 0.0 { c / (1.0 + c) } else { 1.0 };
         let impulse_scale = if c > 0.0 { 1.0 / (1.0 + c) } else { 0.0 };
+        (bias_rate, mass_scale, impulse_scale)
+    }
 
+    /// Every contact's approach speed before the warm start, for restitution, at
+    /// `vn0[off[manifold] + contact]`.
+    #[allow(clippy::needless_range_loop)]
+    fn approach_speeds(
+        manifolds: &[ContactManifold],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &[Velocity],
+        entity_index_map: &crate::world::EntityIndexMap,
+    ) -> (Vec<usize>, Vec<f32>) {
         let com_of = |idx: usize| -> Vec3 {
             transforms[idx].position
                 + transforms[idx]
@@ -218,15 +328,25 @@ impl ConstraintSolver {
                 vn0[vn0_off[mid] + cid] = (vb - va).dot(ct.normal);
             }
         }
+        (vn0_off, vn0)
+    }
 
-        // ── 1) Warm-start ──
-        for mid in 0..manifolds.len() {
+    /// The TGS path's warm start: last step's impulses, scaled by `warm_start_factor`.
+    fn warm_start_tgs(
+        &self,
+        manifolds: &[ContactManifold],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        entity_index_map: &crate::world::EntityIndexMap,
+    ) {
+        for manifold in manifolds {
             let Some(super::ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b }) =
-                super::ContactPair::of(&manifolds[mid], rigid_bodies, transforms, entity_index_map)
+                super::ContactPair::of(manifold, rigid_bodies, transforms, entity_index_map)
             else {
                 continue;
             };
-            for contact in &manifolds[mid].contacts {
+            for contact in &manifold.contacts {
                 let r_a = contact.point - com_a;
                 let r_b = contact.point - com_b;
                 let wn = contact.normal * (contact.normal_impulse * self.warm_start_factor);
@@ -241,7 +361,11 @@ impl ConstraintSolver {
                 }
             }
         }
+    }
 
+    /// The bodies with a real (penetrating, `pen0 ≥ 0`) contact: only they take the TGS
+    /// position delta.
+    fn real_contact_bodies(manifolds: &[ContactManifold], entity_index_map: &crate::world::EntityIndexMap) -> rustc_hash::FxHashSet<usize> {
         // ── 2) GERÇEK (penetran, pen0≥0) teması olan gövdeler ──
         // Yalnız bunlar TGS pozisyon düzeltmesi (dp) alır. Sadece SPECULATIVE (gap, pen0<0)
         // teması olan gövdeler (ör. CCD mermisi) eski yolu kullanır: biased clamp velocity +
@@ -261,13 +385,20 @@ impl ConstraintSolver {
                 }
             }
         }
+        real_bodies
+    }
 
-        let h = if n_iterations > 0 {
-            dt / n_iterations as f32
-        } else {
-            dt
-        };
-
+    /// Everything about a contact that does not change between sweeps, computed once
+    /// (`Prepared`), with its impulse accumulators seeded from the manifold.
+    #[allow(clippy::needless_range_loop)]
+    fn prepare_contacts(
+        manifolds: &[ContactManifold],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        entity_index_map: &crate::world::EntityIndexMap,
+        vn0_off: &[usize],
+        vn0: &[f32],
+    ) -> Vec<Prepared> {
         // ── Per-contact SABİT precompute (hoist) ──
         // sweep'ler arası DEĞİŞMEYEN her şeyi (idx / inv_m / inv_i / com→r / normal / k_n /
         // t1,t2 / k_t) bir KEZ hesapla; 24 sweep aynı `prepared` dizisini yeniden kullanır.
@@ -360,8 +491,13 @@ impl ConstraintSolver {
                 });
             }
         }
+        prepared
+    }
 
-        drop(_prep);
+    /// The block solver's groups: each manifold's contacts in blocks of at most four, with their
+    /// regularised normal Delassus matrix.
+    #[allow(clippy::needless_range_loop)]
+    fn block_groups(&self, prepared: &[Prepared]) -> Vec<BlockGroup> {
         // ── Block-solver groups (Stage: manifold block normal solve) ──
         // Each manifold's contacts are CONTIGUOUS in `prepared` (built mid-outer, cid-inner),
         // all sharing the same body pair. Precompute, once, the N×N normal Delassus matrix A
@@ -369,211 +505,129 @@ impl ConstraintSolver {
         // r's normal velocity per unit normal impulse at contact c. The biased/relax sweeps
         // then solve each group's normals JOINTLY (block LCP) so the inter-point tilt coupling
         // is exact — the restoring stiffness that keeps tall stacks from buckling.
-        let block_groups: Vec<BlockGroup> = if self.block_solver {
-            let mut groups: Vec<BlockGroup> = Vec::new();
-            let mut i = 0usize;
-            while i < prepared.len() {
-                let mid = prepared[i].mid;
-                let m_start = i;
-                while i < prepared.len() && prepared[i].mid == mid {
-                    i += 1;
+        let mut groups: Vec<BlockGroup> = Vec::new();
+        let mut i = 0usize;
+        while i < prepared.len() {
+            let mid = prepared[i].mid;
+            let m_start = i;
+            while i < prepared.len() && prepared[i].mid == mid {
+                i += 1;
+            }
+            // Chunk this manifold's contacts into blocks of ≤4 so EVERY contact is
+            // solved. Previously a single group with n = count.min(4) was pushed and the
+            // walk jumped to the next manifold, so any manifold with >4 contacts
+            // (compound / multi-collider bodies, or an unreduced box-plane's 8 corner
+            // contacts) had its contacts beyond the 4th orphaned into NO group → they
+            // received zero normal AND zero friction impulse → that side sank / tilted /
+            // never settled. For the common ≤4-contact manifold this is byte-identical to
+            // before (one group, same `start`/`n`/`a`), so single-box stacks are unchanged.
+            let mut start = m_start;
+            while start < i {
+                let n = (i - start).min(4);
+                let mut a = [[0.0f32; 4]; 4];
+                for r in 0..n {
+                    let pr = &prepared[start + r];
+                    let ua_r = pr.r_a.cross(pr.normal);
+                    let ub_r = pr.r_b.cross(pr.normal);
+                    for c in 0..n {
+                        let pc = &prepared[start + c];
+                        let ua_c = pc.r_a.cross(pc.normal);
+                        let ub_c = pc.r_b.cross(pc.normal);
+                        let ndot = pr.normal.dot(pc.normal);
+                        a[r][c] = (pr.inv_m_a + pr.inv_m_b) * ndot
+                            + pr.inv_i_a.mul_vec3(ua_c).dot(ua_r)
+                            + pr.inv_i_b.mul_vec3(ub_c).dot(ub_r);
+                    }
                 }
-                // Chunk this manifold's contacts into blocks of ≤4 so EVERY contact is
-                // solved. Previously a single group with n = count.min(4) was pushed and the
-                // walk jumped to the next manifold, so any manifold with >4 contacts
-                // (compound / multi-collider bodies, or an unreduced box-plane's 8 corner
-                // contacts) had its contacts beyond the 4th orphaned into NO group → they
-                // received zero normal AND zero friction impulse → that side sank / tilted /
-                // never settled. For the common ≤4-contact manifold this is byte-identical to
-                // before (one group, same `start`/`n`/`a`), so single-box stacks are unchanged.
-                let mut start = m_start;
-                while start < i {
-                    let n = (i - start).min(4);
-                    let mut a = [[0.0f32; 4]; 4];
+                // Tikhonov regularisation: a 4-coplanar-contact manifold over-determines
+                // its 3 DOF (1 force + 2 tilt torques), so `a` is rank-deficient (singular).
+                // Add a small diagonal (BLOCK_REG × mean-diagonal) so the redundant direction
+                // yields a bounded, evenly-distributed impulse instead of a huge garbage one
+                // from a near-zero pivot. Small enough to leave the physical (well-conditioned)
+                // tilt-restoring modes stiff.
+                if n >= 2 {
+                    let mut mean_diag = 0.0f32;
                     for r in 0..n {
-                        let pr = &prepared[start + r];
-                        let ua_r = pr.r_a.cross(pr.normal);
-                        let ub_r = pr.r_b.cross(pr.normal);
-                        for c in 0..n {
-                            let pc = &prepared[start + c];
-                            let ua_c = pc.r_a.cross(pc.normal);
-                            let ub_c = pc.r_b.cross(pc.normal);
-                            let ndot = pr.normal.dot(pc.normal);
-                            a[r][c] = (pr.inv_m_a + pr.inv_m_b) * ndot
-                                + pr.inv_i_a.mul_vec3(ua_c).dot(ua_r)
-                                + pr.inv_i_b.mul_vec3(ub_c).dot(ub_r);
-                        }
+                        mean_diag += a[r][r];
                     }
-                    // Tikhonov regularisation: a 4-coplanar-contact manifold over-determines
-                    // its 3 DOF (1 force + 2 tilt torques), so `a` is rank-deficient (singular).
-                    // Add a small diagonal (BLOCK_REG × mean-diagonal) so the redundant direction
-                    // yields a bounded, evenly-distributed impulse instead of a huge garbage one
-                    // from a near-zero pivot. Small enough to leave the physical (well-conditioned)
-                    // tilt-restoring modes stiff.
-                    if n >= 2 {
-                        let mut mean_diag = 0.0f32;
-                        for r in 0..n {
-                            mean_diag += a[r][r];
-                        }
-                        mean_diag /= n as f32;
-                        let reg = self.block_regularization * mean_diag;
-                        for r in 0..n {
-                            a[r][r] += reg;
-                        }
+                    mean_diag /= n as f32;
+                    let reg = self.block_regularization * mean_diag;
+                    for r in 0..n {
+                        a[r][r] += reg;
                     }
-                    groups.push(BlockGroup { start, n, a });
-                    start += n;
                 }
+                groups.push(BlockGroup { start, n, a });
+                start += n;
             }
-            groups
-        } else {
-            Vec::new()
-        };
-
-        // ── Whole-chain DIRECT solve setup ──
-        // For a tall, bucklable chain (support-depth ≥ 5) small enough to solve densely,
-        // assemble the FULL island Delassus matrix and solve all normal impulses jointly
-        // each sweep → the inter-manifold support coupling is resolved EXACTLY (not left to
-        // iterate), eliminating the tall-tower buckling the iterative path can't robustly fix.
-        // A[i][j] = coupling of contacts i,j through any shared body: for each shared body X,
-        // s_i(X)·s_j(X)·[invM_X (n_i·n_j) + (invI_X (r_{X,j}×n_j))·(r_{X,i}×n_i)], with sign
-        // −1 on the contact's body A and +1 on body B. Symmetric; regularised on the diagonal
-        // (coplanar rank-deficiency, as in the per-manifold block).
-        let nprep = prepared.len();
-        let use_direct = self.direct_chain_solve
-            && self.block_solver
-            && island_depth >= 5
-            && (2..=Self::DIRECT_SOLVE_CAP).contains(&nprep);
-        let island_a: Vec<f32> = if use_direct {
-            let mut a = vec![0.0f32; nprep * nprep];
-            for i in 0..nprep {
-                for j in i..nprep {
-                    let (pi, pj) = (&prepared[i], &prepared[j]);
-                    let mut sum = 0.0f32;
-                    let ends_i = [
-                        (pi.idx_a, pi.r_a, pi.inv_m_a, pi.inv_i_a, -1.0f32),
-                        (pi.idx_b, pi.r_b, pi.inv_m_b, pi.inv_i_b, 1.0f32),
-                    ];
-                    let ends_j = [
-                        (pj.idx_a, pj.r_a, -1.0f32),
-                        (pj.idx_b, pj.r_b, 1.0f32),
-                    ];
-                    for &(xi, r_i, inv_m, inv_i, s_i) in &ends_i {
-                        for &(xj, r_j, s_j) in &ends_j {
-                            if xi == xj {
-                                let ndot = pi.normal.dot(pj.normal);
-                                let ui = r_i.cross(pi.normal);
-                                let uj = r_j.cross(pj.normal);
-                                sum += s_i * s_j * (inv_m * ndot + inv_i.mul_vec3(uj).dot(ui));
-                            }
-                        }
-                    }
-                    a[i * nprep + j] = sum;
-                    a[j * nprep + i] = sum;
-                }
-            }
-            // Diagonal regularisation (proportional) for the coplanar rank-deficiency.
-            for i in 0..nprep {
-                a[i * nprep + i] *= 1.0 + self.block_regularization;
-            }
-            a
-        } else {
-            Vec::new()
-        };
-
-        // Per-body position-delta scratch (dp), indexed by GLOBAL body index but sized once
-        // per thread and RESET only for `island_bodies` — no per-island full-world allocation.
-        // Islands are disjoint (a body is in exactly one island), so resetting just this
-        // island's entries fully isolates the reused thread-local across islands/substeps.
-        thread_local! {
-            static DP: std::cell::RefCell<Vec<(Vec3, Vec3)>> =
-                const { std::cell::RefCell::new(Vec::new()) };
         }
-        DP.with(|cell| {
-            let mut dp = cell.borrow_mut();
-            if dp.len() < velocities.len() {
-                dp.resize(velocities.len(), (Vec3::ZERO, Vec3::ZERO));
-            }
-            for &i in island_bodies {
-                dp[i] = (Vec3::ZERO, Vec3::ZERO);
-            }
+        groups
+    }
 
-            // ── 3) BIASED soft solve + iterasyon-arası pozisyon entegrasyonu ──
-            // Her iterasyondan sonra pozisyon-delta'sı güncel hızla ilerletilir; bir sonraki
-            // iterasyonun bias'ı GÜNCEL penetrasyonu görür → düzeltme yığın boyunca yayılır
-            // (SI'nin yapamadığı; uzun/çarpan yığınları ayakta tutan temel mekanizma).
-            let _sweep = crate::profile::Scope::new(&crate::profile::PHASES.sweep);
-            for iter in 0..n_iterations {
-                if use_direct {
-                    self.tgs_sweep_island(
-                        &mut prepared, &island_a, velocities, dp.as_slice(),
-                        false, true, bias_rate, mass_scale, impulse_scale, inv_dt,
-                    );
-                } else if self.block_solver {
-                    self.tgs_sweep_block(
-                        &mut prepared, &block_groups, velocities, dp.as_slice(),
-                        false, iter % 2 == 1, true, bias_rate, mass_scale, impulse_scale, inv_dt,
-                    );
-                } else {
-                    self.tgs_sweep_prepared(
-                        &mut prepared, velocities, dp.as_slice(),
-                        false, iter % 2 == 1, true,
-                        bias_rate, mass_scale, impulse_scale, inv_dt,
-                    );
-                }
-                for &i in island_bodies {
-                    if real_bodies.contains(&i) && rigid_bodies[i].is_dynamic() {
-                        dp[i].0 += velocities[i].linear * h;
-                        dp[i].1 += velocities[i].angular * h;
+    /// The whole island's normal Delassus matrix, `nprep × nprep` row-major and regularised on
+    /// the diagonal, for the whole-chain direct solve.
+    #[allow(clippy::needless_range_loop)]
+    fn island_delassus(&self, prepared: &[Prepared]) -> Vec<f32> {
+        let nprep = prepared.len();
+        let mut a = vec![0.0f32; nprep * nprep];
+        for i in 0..nprep {
+            for j in i..nprep {
+                let (pi, pj) = (&prepared[i], &prepared[j]);
+                let mut sum = 0.0f32;
+                let ends_i = [
+                    (pi.idx_a, pi.r_a, pi.inv_m_a, pi.inv_i_a, -1.0f32),
+                    (pi.idx_b, pi.r_b, pi.inv_m_b, pi.inv_i_b, 1.0f32),
+                ];
+                let ends_j = [
+                    (pj.idx_a, pj.r_a, -1.0f32),
+                    (pj.idx_b, pj.r_b, 1.0f32),
+                ];
+                for &(xi, r_i, inv_m, inv_i, s_i) in &ends_i {
+                    for &(xj, r_j, s_j) in &ends_j {
+                        if xi == xj {
+                            let ndot = pi.normal.dot(pj.normal);
+                            let ui = r_i.cross(pi.normal);
+                            let uj = r_j.cross(pj.normal);
+                            sum += s_i * s_j * (inv_m * ndot + inv_i.mul_vec3(uj).dot(ui));
+                        }
                     }
                 }
+                a[i * nprep + j] = sum;
+                a[j * nprep + i] = sum;
             }
+        }
+        // Diagonal regularisation (proportional) for the coplanar rank-deficiency.
+        for i in 0..nprep {
+            a[i * nprep + i] *= 1.0 + self.block_regularization;
+        }
+        a
+    }
 
-            // ── 4) RELAX (bias=0) — soft bias hızını temizle + restitution ──
-            drop(_sweep);
-            let _relax = crate::profile::Scope::new(&crate::profile::PHASES.relax);
-            for iter in 0..self.relax_iterations {
-                if use_direct {
-                    self.tgs_sweep_island(
-                        &mut prepared, &island_a, velocities, dp.as_slice(),
-                        true, false, 0.0, 1.0, 0.0, inv_dt,
-                    );
-                } else if self.block_solver {
-                    self.tgs_sweep_block(
-                        &mut prepared, &block_groups, velocities, dp.as_slice(),
-                        true, iter % 2 == 1, false, 0.0, 1.0, 0.0, inv_dt,
-                    );
-                } else {
-                    self.tgs_sweep_prepared(
-                        &mut prepared, velocities, dp.as_slice(),
-                        true, iter % 2 == 1, false,
-                        0.0, 1.0, 0.0, inv_dt,
-                    );
-                }
-            }
-
-            // ── 5) Pozisyon düzeltmesi = dp − (relaxed hız)·dt ──
-            // dp, biased çözümün TGS-entegre GERÇEK pozisyon değişimidir (penetrasyon
-            // düzeltmesi yığın boyunca yayılmış). position_integration relaxed·dt ekleyecek;
-            // farkı burada ekleyince toplam = dp olur → penetrasyon düzelir, hız temiz kalır
-            // (resting jitter yok, uyuyabilir). Restitution relax içinde uygulandığından
-            // sekme hızı `velocities`'tedir; çıkarılması sekme yer-değişimini bu kareye değil
-            // SONRAKİ kareye taşır (kararlı). Yalnız aktif dinamik gövdelere uygulanır.
-            for &i in island_bodies {
-                if real_bodies.contains(&i) && rigid_bodies[i].is_dynamic() {
-                    let dlin = dp[i].0 - velocities[i].linear * dt;
-                    let dang = dp[i].1 - velocities[i].angular * dt;
-                    pos_corrections[i] = (dlin, dang);
-                }
-            }
-        });
-
-        // Impulse birikimcilerini manifold'a geri yaz (warm-start sürekliliği: bir sonraki
-        // substep bu değerleri okur). Eski kod bunu her sweep'te yazıyordu; `prepared` bunları
-        // bellekte tuttuğu için tek bir yazma yeterli, sonuç aynı.
-        for p in &prepared {
-            manifolds[p.mid].contacts[p.cid].normal_impulse = p.acc_n;
-            manifolds[p.mid].contacts[p.cid].tangent_impulse = p.acc_t;
+    /// One sweep of the island's contacts by the solver the island uses — the whole-chain direct
+    /// solve (`direct`, the island's Delassus matrix), the manifold blocks, or contact by contact.
+    /// Biased with `coeffs` (the soft contact's bias rate, mass and impulse scales); without, the
+    /// relax pass, which applies restitution.
+    #[allow(clippy::too_many_arguments)]
+    fn sweep(
+        &self,
+        prepared: &mut [Prepared],
+        block_groups: &[BlockGroup],
+        direct: Option<&[f32]>,
+        velocities: &mut [Velocity],
+        dp: &[(Vec3, Vec3)],
+        reverse: bool,
+        coeffs: Option<(f32, f32, f32)>,
+        inv_dt: f32,
+    ) {
+        let (relax, (bias_rate, mass_scale, impulse_scale)) = match coeffs {
+            Some(coeffs) => (false, coeffs),
+            None => (true, (0.0, 1.0, 0.0)),
+        };
+        if let Some(island_a) = direct {
+            self.tgs_sweep_island(prepared, island_a, velocities, dp, relax, !relax, bias_rate, mass_scale, impulse_scale, inv_dt);
+        } else if self.block_solver {
+            self.tgs_sweep_block(prepared, block_groups, velocities, dp, relax, reverse, !relax, bias_rate, mass_scale, impulse_scale, inv_dt);
+        } else {
+            self.tgs_sweep_prepared(prepared, velocities, dp, relax, reverse, !relax, bias_rate, mass_scale, impulse_scale, inv_dt);
         }
     }
 

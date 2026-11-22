@@ -648,6 +648,69 @@ impl ConstraintSolver {
             return SolveStats::default();
         }
 
+        let island_depth = self.island_depth(manifolds, rigid_bodies, entity_index_map);
+        let n_iterations = self.sweep_count(island_depth);
+        let has_ccd = Self::island_has_ccd(manifolds, rigid_bodies, entity_index_map);
+
+        // Tall, bucklable stacks (support-depth ≥ 5) are the historically unstable case
+        // (resting-stack instability). Only these deep islands reach this branch, so a
+        // trace here — chosen solver path, adaptive sweep count, block/direct flags — is a
+        // low-frequency, high-signal window into the stack solve without touching the
+        // per-contact inner loop.
+        if island_depth >= 5 {
+            tracing::trace!(
+                island_depth,
+                n_iterations,
+                n_manifolds = manifolds.len(),
+                solver = if self.use_tgs_soft && !has_ccd { "tgs-soft" } else { "split-impulse" },
+                block_solver = self.block_solver,
+                direct_chain = self.direct_chain_solve,
+                "solving tall (bucklable) stack island"
+            );
+        }
+
+        if self.use_tgs_soft && !has_ccd {
+            self.solve_contacts_tgs(
+                manifolds,
+                rigid_bodies,
+                transforms,
+                velocities,
+                pos_corrections,
+                entity_index_map,
+                island_bodies,
+                island_depth,
+                n_iterations,
+                dt,
+            );
+            return SolveStats {
+                island_depth,
+                iterations: n_iterations,
+            };
+        }
+
+        self.solve_contacts_split_impulse(
+            manifolds,
+            rigid_bodies,
+            transforms,
+            velocities,
+            pos_corrections,
+            bounces,
+            entity_index_map,
+            island_bodies,
+            dt,
+        );
+        // The split-impulse path sweeps `self.iterations` (see the loop above) and has never
+        // consumed the adaptive count, so reporting `n_iterations` here would be a lie about
+        // work that was not done. An island reaches this path only by containing a CCD-enabled
+        // body or by `use_tgs_soft` being off.
+        SolveStats {
+            island_depth,
+            iterations: self.iterations,
+        }
+    }
+
+    /// The island's support depth, its contacts support-ordered on the way when that is on.
+    fn island_depth(&self, manifolds: &mut [ContactManifold], rigid_bodies: &[RigidBody], entity_index_map: &crate::world::EntityIndexMap) -> u32 {
         // ── Support order + island depth ──
         // Support-order the island's contacts (bottom-up from anchors) when enabled — a
         // deterministic, pair-emission-invariant total order that lets the block solver's
@@ -655,7 +718,7 @@ impl ConstraintSolver {
         // depth, which drives ADAPTIVE ITERATIONS: a tall stack needs iterations ≥ its
         // height for support to reach the top, so with the block solver we scale the sweep
         // count with depth (short piles keep the base count → no perf cost).
-        let island_depth = if self.support_ordering || self.block_solver {
+        if self.support_ordering || self.block_solver {
             let _t = crate::profile::Scope::new(&crate::profile::PHASES.order);
             support_order_manifolds(
                 manifolds,
@@ -665,7 +728,11 @@ impl ConstraintSolver {
             )
         } else {
             0
-        };
+        }
+    }
+
+    /// The biased sweeps the TGS path runs for an island of support depth `island_depth`.
+    fn sweep_count(&self, island_depth: u32) -> usize {
         // Adaptive iterations: a stacked column of support-depth D is linearly unstable
         // (buckling) until support propagates to its top, which needs sweeps that scale
         // with D. Shallow islands (D<5, no buckling) keep the base count; bucklable stacks
@@ -718,13 +785,16 @@ impl ConstraintSolver {
         //     a no-op for a caller who lowered `iterations` below 16 — those get the floor.
         //     Both `tests/ccd.rs` and `tests/ccd_analytical.rs` run on this path and are the
         //     regression surface that such a change has to be re-blessed against.
-        let n_iterations = if self.adaptive_iterations && self.block_solver && island_depth >= 5 {
+        if self.adaptive_iterations && self.block_solver && island_depth >= 5 {
             let target = (island_depth as usize * 3 / 2).max(Self::BLOCK_ITERS_FLOOR);
             self.iterations.max(target).min(Self::BLOCK_ITERS_CAP)
         } else {
             self.iterations
-        };
+        }
+    }
 
+    /// Whether a body of the island has CCD on, which keeps the island off the TGS path.
+    fn island_has_ccd(manifolds: &[ContactManifold], rigid_bodies: &[RigidBody], entity_index_map: &crate::world::EntityIndexMap) -> bool {
         // TGS Soft yolu (modern çözücü): soft constraint + relax pass.
         // İSTİSNA: CCD-etkin gövde içeren island'lar eski (split-impulse) yolu kullanır.
         // CCD speculative temasları ince ayarlıdır; TGS'in dp/relax akışı yüksek-hızlı
@@ -746,51 +816,61 @@ impl ConstraintSolver {
         // yazılmış bir karşı örnek (sevkiyattaki çözücü onu geçiyor, dolayısıyla bedava ek
         // kapsam), hatırlanan bir cümle değil. Öbür yol — split-impulse yolunda speculative
         // temaslara restitution — 2026-11-15'te açıldı: aşağıdaki "Restitution pass".
-        let has_ccd = manifolds.iter().any(|m| {
+        manifolds.iter().any(|m| {
             [m.entity_a, m.entity_b].iter().any(|e| {
                 entity_index_map
                     .get(&e.id())
                     .is_some_and(|&i| rigid_bodies[i].ccd_enabled)
             })
-        });
+        })
+    }
 
-        // Tall, bucklable stacks (support-depth ≥ 5) are the historically unstable case
-        // (resting-stack instability). Only these deep islands reach this branch, so a
-        // trace here — chosen solver path, adaptive sweep count, block/direct flags — is a
-        // low-frequency, high-signal window into the stack solve without touching the
-        // per-contact inner loop.
-        if island_depth >= 5 {
-            tracing::trace!(
-                island_depth,
-                n_iterations,
-                n_manifolds = manifolds.len(),
-                solver = if self.use_tgs_soft && !has_ccd { "tgs-soft" } else { "split-impulse" },
-                block_solver = self.block_solver,
-                direct_chain = self.direct_chain_solve,
-                "solving tall (bucklable) stack island"
-            );
+    /// The split-impulse sequential-impulse solve, for an island with a CCD body or with
+    /// `use_tgs_soft` off: the warm start, `iterations` symmetric Gauss-Seidel sweeps, the
+    /// speculative contacts' bounces (into `bounces`), and the position pass (`pos_corrections`).
+    #[allow(clippy::too_many_arguments)]
+    fn solve_contacts_split_impulse(
+        &self,
+        manifolds: &mut [ContactManifold],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        pos_corrections: &mut [(Vec3, Vec3)],
+        bounces: &mut [(Vec3, Vec3)],
+        entity_index_map: &crate::world::EntityIndexMap,
+        island_bodies: &[usize],
+        dt: f32,
+    ) {
+        let (spec_off, spec_vn0) = Self::speculative_closing_speeds(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
+        self.warm_start_split_impulse(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
+
+        // ── İteratif PGS ─────────────────────────────────────────────────────
+        let inv_dt = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+        self.pgs_sweeps(manifolds, rigid_bodies, transforms, velocities, entity_index_map, inv_dt);
+        self.speculative_bounces(
+            manifolds,
+            (rigid_bodies, transforms, entity_index_map),
+            velocities,
+            bounces,
+            island_bodies,
+            (&spec_off, &spec_vn0),
+            dt,
+        );
+
+        if self.split_impulse_enabled {
+            self.split_impulse_positions(manifolds, rigid_bodies, transforms, entity_index_map, velocities.len(), inv_dt, dt, pos_corrections);
         }
+    }
 
-        if self.use_tgs_soft && !has_ccd {
-            self.solve_contacts_tgs(
-                manifolds,
-                rigid_bodies,
-                transforms,
-                velocities,
-                pos_corrections,
-                entity_index_map,
-                island_bodies,
-                island_depth,
-                n_iterations,
-                dt,
-            );
-            return SolveStats {
-                island_depth,
-                iterations: n_iterations,
-            };
-        }
-
-
+    /// The closing speed of every speculative contact of a bouncy pair before the solve, at
+    /// `vn0[off[manifold] + contact]` (`NAN` for the rest).
+    fn speculative_closing_speeds(
+        manifolds: &[ContactManifold],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &[Velocity],
+        entity_index_map: &crate::world::EntityIndexMap,
+    ) -> (Vec<usize>, Vec<f32>) {
         // ── Restitution of speculative contacts: the closing speed before the solve ──────────
         // A speculative contact (a gap still open, `penetration < 0`) is solved without
         // restitution below — it is a limit that closes the gap, and a bounce mixed into it upsets
@@ -827,16 +907,26 @@ impl ConstraintSolver {
                 spec_vn0[spec_off[mid] + cid] = (vb - va).dot(c.normal);
             }
         }
+        (spec_off, spec_vn0)
+    }
 
-        // ── Warm-starting ────────────────────────────────────────────────────
-        for mid in 0..manifolds.len() {
+    /// The split-impulse path's warm start: last step's impulses, scaled by `warm_start_factor`.
+    fn warm_start_split_impulse(
+        &self,
+        manifolds: &[ContactManifold],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        entity_index_map: &crate::world::EntityIndexMap,
+    ) {
+        for manifold in manifolds {
             let Some(ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b }) =
-                ContactPair::of(&manifolds[mid], rigid_bodies, transforms, entity_index_map)
+                ContactPair::of(manifold, rigid_bodies, transforms, entity_index_map)
             else {
                 continue;
             };
 
-            for contact in &manifolds[mid].contacts {
+            for contact in &manifold.contacts {
                 let r_a = contact.point - com_a;
                 let r_b = contact.point - com_b;
 
@@ -855,10 +945,19 @@ impl ConstraintSolver {
                 }
             }
         }
+    }
 
-        // ── İteratif PGS ─────────────────────────────────────────────────────
-        let inv_dt = if dt > 0.0 { 1.0 / dt } else { 0.0 };
-
+    /// The split-impulse path's `iterations` sweeps over the island's contacts, alternating
+    /// direction (`pgs_contact` for each).
+    fn pgs_sweeps(
+        &self,
+        manifolds: &mut [ContactManifold],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        entity_index_map: &crate::world::EntityIndexMap,
+        inv_dt: f32,
+    ) {
         let n_manifolds = manifolds.len();
         // Each contact's rolling-resistance impulse over the sweep (`rolling_row`), at
         // `roll_at[mid] + cid`. This path had no rolling row at all, and every island with a CCD
@@ -886,191 +985,218 @@ impl ConstraintSolver {
                 let Some(pair) = ContactPair::of(&manifolds[mid], rigid_bodies, transforms, entity_index_map) else {
                     continue;
                 };
-                let ContactPair { idx_a, idx_b, .. } = pair;
-
-                let friction = manifolds[mid].friction;
-                let restitution = manifolds[mid].restitution;
-
-                let n_contacts = manifolds[mid].contacts.len();
+                let manifold = &mut manifolds[mid];
+                let materials = (manifold.friction, manifold.static_friction, manifold.restitution, manifold.rolling_friction);
+                let n_contacts = manifold.contacts.len();
                 for ci in 0..n_contacts {
                     let cid = if reverse { n_contacts - 1 - ci } else { ci };
-                    let contact_pt = manifolds[mid].contacts[cid].point;
-                    let normal = manifolds[mid].contacts[cid].normal;
-                    let penetration = manifolds[mid].contacts[cid].penetration;
-                    let acc_n = manifolds[mid].contacts[cid].normal_impulse;
-                    let acc_t = manifolds[mid].contacts[cid].tangent_impulse;
-
-                    let ContactPair { inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b, .. } = pair;
-                    let r_a = contact_pt - com_a;
-                    let r_b = contact_pt - com_b;
-
-                    if !dyn_a && !dyn_b {
-                        continue;
-                    }
-
-                    // Temas noktasındaki göreli hız
-                    let va = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
-                    let vb = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
-                    let rel_vel = vb - va;
-                    let vel_norm = rel_vel.dot(normal);
-
-                    // ── Normal İmpuls ────────────────────────────────────────
-                    let r_a_x_n = r_a.cross(normal);
-                    let r_b_x_n = r_b.cross(normal);
-                    let k_n = inv_m_a
-                        + inv_m_b
-                        + (inv_i_a.mul_vec3(r_a_x_n)).dot(r_a_x_n)
-                        + (inv_i_b.mul_vec3(r_b_x_n)).dot(r_b_x_n);
-
-                    if k_n < 1e-8 {
-                        continue;
-                    }
-
-                    // Pozisyon düzeltme stratejisi:
-                    // Split Impulse: bias=0 (pozisyon düzeltmesi ayrı pseudo-velocity kanalında)
-                    // Fallback: Baumgarte bias velocity'ye karıştırılır
-                    let bias = if penetration < 0.0 {
-                        // Speculative contact: nesne henüz teması yapmadı
-                        penetration * inv_dt
-                    } else if self.split_impulse_enabled {
-                        // Split Impulse: pozisyon düzeltme tamamen pseudo-velocity pass'te
-                        // Velocity kanalı temiz kalır → resting jitter yok
-                        0.0
-                    } else {
-                        // Fallback Baumgarte
-                        let correction = (penetration - self.slop)
-                            .max(0.0)
-                            .min(self.max_linear_correction);
-                        self.baumgarte * inv_dt * correction
-                    };
-
-                    // Restitution: sadece yüksek hızlı GERÇEK çarpışmalarda. Speculative
-                    // temas (penetration < 0) bir boşluk-kapatma LİMİTİdir; ona restitution
-                    // uygulamak bias'ı bozar (cisim substep'ler arası tutarsız yavaşlar ve
-                    // son substep'te yüzeyi aşıp girer). Sekme, cisim gerçekten değdiğinde
-                    // (penetration ≥ 0) doğal olarak uygulanır.
-                    let e = if penetration < 0.0 {
-                        0.0
-                    } else if -vel_norm > self.restitution_velocity_threshold {
-                        restitution
-                    } else {
-                        0.0
-                    };
-
-                    let delta_n = (-(1.0 + e) * vel_norm + bias) / k_n;
-                    let new_acc_n = (acc_n + delta_n).max(0.0); // Clamp: çekme yok
-                    let actual_n = new_acc_n - acc_n;
-                    manifolds[mid].contacts[cid].normal_impulse = new_acc_n;
-
-                    let imp_n = normal * actual_n;
-                    if dyn_a {
-                        velocities[idx_a].linear -= imp_n * inv_m_a;
-                        velocities[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(imp_n));
-                    }
-                    if dyn_b {
-                        velocities[idx_b].linear += imp_n * inv_m_b;
-                        velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_n));
-                    }
-
-                    // A speculative contact gets no friction: the bodies have not touched, and
-                    // its anchor is the dynamic body's centre (`Gjk::speculative_contact`), so a
-                    // friction impulse there has no lever arm — it does not spin the body, it only
-                    // takes its tangential speed. Measured on a CCD ball dropped 5 cm onto a
-                    // tilted floor of tiles (`tests/kinematic_target.rs`): the one speculative
-                    // contact on landing took the 0.156 m/s it carried down the slope, and it
-                    // covered 2.03 m in two seconds where it covers 2.24 m without that
-                    // friction. The real contact on the next step rolls it.
-                    if penetration < 0.0 {
-                        manifolds[mid].contacts[cid].tangent_impulse = Vec3::ZERO;
-                        continue;
-                    }
-
-                    // ── Sürtünme İmpulsu (2-tangent Coulomb cone) ───────────
-                    // Normalden türetilen SABİT iki ortonormal tangent (t1,t2); birikim
-                    // her eksende skaler ve birlikte dairesel koniye clamp'lenir.
-                    // (Eski tek-tangent yöntemi tangenti her iterasyonda döndürüp birikmiş
-                    // impulsun dik bileşenini kaybediyordu → kayıplı/yön kayan sürtünme.)
-                    let (t1, t2) = {
-                        let a = if normal.x.abs() > 0.9 {
-                            Vec3::new(0.0, 1.0, 0.0).cross(normal)
-                        } else {
-                            Vec3::new(1.0, 0.0, 0.0).cross(normal)
-                        }
-                        .normalize();
-                        (a, normal.cross(a))
-                    };
-
-                    let va2 = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
-                    let vb2 = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
-                    let rel2 = vb2 - va2;
-
-                    // Eksen başına efektif kütle: k = inv_m + (r×t)·I⁻¹·(r×t).
-                    let eff_mass = |taxis: Vec3| -> f32 {
-                        let rxt_a = r_a.cross(taxis);
-                        let rxt_b = r_b.cross(taxis);
-                        inv_m_a
-                            + inv_m_b
-                            + inv_i_a.mul_vec3(rxt_a).dot(rxt_a)
-                            + inv_i_b.mul_vec3(rxt_b).dot(rxt_b)
-                    };
-                    let k_t1 = eff_mass(t1);
-                    let k_t2 = eff_mass(t2);
-
-                    // Birikmiş tangent impulsu sabit baza ayrıştır, her eksende çöz.
-                    let acc_t1 = acc_t.dot(t1);
-                    let acc_t2 = acc_t.dot(t2);
-                    let mut new1 = if k_t1 > 1e-8 {
-                        acc_t1 - rel2.dot(t1) / k_t1
-                    } else {
-                        acc_t1
-                    };
-                    let mut new2 = if k_t2 > 1e-8 {
-                        acc_t2 - rel2.dot(t2) / k_t2
-                    } else {
-                        acc_t2
-                    };
-
-                    // Dairesel Coulomb koni: bütçe temasın teğet hızından geliyor (duran temas
-                    // μ_s, gerçekten kayan temas μ_d) — bkz. `friction_limit`.
-                    let tang_speed = (rel2 - normal * rel2.dot(normal)).length();
-                    let limit = self.friction_limit(
-                        tang_speed,
-                        manifolds[mid].static_friction,
-                        friction,
-                        new_acc_n,
-                    );
-                    let mag = (new1 * new1 + new2 * new2).sqrt();
-                    if mag > limit && mag > 1e-12 {
-                        let s = limit / mag;
-                        new1 *= s;
-                        new2 *= s;
-                    }
-
-                    let imp_t = t1 * (new1 - acc_t1) + t2 * (new2 - acc_t2);
-                    manifolds[mid].contacts[cid].tangent_impulse = t1 * new1 + t2 * new2;
-                    if dyn_a {
-                        velocities[idx_a].linear -= imp_t * inv_m_a;
-                        velocities[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(imp_t));
-                    }
-                    if dyn_b {
-                        velocities[idx_b].linear += imp_t * inv_m_b;
-                        velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_t));
-                    }
-
-                    let at = roll_at[mid] + cid;
-                    acc_roll[at] = rolling_row(
-                        velocities,
-                        (idx_a, idx_b),
-                        (dyn_a, dyn_b),
-                        (inv_i_a, inv_i_b),
-                        manifolds[mid].rolling_friction,
-                        new_acc_n,
-                        acc_roll[at],
-                    );
+                    let roll = &mut acc_roll[roll_at[mid] + cid];
+                    self.pgs_contact(&mut manifold.contacts[cid], pair, materials, velocities, inv_dt, roll);
                 }
             }
         }
+    }
 
+    /// One contact of one sweep on the split-impulse path: the normal impulse (a speculative
+    /// contact's gap closed by its bias, a touching one's by the position pass), then the
+    /// two-tangent Coulomb cone and the rolling row. `materials` is the pair's (friction, static
+    /// friction, restitution, rolling friction); `acc_roll`, the contact's rolling impulse so far.
+    fn pgs_contact(
+        &self,
+        contact: &mut gizmo_physics_core::ContactPoint,
+        pair: ContactPair,
+        (friction, static_friction, restitution, rolling_friction): (f32, f32, f32, f32),
+        velocities: &mut [Velocity],
+        inv_dt: f32,
+        acc_roll: &mut Vec3,
+    ) {
+        let contact_pt = contact.point;
+        let normal = contact.normal;
+        let penetration = contact.penetration;
+        let acc_n = contact.normal_impulse;
+        let acc_t = contact.tangent_impulse;
+
+        let ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b } = pair;
+        let r_a = contact_pt - com_a;
+        let r_b = contact_pt - com_b;
+
+        if !dyn_a && !dyn_b {
+            return;
+        }
+
+        // Temas noktasındaki göreli hız
+        let va = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
+        let vb = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
+        let rel_vel = vb - va;
+        let vel_norm = rel_vel.dot(normal);
+
+        // ── Normal İmpuls ────────────────────────────────────────
+        let r_a_x_n = r_a.cross(normal);
+        let r_b_x_n = r_b.cross(normal);
+        let k_n = inv_m_a
+            + inv_m_b
+            + (inv_i_a.mul_vec3(r_a_x_n)).dot(r_a_x_n)
+            + (inv_i_b.mul_vec3(r_b_x_n)).dot(r_b_x_n);
+
+        if k_n < 1e-8 {
+            return;
+        }
+
+        // Pozisyon düzeltme stratejisi:
+        // Split Impulse: bias=0 (pozisyon düzeltmesi ayrı pseudo-velocity kanalında)
+        // Fallback: Baumgarte bias velocity'ye karıştırılır
+        let bias = if penetration < 0.0 {
+            // Speculative contact: nesne henüz teması yapmadı
+            penetration * inv_dt
+        } else if self.split_impulse_enabled {
+            // Split Impulse: pozisyon düzeltme tamamen pseudo-velocity pass'te
+            // Velocity kanalı temiz kalır → resting jitter yok
+            0.0
+        } else {
+            // Fallback Baumgarte
+            let correction = (penetration - self.slop)
+                .max(0.0)
+                .min(self.max_linear_correction);
+            self.baumgarte * inv_dt * correction
+        };
+
+        // Restitution: sadece yüksek hızlı GERÇEK çarpışmalarda. Speculative
+        // temas (penetration < 0) bir boşluk-kapatma LİMİTİdir; ona restitution
+        // uygulamak bias'ı bozar (cisim substep'ler arası tutarsız yavaşlar ve
+        // son substep'te yüzeyi aşıp girer). Sekme, cisim gerçekten değdiğinde
+        // (penetration ≥ 0) doğal olarak uygulanır.
+        let e = if penetration < 0.0 {
+            0.0
+        } else if -vel_norm > self.restitution_velocity_threshold {
+            restitution
+        } else {
+            0.0
+        };
+
+        let delta_n = (-(1.0 + e) * vel_norm + bias) / k_n;
+        let new_acc_n = (acc_n + delta_n).max(0.0); // Clamp: çekme yok
+        let actual_n = new_acc_n - acc_n;
+        contact.normal_impulse = new_acc_n;
+
+        let imp_n = normal * actual_n;
+        if dyn_a {
+            velocities[idx_a].linear -= imp_n * inv_m_a;
+            velocities[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(imp_n));
+        }
+        if dyn_b {
+            velocities[idx_b].linear += imp_n * inv_m_b;
+            velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_n));
+        }
+
+        // A speculative contact gets no friction: the bodies have not touched, and
+        // its anchor is the dynamic body's centre (`Gjk::speculative_contact`), so a
+        // friction impulse there has no lever arm — it does not spin the body, it only
+        // takes its tangential speed. Measured on a CCD ball dropped 5 cm onto a
+        // tilted floor of tiles (`tests/kinematic_target.rs`): the one speculative
+        // contact on landing took the 0.156 m/s it carried down the slope, and it
+        // covered 2.03 m in two seconds where it covers 2.24 m without that
+        // friction. The real contact on the next step rolls it.
+        if penetration < 0.0 {
+            contact.tangent_impulse = Vec3::ZERO;
+            return;
+        }
+
+        // ── Sürtünme İmpulsu (2-tangent Coulomb cone) ───────────
+        // Normalden türetilen SABİT iki ortonormal tangent (t1,t2); birikim
+        // her eksende skaler ve birlikte dairesel koniye clamp'lenir.
+        // (Eski tek-tangent yöntemi tangenti her iterasyonda döndürüp birikmiş
+        // impulsun dik bileşenini kaybediyordu → kayıplı/yön kayan sürtünme.)
+        let (t1, t2) = {
+            let a = if normal.x.abs() > 0.9 {
+                Vec3::new(0.0, 1.0, 0.0).cross(normal)
+            } else {
+                Vec3::new(1.0, 0.0, 0.0).cross(normal)
+            }
+            .normalize();
+            (a, normal.cross(a))
+        };
+
+        let va2 = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
+        let vb2 = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
+        let rel2 = vb2 - va2;
+
+        // Eksen başına efektif kütle: k = inv_m + (r×t)·I⁻¹·(r×t).
+        let eff_mass = |taxis: Vec3| -> f32 {
+            let rxt_a = r_a.cross(taxis);
+            let rxt_b = r_b.cross(taxis);
+            inv_m_a
+                + inv_m_b
+                + inv_i_a.mul_vec3(rxt_a).dot(rxt_a)
+                + inv_i_b.mul_vec3(rxt_b).dot(rxt_b)
+        };
+        let k_t1 = eff_mass(t1);
+        let k_t2 = eff_mass(t2);
+
+        // Birikmiş tangent impulsu sabit baza ayrıştır, her eksende çöz.
+        let acc_t1 = acc_t.dot(t1);
+        let acc_t2 = acc_t.dot(t2);
+        let mut new1 = if k_t1 > 1e-8 {
+            acc_t1 - rel2.dot(t1) / k_t1
+        } else {
+            acc_t1
+        };
+        let mut new2 = if k_t2 > 1e-8 {
+            acc_t2 - rel2.dot(t2) / k_t2
+        } else {
+            acc_t2
+        };
+
+        // Dairesel Coulomb koni: bütçe temasın teğet hızından geliyor (duran temas
+        // μ_s, gerçekten kayan temas μ_d) — bkz. `friction_limit`.
+        let tang_speed = (rel2 - normal * rel2.dot(normal)).length();
+        let limit = self.friction_limit(
+            tang_speed,
+            static_friction,
+            friction,
+            new_acc_n,
+        );
+        let mag = (new1 * new1 + new2 * new2).sqrt();
+        if mag > limit && mag > 1e-12 {
+            let s = limit / mag;
+            new1 *= s;
+            new2 *= s;
+        }
+
+        let imp_t = t1 * (new1 - acc_t1) + t2 * (new2 - acc_t2);
+        contact.tangent_impulse = t1 * new1 + t2 * new2;
+        if dyn_a {
+            velocities[idx_a].linear -= imp_t * inv_m_a;
+            velocities[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(imp_t));
+        }
+        if dyn_b {
+            velocities[idx_b].linear += imp_t * inv_m_b;
+            velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_t));
+        }
+
+        *acc_roll = rolling_row(
+            velocities,
+            (idx_a, idx_b),
+            (dyn_a, dyn_b),
+            (inv_i_a, inv_i_b),
+            rolling_friction,
+            new_acc_n,
+            *acc_roll,
+        );
+    }
+
+    /// The speculative contacts' bounces (see `speculative_closing_speeds`), handed back in
+    /// `bounces` for after position integration; the velocities are left as the sweeps made them.
+    #[allow(clippy::too_many_arguments)]
+    fn speculative_bounces(
+        &self,
+        manifolds: &[ContactManifold],
+        (rigid_bodies, transforms, entity_index_map): (&[RigidBody], &[Transform], &crate::world::EntityIndexMap),
+        velocities: &mut [Velocity],
+        bounces: &mut [(Vec3, Vec3)],
+        island_bodies: &[usize],
+        (spec_off, spec_vn0): (&[usize], &[f32]),
+        dt: f32,
+    ) {
         // ── Restitution pass (speculative contacts — see where `spec_vn0` is filled) ─────────
         //
         // The bounce is handed back for after position integration (`bounces`), not left in the
@@ -1155,19 +1281,6 @@ impl ConstraintSolver {
         for (i, kept) in before {
             bounces[i] = (velocities[i].linear - kept.linear, velocities[i].angular - kept.angular);
             velocities[i] = kept;
-        }
-
-        if self.split_impulse_enabled {
-            self.split_impulse_positions(manifolds, rigid_bodies, transforms, entity_index_map, velocities.len(), inv_dt, dt, pos_corrections);
-        }
-
-        // The split-impulse path sweeps `self.iterations` (see the loop above) and has never
-        // consumed the adaptive count, so reporting `n_iterations` here would be a lie about
-        // work that was not done. An island reaches this path only by containing a CCD-enabled
-        // body or by `use_tgs_soft` being off.
-        SolveStats {
-            island_depth,
-            iterations: self.iterations,
         }
     }
 
