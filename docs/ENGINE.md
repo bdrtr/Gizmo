@@ -168,6 +168,37 @@ the first write (Unity's material instance — a hidden un-sharing).
 > tested, exported and **connected to nothing**. **First item of work named there: text/font
 > rendering, which the engine has no path for at all.**
 
+> **2026-11-22 — four open items, each a piece of work of its own.** Found while splitting the
+> god functions and building `misket` and `rampa`; written down here so they are not lost, not as
+> limits:
+>
+> 1. **GPU soft bodies** (`gizmo-physics-soft::gpu_compute`, behind the default-off `gpu_physics`
+>    feature; no game uses it). Every body is simulated with the first body's material — `mu`,
+>    `lambda` and `damping` are read from `soft_bodies[0]`, and a mix is only logged, in debug
+>    builds, on every step — and every step spawns an OS thread just to poll the device. The fix:
+>    a material per element in `Tetrahedron` (its `pad3` has room for two scalars without changing
+>    the 80-byte layout `tests/wgsl_layout.rs` pins) and damping per node in the shader; poll on
+>    the calling thread; clear the force buffers with `clear_buffer` instead of uploading zeros.
+>    It needs a GPU test: the only tests today parse the shader.
+> 2. **The renderer's construction functions are still god functions.** `build_core_pipelines`
+>    (561 lines), `gpu_physics::system::new` (356), `build_layouts` (349), `gpu_smoke::new` (273),
+>    `finish_construction` (264), `build_post_process_resources` (263), `decal::new` (261),
+>    `create_particle_pipelines` (257), `build_scene_pipelines` (230), and the bench
+>    `create_resource_world` (504). Mostly descriptors, but full of per-target `#[cfg]` arms, so
+>    each split needs the golden render tests, the forward-only GPU tests, the wasm lint and the
+>    feature powerset.
+> 3. **The fight HUD exists only in the editor.** The health bars and the round timer are drawn by
+>    the editor's Game panel (`gizmo-editor::game_view::draw_fight_hud`, fed by `gizmo-studio`'s
+>    `sync_fight_hud`), so an exported fighting game has none — the export promise ("the shipped
+>    game behaves like the one you pressed ▶ on") does not hold for it. Its place is the engine:
+>    the fighters' state into an in-game UI that the runtime draws too.
+> 4. **Scaled hierarchies: the shape does not follow the scale.** The physics ignores
+>    `Transform::scale` (the contract in `gizmo-physics-core::raycast`), so a child collider under a
+>    scaled parent keeps its authored size while the render draws its mesh scaled; only its offset
+>    follows the parent's scale (`Relative::then`). `misket` divides its tray walls' half sizes by
+>    the tray's scale by hand. A decision to make: scale shapes by the world scale, as Unity does,
+>    or keep scale visual-only and say so where a scaled parent is given a child collider.
+
 Phases 0–5 (stabilization, tests+CI, determinism, P2P rollback netcode, physics depth,
 renderer/WASM/editor) are **DONE**. Remaining:
 
