@@ -125,8 +125,9 @@ fn build_tray(world: &mut World) -> (Entity, Entity) {
         KinematicTarget::new(at, Quat::IDENTITY),
     ));
     let wall = Vec4::new(0.15, 0.3, 0.5, 1.0);
-    // Tepsinin ölçeği görünüşü içindir; çocukların yerel konumları onunla çarpılır — duvarlar
-    // tepsi biriminde (±1), bu yüzden yarı boyları da onunla bölünür.
+    // Tepsinin ölçeği çocuklarına geçer: yerel konumları da, meshleri de, çarpıştırıcıları da onunla
+    // çarpılır. Duvarlar bu yüzden tepsi biriminde (±1) yazılır — meshi de çarpıştırıcısı da aynı
+    // boyda, kendi ölçeği kadar.
     let s = Vec3::new(TRAY_HALF, 0.05, TRAY_HALF);
     for (offset, half) in [
         (Vec3::new(1.0, 0.25, 0.0), Vec3::new(0.05, 0.25, TRAY_HALF)),
@@ -141,14 +142,14 @@ fn build_tray(world: &mut World) -> (Entity, Entity) {
             MeshSource("standard_cube".into()),
             MaterialDesc::new().with_pbr(wall, 0.5, 0.0),
             MeshRenderer::new(),
-            Collider::box_collider(half),
+            Collider::box_collider(half / s),
         ));
         world.add_child(tray, e);
     }
     let zone = world.spawn_bundle((
         Transform::new(Vec3::new(0.0, 0.3 / s.y, 0.0)),
         GlobalTransform::default(),
-        Collider::box_collider(Vec3::new(TRAY_HALF - 0.1, 0.25, TRAY_HALF - 0.1)).with_trigger(true),
+        Collider::box_collider(Vec3::new(TRAY_HALF - 0.1, 0.25, TRAY_HALF - 0.1) / s).with_trigger(true),
     ));
     world.add_child(tray, zone);
     (tray, zone)

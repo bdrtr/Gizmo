@@ -879,6 +879,83 @@ pub enum ColliderShape {
     Compound(Vec<(Transform, Box<ColliderShape>)>),
 }
 
+/// A scale given in one frame, as the scale along the axes of a frame rotated by `rotation` inside
+/// it: how long each of the inner frame's unit axes comes out once the outer scale is applied.
+///
+/// Exact when the scale is uniform or the axes line up with it (a quarter turn included); a
+/// non-uniform scale under a rotation that does not line up would shear the shape, which no shape
+/// here can hold, and this is the nearest box-shaped reading of it.
+#[must_use]
+pub fn scale_along(scale: Vec3, rotation: Quat) -> Vec3 {
+    Vec3::new((scale * (rotation * Vec3::X)).length(), (scale * (rotation * Vec3::Y)).length(), (scale * (rotation * Vec3::Z)).length())
+}
+
+impl ColliderShape {
+    /// This shape scaled by `scale` along its own axes — what a collider under a scaled parent
+    /// becomes (`gizmo-physics-rigid` composes a child's collider with its ancestors' scale, never
+    /// with the entity's own, which is its mesh's).
+    ///
+    /// A box and every hull, mesh and height field scale exactly, a non-uniform scale included. A
+    /// round shape keeps its roundness: a sphere's radius takes the largest of the three, and the
+    /// radius of a capsule, cylinder or cone the larger across its axis while its height takes the
+    /// scale along it. A plane stays a plane through the scaled point it passed through. A compound
+    /// scales its parts' places, and each part along its own axes ([`scale_along`]). A sign is
+    /// dropped: a mirrored shape is the same shape.
+    #[must_use]
+    pub fn scaled(&self, scale: Vec3) -> ColliderShape {
+        let s = scale.abs();
+        if s == Vec3::ONE {
+            return self.clone();
+        }
+        let round = |radius: f32, half_height: f32| (radius * s.x.max(s.z), half_height * s.y);
+        match self {
+            ColliderShape::Sphere(sphere) => ColliderShape::Sphere(SphereShape { radius: sphere.radius * s.max_element() }),
+            ColliderShape::Box(b) => ColliderShape::Box(BoxShape { half_extents: b.half_extents * s }),
+            ColliderShape::Capsule(c) => {
+                let (radius, half_height) = round(c.radius, c.half_height);
+                ColliderShape::Capsule(CapsuleShape { radius, half_height })
+            }
+            ColliderShape::Cylinder(c) => {
+                let (radius, half_height) = round(c.radius, c.half_height);
+                ColliderShape::Cylinder(CylinderShape { radius, half_height })
+            }
+            ColliderShape::Cone(c) => {
+                let (radius, half_height) = round(c.radius, c.half_height);
+                ColliderShape::Cone(ConeShape { radius, half_height })
+            }
+            ColliderShape::Plane(plane) => {
+                // The plane through the scaled image of its closest point to the origin, with the
+                // normal a scale carries a plane's normal to (the inverse scale, renormalised).
+                let safe = s.max(Vec3::splat(1e-6));
+                let normal = (plane.normal / safe).normalize_or(plane.normal);
+                let point = plane.normal * plane.distance * s;
+                ColliderShape::Plane(PlaneShape { normal, distance: normal.dot(point) })
+            }
+            ColliderShape::TriMesh(mesh) => {
+                let vertices = mesh.vertices.iter().map(|v| *v * s).collect();
+                Collider::trimesh(vertices, mesh.indices.to_vec()).shape
+            }
+            ColliderShape::ConvexHull(hull) => {
+                let vertices: Vec<Vec3> = hull.vertices.iter().map(|v| *v * s).collect();
+                Collider::convex_hull(&vertices).shape
+            }
+            ColliderShape::Heightfield(field) => {
+                Collider::heightfield(field.heights.to_vec(), field.rows, field.cols, field.scale * s).shape
+            }
+            ColliderShape::Compound(parts) => ColliderShape::Compound(
+                parts
+                    .iter()
+                    .map(|(t, shape)| {
+                        let mut placed = *t;
+                        placed.position = t.position * s;
+                        (placed, Box::new(shape.scaled(scale_along(s, t.rotation))))
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
 /// A sphere centred on the collider's local origin. See [`Collider::sphere`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SphereShape {
@@ -1391,6 +1468,40 @@ gizmo_core::impl_component!(Collider);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every shape scaled: a box and a hull exactly, a non-uniform scale included; a sphere by its
+    /// largest; a capsule's radius across its axis and its height along it; a plane through the
+    /// scaled point; a compound's parts placed and turned with it; one is the shape itself.
+    #[test]
+    fn a_scaled_shape_is_the_shape_its_scale_makes() {
+        let aabb = |shape: ColliderShape| {
+            let c = Collider { shape, ..Collider::sphere(1.0) };
+            let b = c.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
+            (Vec3::from(b.min), Vec3::from(b.max))
+        };
+        let s = Vec3::new(2.0, 3.0, 0.5);
+        let close = |a: Vec3, b: Vec3| (a - b).length() < 1e-4;
+        let (_, max) = aabb(Collider::box_collider(Vec3::new(1.0, 1.0, 2.0)).shape.scaled(s));
+        assert!(close(max, Vec3::new(2.0, 3.0, 1.0)), "box: {max:?}");
+        let (_, max) = aabb(Collider::convex_hull(&[Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, -1.0, -1.0), Vec3::new(0.0, 1.0, -1.0), Vec3::new(0.0, 0.0, 1.0)]).shape.scaled(s));
+        assert!(close(max, Vec3::new(2.0, 3.0, 0.5)), "hull: {max:?}");
+        let ColliderShape::Sphere(sp) = Collider::sphere(1.0).shape.scaled(s) else { panic!() };
+        assert_eq!(sp.radius, 3.0, "a sphere by its largest");
+        let ColliderShape::Capsule(c) = Collider::capsule(1.0, 2.0).shape.scaled(s) else { panic!() };
+        assert_eq!((c.radius, c.half_height), (2.0, 6.0), "a capsule: radius across, height along");
+        let ColliderShape::Plane(pl) = Collider::plane(Vec3::Y, 1.0).shape.scaled(s) else { panic!() };
+        assert!(close(pl.normal, Vec3::Y) && (pl.distance - 3.0).abs() < 1e-5, "a floor plane at y = 1 goes to y = 3: {pl:?}");
+        // A box turned a quarter about Y in a compound: its X is the outer Z, so it takes 0.5 there.
+        let turned = Transform::new(Vec3::new(1.0, 0.0, 0.0)).with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
+        let compound = ColliderShape::Compound(vec![(turned, Box::new(Collider::box_collider(Vec3::new(1.0, 1.0, 1.0)).shape))]);
+        let ColliderShape::Compound(parts) = compound.scaled(s) else { panic!() };
+        assert!(close(parts[0].0.position, Vec3::new(2.0, 0.0, 0.0)), "placed: {:?}", parts[0].0.position);
+        let ColliderShape::Box(b) = &*parts[0].1 else { panic!() };
+        assert!(close(b.half_extents, Vec3::new(0.5, 3.0, 2.0)), "turned with it: {:?}", b.half_extents);
+        let plain = Collider::box_collider(Vec3::ONE).shape;
+        assert_eq!(plain.scaled(Vec3::ONE), plain);
+        assert_eq!(plain.scaled(Vec3::new(-1.0, 1.0, -1.0)), plain, "a mirror is the same shape");
+    }
 
     /// The cylinder's bound is the shape's, not the capsule's with a smaller radius. An upright
     /// cylinder reaches exactly `half_height` up and down — a capsule of the same numbers

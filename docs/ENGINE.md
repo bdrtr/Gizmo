@@ -197,7 +197,13 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    `sync_fight_hud`), so an exported fighting game has none — the export promise ("the shipped
 >    game behaves like the one you pressed ▶ on") does not hold for it. Its place is the engine:
 >    the fighters' state into an in-game UI that the runtime draws too.
-> 4. **Scaled hierarchies: the shape does not follow the scale.** The physics ignores
+> 4. ~~**Scaled hierarchies: the shape does not follow the scale.**~~ **Closed 2026-11-23, by the
+>    render's rule:** an entity's own scale is its mesh's and stays out of its collider (as every
+>    root body already had it), and the scales of its ancestors apply to the shape as they do to the
+>    mesh — `ColliderShape::scaled`, along the child's axes (`scale_along`), for a body's children,
+>    the triggers it carries and parented static colliders. Not Unity's (own scale applied too):
+>    that would double every collider in the engine, all written in metres beside a scaled mesh.
+>    `misket` now writes its tray walls like their meshes. *(Was:)* The physics ignores
 >    `Transform::scale` (the contract in `gizmo-physics-core::raycast`), so a child collider under a
 >    scaled parent keeps its authored size while the render draws its mesh scaled; only its offset
 >    follows the parent's scale (`Relative::then`). `misket` divides its tray walls' half sizes by

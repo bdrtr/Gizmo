@@ -67,8 +67,8 @@ fn a_child_collider_is_where_its_parent_puts_it() {
     assert!((y(&world, b) - 2.35).abs() < 0.03, "the ball is at y {}, the floor holds it at 2.35", y(&world, b));
 }
 
-/// The parent's rotation turns its child's offset, and its scale stretches it, as the render does;
-/// the shape itself is not scaled.
+/// The parent's rotation turns its child's offset, and its scale stretches it — and the child's
+/// shape — as the render does (`scaled_children.rs` for the shapes).
 #[test]
 fn a_turned_and_scaled_parent_places_its_child_as_the_render_does() {
     let mut world = world();
@@ -81,7 +81,8 @@ fn a_turned_and_scaled_parent_places_its_child_as_the_render_does() {
     let held = ball(&mut world, Vec3::new(0.0, 1.0, -2.0));
     let unturned = ball(&mut world, Vec3::new(2.0, 1.0, 0.0));
     run(&mut world, 180);
-    assert!((y(&world, held) - (-1.65)).abs() < 0.03, "over (0, −2, −2): y {}", y(&world, held));
+    // The box, twice its written size under the 2× parent, has its top at −2 + 0.2.
+    assert!((y(&world, held) - (-1.55)).abs() < 0.03, "over (0, −2, −2): y {}", y(&world, held));
     assert!(y(&world, unturned) < -5.0, "nothing is at (2, −2, 0), where an unturned offset would be: y {}", y(&world, unturned));
 }
 

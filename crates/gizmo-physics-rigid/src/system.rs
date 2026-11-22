@@ -89,7 +89,12 @@ fn body_collider(
     // it: a floor parented one metre under a body at (10, 3, 0) was simulated ten metres off, and
     // as a compound body moved its children's shapes slid the other way. Each child is now placed
     // by its parent's pose relative to the body, composed with its own: the position through the
-    // parent's rotation and scale, as the render does; the shapes themselves are not scaled.
+    // parent's rotation and scale, as the render does — and its shape scaled by the scales above
+    // it, along its own axes, as the render scales its mesh. Its own scale is its mesh's, as a root
+    // body's is, and stays out. Until 2026-11-23 no scale reached a shape: a child collider written
+    // like its mesh, in the child's frame, came out the mesh's size divided by the scale above it,
+    // so `misket` had to write its tray walls' colliders in metres while their meshes were in tray
+    // units.
     let mut visited = std::collections::HashSet::new();
     visited.insert(id);
     let mut stack = vec![(id, Relative { position: gizmo_math::Vec3::ZERO, rotation: gizmo_math::Quat::IDENTITY, scale: transform.scale })];
@@ -105,9 +110,10 @@ fn body_collider(
                 // carried with the body (`compound_parts`, `gather_static_colliders`). Merged in, it
                 // took the body's flags — a trigger zone in a moving tray was a solid block, and
                 // nothing ever entered it.
-                if let (Some(_), Some(child_col)) = (local, col_query.get(child).filter(|c| !c.is_trigger)) {
+                if let (Some(local), Some(child_col)) = (local, col_query.get(child).filter(|c| !c.is_trigger)) {
                     let local_t = gizmo_physics_core::Transform::new(rel.position).with_rotation(rel.rotation);
-                    compound_shapes.push((local_t, Box::new(child_col.shape.clone())));
+                    let above = gizmo_physics_core::components::collider::scale_along(curr.scale, local.rotation);
+                    compound_shapes.push((local_t, Box::new(child_col.shape.scaled(above))));
                 }
                 stack.push((child, rel));
             }
@@ -691,24 +697,27 @@ fn gather_static_colliders(world: &World, physics_world: &PhysicsWorld, sync: &m
             continue;
         }
         let carried = parts.triggers.get(&id.id()).copied();
-        let pose = if let Some((owner, rel)) = carried {
+        // The pose, and the scale of what is above the collider, which its shape takes.
+        let (pose, above) = if let Some((owner, rel, above)) = carried {
             // Where the body holds it, as the body stood at the start of this step.
             let Some(body) = trans_query.get(owner) else { continue };
             brought.trigger_owners.push((id.id(), owner.id()));
-            Transform::new(body.position + body.rotation * rel.position)
+            let pose = Transform::new(body.position + body.rotation * rel.position)
                 .with_rotation(body.rotation * rel.rotation)
-                .with_scale(transform.scale)
+                .with_scale(transform.scale);
+            (pose, above)
         } else {
             match parent {
-                None => *transform,
+                None => (*transform, gizmo_math::Vec3::ONE),
                 Some(_) => match world_pose_outside_bodies(id, transform, &parents, &bodies, &trans_query) {
-                    Some(pose) => pose,
+                    Some(found) => found,
                     None => continue,
                 },
             }
         };
         let rb = RigidBody::new_static();
         let mut collider = col.clone();
+        collider.shape = col.shape.scaled(above);
         collider.material = col.material_with(material);
         if !sync.needs(id.id(), material.is_some(), None, parent.is_some() || carried.is_some()) {
             if cfg!(debug_assertions) {
@@ -742,9 +751,10 @@ fn forget_owners_in_triggers(physics_world: &mut PhysicsWorld, owners: &[(u32, u
 struct BodyParts {
     /// The ids that are part of a body's compound.
     solid: std::collections::HashSet<u32>,
-    /// Each trigger under a body: the body, and the trigger's pose in its frame — composed as the
-    /// compound composes its parts.
-    triggers: std::collections::HashMap<u32, (Entity, Relative)>,
+    /// Each trigger under a body: the body, the trigger's pose in its frame — composed as the
+    /// compound composes its parts — and the scale of what is above it, along its own axes, which
+    /// its shape takes as a solid part's does.
+    triggers: std::collections::HashMap<u32, (Entity, Relative, gizmo_math::Vec3)>,
 }
 
 fn compound_parts(world: &World) -> BodyParts {
@@ -761,9 +771,11 @@ fn compound_parts(world: &World) -> BodyParts {
             if e == root || !seen.insert(e.id()) {
                 continue;
             }
-            let rel = above.then(&trans_query.get(e).copied().unwrap_or_default());
+            let local = trans_query.get(e).copied().unwrap_or_default();
+            let rel = above.then(&local);
             if col_query.get(e).is_some_and(|c| c.is_trigger) {
-                parts.triggers.insert(e.id(), (root, rel));
+                let scale = gizmo_physics_core::components::collider::scale_along(above.scale, local.rotation);
+                parts.triggers.insert(e.id(), (root, rel, scale));
             } else {
                 parts.solid.insert(e.id());
             }
@@ -775,17 +787,17 @@ fn compound_parts(world: &World) -> BodyParts {
     parts
 }
 
-/// The world pose of `id`, at `local` under its `Parent` chain — or `None` when an ancestor is a
-/// `RigidBody`, whose compound the collider is part of. The ancestors' rotations and scales carry
-/// the offsets, as the render's propagation does; the chain is followed 32 links at most, so a
-/// `Parent` loop ends.
+/// The world pose of `id`, at `local` under its `Parent` chain, and the scale of that chain along
+/// `id`'s own axes (what its shape takes) — or `None` when an ancestor is a `RigidBody`, whose
+/// compound the collider is part of. The ancestors' rotations and scales carry the offsets, as the
+/// render's propagation does; the chain is followed 32 links at most, so a `Parent` loop ends.
 fn world_pose_outside_bodies(
     id: Entity,
     local: &Transform,
     parents: &gizmo_core::query::Query<'_, &gizmo_core::component::Parent>,
     bodies: &gizmo_core::query::Query<'_, &RigidBody>,
     trans_query: &gizmo_core::query::Query<'_, &Transform>,
-) -> Option<Transform> {
+) -> Option<(Transform, gizmo_math::Vec3)> {
     let mut chain = Vec::new();
     let mut at = id;
     while let Some(parent) = parents.get(at) {
@@ -803,8 +815,9 @@ fn world_pose_outside_bodies(
     for ancestor in chain.iter().rev() {
         pose = pose.then(ancestor);
     }
+    let above = gizmo_physics_core::components::collider::scale_along(pose.scale, local.rotation);
     let pose = pose.then(local);
-    Some(Transform::new(pose.position).with_rotation(pose.rotation).with_scale(local.scale))
+    Some((Transform::new(pose.position).with_rotation(pose.rotation).with_scale(local.scale), above))
 }
 
 /// The stepped rows of the bodies brought over, for the write-back; a driven body lands on its

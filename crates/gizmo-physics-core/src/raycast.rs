@@ -738,7 +738,10 @@ impl Raycast {
     /// - **`transform.scale` is ignored.** Only `position` and `rotation` are read
     ///   (composed with the child's local transform for compound parts). Sizes come
     ///   from the shape itself, so scaling a `Transform` does not scale what this
-    ///   test hits.
+    ///   test hits. An entity's own scale is its mesh's; the scales of its ancestors
+    ///   are applied to its shape when the physics world is built from the ECS
+    ///   ([`ColliderShape::scaled`](crate::ColliderShape::scaled)), so the shape this
+    ///   test sees already carries them.
     /// - **A [`ColliderShape::Plane`] ignores `transform` entirely.** Its `normal`
     ///   and `distance` are used exactly as stored, i.e. they already describe a
     ///   world-space plane, and moving the collider does not move it. The returned

@@ -798,6 +798,15 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A collider under a scaled parent takes the parent's scale, as its mesh does.** Behavioural.
+  The physics read no scale at all; a child's offset followed its parents' scales but its shape did
+  not, so a child collider written like its mesh came out the mesh's size divided by the scale
+  above it. Now the ancestors' scales apply to the shape (`ColliderShape::scaled`, along the child's
+  own axes with `scale_along`) for a body's children, the triggers it carries and parented static
+  colliders; an entity's own scale is still its mesh's, as for every root body. A scene with a
+  scaled parent over a child collider changes; one without does not (`headless_stress_test` is
+  unchanged). `misket` writes its tray walls like their meshes now. `scaled_children.rs`, red
+  without the scaling.
 - **A scene's UI works in the editor's ▶ and in an exported game.** `gizmo_ui`'s systems (layout,
   clicks, sliders, toggles, drags, scrolling, tweens, text input, touch controls) come with
   `UiPlugin`, which a game adds to its own app; `PlayLoop` ran none of them. Measured: a 100 × 40 px
