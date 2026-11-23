@@ -1460,7 +1460,7 @@ fn a_view_draws_what_the_frames_step_simulated() {
         renderer.gpu_particles.as_ref().expect("checked above").spawn_particles(&renderer.queue, &[alive]);
         draw_ahead_of_views(&game, &mut renderer, SimulationDetail::Full);
         let (active, all) = particles(&renderer);
-        assert_eq!(active, all, "full detail ran {active} of the particle ring's {all}");
+        assert_eq!(active, 1, "full detail ran {active} of the particle ring's {all} for the one alive");
     });
 }
 

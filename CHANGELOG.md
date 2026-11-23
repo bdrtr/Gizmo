@@ -549,6 +549,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The GPU particles step and draw the live span of their ring, not the whole of it.** While a
+  single particle was alive, the compute pass and the draw covered all 100 000 slots every frame.
+  They cover the span from the oldest spawn that can still have a particle alive to the last one
+  written now (`GpuParticleSystem::live_span`, `set_span`, `first_particle`; the step reads it as
+  `ParticleSimParams::span`; a span that wraps past the ring's end is two draws). An emitter of 500
+  a second on an Adreno 618 cost Nişancı about 3 ms, about 0.9 now (89.6 → 108.0 fps, 119.0 with
+  none). `render_pass` and `record_veil` draw the span and no longer take a count.
+  `the_live_span_starts_at_the_oldest_spawn_still_alive`; the GPU step test checks that a wrapped
+  span steps its slots and nothing else.
 - **The browser and the phone draw the volumetric light.** The desktop's march, on every path: it
   is built over the renderer's depth (`VolumetricState::new`, `resize` and `set_march_divisor` take
   the depth view where they took the `DeferredState`), and the veil it splits the air at is drawn

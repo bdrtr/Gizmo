@@ -275,7 +275,7 @@ fn record_veil_depth(
     }
     plan.replay(&mut pass, &renderer.device, renderer.multi_draw);
     if let Some((particles, depth)) = particles.as_ref() {
-        particles.record_veil(&mut pass, renderer.scene.view_bind_group(), depth, particles.active_particles);
+        particles.record_veil(&mut pass, renderer.scene.view_bind_group(), depth);
     }
 }
 

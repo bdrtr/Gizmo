@@ -19,12 +19,16 @@ pub struct GpuParticleSystem {
     pub pipelines: ParticlePipelines,
     /// The unit quad each particle is billboarded onto.
     pub quad_vertex_buffer: wgpu::Buffer,
-    /// How many particles this frame's step simulated, and so how many every view of the frame
-    /// draws. Written by the step (the game path's, once a frame and ahead of every view): the
-    /// ring's share the frame's level of detail asks for, 0 while nothing is alive
+    /// How many particles this frame's step simulated, from [`first_particle`](Self::first_particle)
+    /// on, and so how many every view of the frame draws. Written by the step (the game path's, once a
+    /// frame and ahead of every view, through [`set_span`](Self::set_span)): the share the frame's
+    /// level of detail asks for of the ring's [live span](Self::live_span), 0 while nothing is alive
     /// ([`is_idle`](Self::is_idle)), and 0 before the first step. A draw that picked its own
-    /// count drew particles the step had not moved, or left out ones it had.
+    /// count drew particles the step had not moved, or left out ones it had. The whole ring, alive or
+    /// not, until 2026-11-23: a thousand live particles cost an Adreno 618 about 3 ms.
     pub active_particles: u32,
+    /// The ring slot of the first particle the step simulated; the span wraps past the ring's end.
+    pub first_particle: u32,
     /// Where the next spawn writes. Atomic because spawning happens from `&self`, so several
     /// emitters can spawn in the same frame without taking a lock.
     pub ring_head: std::sync::atomic::AtomicU32,
@@ -124,6 +128,7 @@ impl GpuParticleSystem {
             flow_target: [0.0; 4],
             misc: [0.0; 4],
             obstacles: [[0.0; 4]; crate::gpu_particles::types::MAX_PARTICLE_OBSTACLES],
+            span: [0; 4],
         };
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GPU Particle Params Buffer"),
@@ -170,6 +175,7 @@ impl GpuParticleSystem {
             pipelines,
             quad_vertex_buffer,
             active_particles: 0,
+            first_particle: 0,
             ring_head: std::sync::atomic::AtomicU32::new(0),
             clock: std::sync::Mutex::new(ParticleClock::default()),
             uploaded_batch: std::sync::atomic::AtomicU64::new(0),
@@ -309,11 +315,12 @@ impl GpuParticleSystem {
     /// Whether nothing spawned so far can still be alive — no spawn yet, or the elapsed time is
     /// past the end of the longest-lived particle ever spawned.
     ///
-    /// The simulation dispatch and the draw both cover the whole ring (`max_particles`, 100 000 by
+    /// The simulation dispatch and the draw covered the whole ring (`max_particles`, 100 000 by
     /// default) every frame, alive or not, and that is why `SimpleApp` used to switch the system
     /// off for every game — which made `ParticleEmitter` do nothing in all of them. The draw path
     /// skips both while this is true instead, so an idle particle system costs nothing and an
-    /// emitter works everywhere. Every write into the ring goes through
+    /// emitter works everywhere; while it is not, both cover the [live span](Self::live_span) alone
+    /// (since 2026-11-23). Every write into the ring goes through
     /// [`spawn_particles`](Self::spawn_particles), which is what keeps this honest.
     #[must_use]
     pub fn is_idle(&self) -> bool {
@@ -343,6 +350,7 @@ impl GpuParticleSystem {
             // (flipbook config compute'ta kullanılmaz; ayrı flipbook_params_buffer'da.)
             misc: [self.turbulence, self.curl_strength, time, 0.0],
             obstacles,
+            span: [self.first_particle, self.active_particles, 0, 0],
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
         // Flipbook render config (FS group 2): x=tiles, y=flipbook açık, z=ışıklandırma açık.
@@ -379,6 +387,9 @@ impl GpuParticleSystem {
             return;
         }
 
+        let count = new_particles.len() as u32;
+        // Where in the ring's whole history this spawn starts: the live span is counted from it.
+        let start = self.ring_head.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut c) = self.clock.lock() {
             let longest = new_particles.iter().map(|p| p.max_life).fold(0.0f32, f32::max);
             // Where these can be over their lives: where each starts, and where its speed could take it.
@@ -391,13 +402,10 @@ impl GpuParticleSystem {
                 }
             }
             c.spawned(longest, (lo, hi));
+            c.batch(start, longest);
         }
 
-        let count = new_particles.len() as u32;
-        let mut head = self
-            .ring_head
-            .fetch_add(count, std::sync::atomic::Ordering::Relaxed)
-            % self.max_particles;
+        let mut head = start % self.max_particles;
 
         let mut remaining = count;
         let mut offset = 0;
@@ -418,8 +426,50 @@ impl GpuParticleSystem {
         }
     }
 
+    /// The span of the ring every particle that can still be alive is in: the slot of the first and
+    /// how many, from the oldest spawn whose longest-lived particle has not yet died to the last
+    /// written, at most the whole ring. `(0, 0)` with none. Spawns are written one after another
+    /// round the ring, so what lies between two live ones is at worst dead.
+    #[must_use]
+    pub fn live_span(&self) -> (u32, u32) {
+        let head = self.ring_head.load(std::sync::atomic::Ordering::Relaxed);
+        let Ok(mut c) = self.clock.lock() else { return (0, self.max_particles) };
+        match c.oldest_live() {
+            None => (0, 0),
+            Some(start) => {
+                let count = head.wrapping_sub(start).min(self.max_particles);
+                (head.wrapping_sub(count) % self.max_particles, count)
+            }
+        }
+    }
+
+    /// Sets the span this frame's step covers and every view draws — `count` particles from slot
+    /// `first`, wrapping past the ring's end — and writes it where the step reads it.
+    pub fn set_span(&mut self, queue: &wgpu::Queue, first: u32, count: u32) {
+        self.first_particle = first % self.max_particles.max(1);
+        self.active_particles = count.min(self.max_particles);
+        let span = [self.first_particle, self.active_particles, 0, 0];
+        queue.write_buffer(
+            &self.params_buffer,
+            std::mem::offset_of!(ParticleSimParams, span) as wgpu::BufferAddress,
+            bytemuck::cast_slice(&span),
+        );
+    }
+
+    /// Draws the span the step covered: one instance a particle, its slot's, in one draw or two
+    /// where the span wraps past the ring's end.
+    fn draw_span(&self, rpass: &mut wgpu::RenderPass<'_>) {
+        let (first, count) = (self.first_particle, self.active_particles);
+        let to_end = count.min(self.max_particles - first);
+        rpass.draw(0..4, first..first + to_end);
+        if count > to_end {
+            rpass.draw(0..4, 0..count - to_end);
+        }
+    }
+
     #[tracing::instrument(skip_all, level = "trace")]
-    /// Records the simulation dispatch for `active_particles` particles.
+    /// Records the simulation dispatch for `active_particles` particles: the span
+    /// [`set_span`](Self::set_span) wrote.
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder, active_particles: u32) {
         if active_particles == 0 {
             return;
@@ -460,37 +510,36 @@ impl GpuParticleSystem {
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
-    /// Records the billboard draw, taking the simulation buffer directly as instance data.
+    /// Records the billboard draw of the span the step covered, taking the simulation buffer directly
+    /// as instance data.
     pub fn render_pass<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,
         global_bind_group: &'a wgpu::BindGroup,
         depth_bind_group: &'a wgpu::BindGroup,
-        active_particles: u32,
     ) {
-        if active_particles == 0 {
+        if self.active_particles == 0 {
             return;
         }
-        tracing::trace!(active_particles, "[GpuParticles] drawing billboards");
+        tracing::trace!(active_particles = self.active_particles, "[GpuParticles] drawing billboards");
         rpass.set_pipeline(&self.pipelines.render_pipeline);
         rpass.set_bind_group(0, global_bind_group, &[]);
         rpass.set_bind_group(1, depth_bind_group, &[]); // soft particles: sahne derinliği
         rpass.set_bind_group(2, &self.flipbook_bind_group, &[]); // flipbook/SubUV atlas
         rpass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
         rpass.set_vertex_buffer(1, self.particles_buffer.slice(..));
-        rpass.draw(0..4, 0..active_particles);
+        self.draw_span(rpass);
     }
 
-    /// Records the billboards depth only, where they show at all, into a pass whose depth attachment
-    /// is the volumetric march's `veil_depth_view`: what it splits the air at.
+    /// Records the billboards of the span the step covered depth only, where they show at all, into a
+    /// pass whose depth attachment is the volumetric march's `veil_depth_view`: what it splits the air at.
     pub fn record_veil<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,
         global_bind_group: &'a wgpu::BindGroup,
         depth_bind_group: &'a wgpu::BindGroup,
-        active_particles: u32,
     ) {
-        if active_particles == 0 {
+        if self.active_particles == 0 {
             return;
         }
         rpass.set_pipeline(&self.pipelines.veil_pipeline);
@@ -499,7 +548,7 @@ impl GpuParticleSystem {
         rpass.set_bind_group(2, &self.flipbook_bind_group, &[]);
         rpass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
         rpass.set_vertex_buffer(1, self.particles_buffer.slice(..));
-        rpass.draw(0..4, 0..active_particles);
+        self.draw_span(rpass);
     }
 
     /// Helper method to spawn an explosion of particles (e.g. dust or debris from a fracture).
@@ -706,7 +755,7 @@ mod tests {
                 return;
             };
             let layout = dummy_global_layout(&device);
-            let system =
+            let mut system =
                 GpuParticleSystem::new(&device, 64, &layout, wgpu::TextureFormat::Rgba8UnormSrgb);
 
             // Explosion fills the ring buffer starting at head 0 → indices [0, 8).
@@ -727,9 +776,11 @@ mod tests {
             // With the old life==max_life bug the shader's dead branch returns
             // immediately and life would be unchanged — a clean discriminator.
             system.update_params(&queue, 1.0 / 60.0, 0.0);
+            assert_eq!(system.live_span(), (0, 8), "the live span is the eight spawned");
+            system.set_span(&queue, 0, 8);
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-            system.compute_pass(&mut encoder, 64);
+            system.compute_pass(&mut encoder, system.active_particles);
             queue.submit(Some(encoder.finish()));
             let after: Vec<GpuParticle> =
                 read_buffer(&device, &queue, &system.particles_buffer).await;
@@ -742,19 +793,36 @@ mod tests {
                     after[i].life
                 );
             }
+
+            // The step covers its span and nothing else, wrapping past the ring's end: slots 62, 63, 0
+            // and 1 of a span of four from 62 age, slots 2 – 7, alive too, do not.
+            system.set_span(&queue, 62, 4);
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            system.compute_pass(&mut encoder, system.active_particles);
+            queue.submit(Some(encoder.finish()));
+            let spanned: Vec<GpuParticle> =
+                read_buffer(&device, &queue, &system.particles_buffer).await;
+            for i in 0..8 {
+                let stepped = spanned[i].life > after[i].life;
+                assert_eq!(stepped, i < 2, "slot {i}: stepped {stepped}, in the span {}", i < 2);
+            }
         });
     }
 }
 
 /// The elapsed time the particle set was last told, and when the last particle spawned so far
 /// dies. Pure arithmetic, so it is tested without a device.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 struct ParticleClock {
     now: f32,
     /// `None` until the first spawn: a set nothing was ever put into is idle.
     quiet_after: Option<f32>,
     /// Where the particles spawned since the set was last idle can be ([`GpuParticleSystem::region`]).
     region: Option<([f32; 3], [f32; 3])>,
+    /// The spawns that can still have a particle alive, oldest first: where each started in the ring's
+    /// whole history (`ring_head` before it) and when its longest-lived particle dies.
+    batches: std::collections::VecDeque<(u32, f32)>,
 }
 
 impl ParticleClock {
@@ -775,6 +843,23 @@ impl ParticleClock {
 
     fn idle(&self) -> bool {
         self.quiet_after.is_none_or(|q| self.now > q)
+    }
+
+    /// A spawn written from `start` in the ring's history now, whose longest-lived particle lives
+    /// `max_life` seconds.
+    fn batch(&mut self, start: u32, max_life: f32) {
+        // The same frame of slack as `spawned`.
+        self.batches.push_back((start, self.now + max_life.max(0.0) + 0.1));
+    }
+
+    /// Where the oldest spawn that can still have a particle alive started; the dead ones before it are
+    /// forgotten. A later spawn can die first: it stays until the ones before it have gone, and the
+    /// span covers it, dead, as it covers whatever lies between live ones.
+    fn oldest_live(&mut self) -> Option<u32> {
+        while self.batches.front().is_some_and(|&(_, dies)| self.now > dies) {
+            self.batches.pop_front();
+        }
+        self.batches.front().map(|&(start, _)| start)
     }
 }
 
@@ -809,5 +894,28 @@ mod clock_tests {
         c.now = 5.0;
         c.spawned(1.0, ([0.0; 3], [1.0; 3]));
         assert_eq!(c.region, Some(([0.0; 3], [1.0; 3])), "after the last died, it starts again where the next is born");
+    }
+
+    /// The live span starts at the oldest spawn that can still have a particle alive: a stream of
+    /// one-second spawns a frame apart covers about a second of them, not everything ever spawned.
+    #[test]
+    fn the_live_span_starts_at_the_oldest_spawn_still_alive() {
+        let mut c = ParticleClock::default();
+        assert_eq!(c.oldest_live(), None, "nothing spawned");
+        for frame in 0..120u32 {
+            c.now = frame as f32 / 60.0;
+            c.batch(frame * 10, 1.0);
+        }
+        // At t = 119/60 the spawns of the last 1.1 s (1 s and the frame of slack) are alive.
+        let oldest = c.oldest_live().expect("alive");
+        assert!((520..=540).contains(&oldest), "the oldest live spawn started at {oldest}");
+        c.now = 10.0;
+        assert_eq!(c.oldest_live(), None, "all of them have died");
+        // A long-lived spawn holds the span open behind shorter ones after it.
+        c.batch(5000, 5.0);
+        c.now = 10.5;
+        c.batch(5100, 0.1);
+        c.now = 11.0;
+        assert_eq!(c.oldest_live(), Some(5000), "the five-second spawn is alive");
     }
 }

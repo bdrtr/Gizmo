@@ -87,7 +87,7 @@ pub fn record_gpu_particles(encoder: &mut wgpu::CommandEncoder, renderer: &crate
         occlusion_query_set: None,
         multiview_mask: None,
     });
-    particles.render_pass(&mut pass, renderer.scene.view_bind_group(), &depth_bg, particles.active_particles);
+    particles.render_pass(&mut pass, renderer.scene.view_bind_group(), &depth_bg);
 }
 
 /// Guarantee every renderable mesh has a current `GlobalTransform` before the
@@ -1514,13 +1514,12 @@ fn step_gpu_simulations(
             // Once per batch: the draw reads this, it does not clear it (see `ParticleSpawns`).
             particles.spawn_batch(&renderer.queue, spawns.batch(), spawns.particles());
         }
-        // Nothing alive: no dispatch over the whole ring, and no draw of it (see
-        // `GpuParticleSystem::is_idle`).
-        particles.active_particles = if particles.is_idle() {
-            0
-        } else {
-            (particles.max_particles as f32 * particle_share) as u32
-        };
+        // The span of the ring that can hold a live particle, and of it the newest the level of detail
+        // asks for: nothing while none is alive (`GpuParticleSystem::is_idle`). The whole ring was
+        // stepped and drawn for a single live particle until 2026-11-23.
+        let (first, live) = if particles.is_idle() { (0, 0) } else { particles.live_span() };
+        let share = ((live as f32 * particle_share).ceil() as u32).min(live);
+        particles.set_span(&renderer.queue, first + (live - share), share);
         particles.compute_pass(encoder, particles.active_particles);
     }
 }

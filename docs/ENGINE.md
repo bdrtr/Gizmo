@@ -240,7 +240,12 @@ the first write (Unity's material instance — a hidden un-sharing).
 >      with (`AssetManager::base_colour_view_of`); the `Decal` API is unchanged. Group 0's bindings
 >      15–17, 15 of WebGPU's 16 sampled textures in the lit layout. Found with it, on both paths: a
 >      decal was placed by its `Transform` alone, so one parented to a moved entity was drawn where
->      the entity started. Not measured on a phone: what the tier costs a frame there.
+>      the entity started. **Measured on the phone (2026-11-23, Adreno 618, Nişancı portrait, twenty
+>      readings each, one sitting): one 4 m decal on its floor took it from 118.8 fps to 73.3** —
+>      about 5 ms, paid by every lit fragment of a draw on the tier, not by the decal's pixels: the
+>      cluster lookup and its loop, which this phone charges for whether a fragment finds anything
+>      (memory of 2026-11-13: the light loop with no lights, ~3.6 ms). OPEN: a decal tier whose
+>      cost is the decals' pixels.
 >    - ~~GPU particles and the fluid~~ **closed the same day:** both are built on this path. The
 >      particles' pass needs only the HDR target and the depth, which every path has, and steps and
 >      draws nothing with none alive; their tests, and the fluid's, run on it (the fluid's had been
@@ -248,8 +253,13 @@ the first write (Unity's material instance — a hidden un-sharing).
 >      scenes that never had water — a hundred thousand particles' buffers, a sort over all of them
 >      each step and six screen-sized targets — and taken away again by the simple scene and
 >      `with_scene_render`, with the water of a game that had a `FluidSimulation`. It is built now
->      when a scene first has one, as large as it asks (`Renderer::fluid_or_build`). Not measured on
->      a phone: what live particles cost a frame there.
+>      when a scene first has one, as large as it asks (`Renderer::fluid_or_build`). **Measured on
+>      the phone the same day:** an emitter of 500 a second living 2 s took Nişancı from 119 fps to
+>      86–90, about 3 ms — and found the cause on both paths: while one particle was alive the step
+>      and the draw covered the whole ring of 100 000. They cover its live span now, from the oldest
+>      spawn that can still have a particle alive to the last written
+>      (`GpuParticleSystem::live_span`, `set_span`; the step reads it as `ParticleSimParams::span`):
+>      108 fps, about 0.9 ms.
 >    - ~~volumetric light~~ **closed the same day, the desktop's march on every path:** it read only
 >      the frame's depth of the G-buffer's state (`DeferredState::depth_view`, the renderer's own
 >      depth) and its pass binds three groups of WebGPU's four, so it is built over the renderer's

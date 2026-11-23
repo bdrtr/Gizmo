@@ -90,4 +90,8 @@ pub struct ParticleSimParams {
     /// Obstacle spheres: xyz = the centre (world), w = the radius. The first `obstacle_count`
     /// are valid.
     pub obstacles: [[f32; 4]; MAX_PARTICLE_OBSTACLES],
+    /// The span of the ring the step covers: x = the slot of its first particle, y = how many,
+    /// wrapping past the ring's end; zw unused. Every particle that can still be alive is in it
+    /// ([`GpuParticleSystem::live_span`](crate::gpu_particles::GpuParticleSystem::live_span)).
+    pub span: [u32; 4],
 }

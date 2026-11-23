@@ -17,6 +17,9 @@ struct SimParams {
     flow_target: vec4<f32>,          // xyz = nominal akış hızı (relaks hedefi), w = relaks oranı
     misc: vec4<f32>,                 // x = türbülans gücü
     obstacles: array<vec4<f32>, 8>,  // xyz = merkez, w = yarıçap
+    // The span of the ring this step covers: x = its first slot, y = how many, wrapping past the end
+    // (`ParticleSimParams::span`). The step covered the whole ring until 2026-11-23.
+    span: vec4<u32>,
 }
 
 // Diverjanssız (swirl) türbülans alanı — analitik, ucuz, 2 oktav. Düz akışı duman gibi
@@ -63,10 +66,10 @@ fn curl3(p: vec3<f32>, t: f32) -> vec3<f32> {
 @compute
 @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let index = global_id.x;
-    if (index >= arrayLength(&particles)) {
+    if (global_id.x >= params.span.y) {
         return;
     }
+    let index = (params.span.x + global_id.x) % arrayLength(&particles);
 
     var p = particles[index];
     
