@@ -549,6 +549,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A rigid body's `Transform` is its world pose, whatever its parent.** A body is a root of the
+  transform propagation: its parent organises the hierarchy and does not carry it, and what hangs
+  under a body is local to it as before. The physics and everything that reads a body's pose
+  already took it as world, and the render composed it with its parent. So a box parented under a
+  parent turned and set ten metres off was drawn ten metres from where it fell. `world_matrix`
+  stops at a body, and `set_parent_keeping_world_pose` links a body without touching its pose. A
+  game that parented a body under a moved parent and relied on its being drawn there must place the
+  body in world space. docs/ENGINE.md §3 item 7, the owner's option (a).
+  `a_body_is_drawn_where_the_physics_has_it_whatever_its_parent`.
+  - The fighters' hitboxes stop at a body too: a fighter body under a moved group swung its fist
+    from the group's place (`a_body_fighter_under_a_group_hits_where_it_stands`).
+  - The editor moves a group whole: the gizmo and the inspector's Transform rows carry the bodies
+    under a moved entity by its change in the world, in the same undo
+    (`a_dragged_group_carries_its_body_and_one_undo_puts_both_back`,
+    `a_group_moved_in_the_inspector_carries_its_body`).
+  - **Fixed:** the gizmo of a child stood at the child's local position read as a world one, away
+    from where the child is drawn; it stands at the world pose and writes the drag back local
+    (`a_childs_gizmo_stands_where_it_is_drawn`). An inspector drag's undo missed its first frame.
 - **The studio's Scene panel is drawn through the game path too, and the studio's own renderer is gone.**
   - The panel is `draw_camera_into` with an editor's `ViewOptions`: the furniture, the toolbar's
     shading, and the editor's lines.

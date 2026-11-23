@@ -28,6 +28,8 @@ pub mod keyed_timeline;
 /// The editor's visual design (palette, geometry, type scale).
 pub mod theme;
 pub mod asset_browser;
+// What a move in the editor takes along: the rigid bodies under the moved entity.
+mod carried_bodies;
 /// The log console panel.
 pub mod console;
 /// Applying the inspector's requests for components known only by name — a game's own types.

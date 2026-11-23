@@ -505,14 +505,20 @@ pub fn hit_detection_system(world: &World, dt: f32) {
 
     let transforms = world.query::<&Transform>();
     let parents = world.query::<&Parent>();
+    let bodies = world.query::<&RigidBody>();
 
     // Composed local→world pose, walking the parent chain. Depth-guarded: a `Children`/`Parent`
     // cycle is refused elsewhere, but a system that walks links must not be the one that hangs.
+    // The walk ends at a rigid body, whose `Transform` is its world pose whatever its parent
+    // (docs/ENGINE.md §3 item 7).
     let world_pose = |start: Entity| -> Option<(gizmo_math::Vec3, gizmo_math::Quat)> {
         let mut chain = Vec::new();
         let mut cur = start;
         for _ in 0..32 {
             chain.push(cur);
+            if bodies.get(cur).is_some() {
+                break;
+            }
             match parents.get(cur) {
                 Some(p) if world.is_alive(p.0) => cur = p.0,
                 _ => break,
@@ -1428,6 +1434,21 @@ mod tests {
             .get_mut(fighter)
             .expect("fighter")
             .start_move(m);
+    }
+
+    /// A fighter that is a rigid body under a group is where its `Transform` says, whatever the
+    /// group: a body's `Transform` is its world pose (docs/ENGINE.md §3 item 7). The fist was
+    /// composed with the group too, and swung ten metres from the fighter it hangs under.
+    #[test]
+    fn a_body_fighter_under_a_group_hits_where_it_stands() {
+        let (mut world, attacker, _fist, _defender) = versus();
+        let group = world.spawn();
+        world.add_component(group, Transform::new(Vec3::new(10.0, 0.0, 0.0)));
+        world.add_component(attacker, Parent(group));
+        world.add_component(attacker, RigidBody::new(70.0, true));
+        start(&mut world, attacker, jab());
+        fight_frame(&mut world);
+        assert_eq!(fight_frame(&mut world).len(), 1, "the fist reaches the defender a metre in front of the fighter");
     }
 
     /// **A move connects once, on the frames it is meant to.**

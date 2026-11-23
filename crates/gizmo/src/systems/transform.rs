@@ -90,6 +90,24 @@ impl VisitedIds {
     }
 }
 
+/// Whether `entity` is a rigid body, whose `Transform` is its **world** pose whatever its `Parent`:
+/// the physics simulates it in world space, so propagation takes it as a root and its parent
+/// organises the hierarchy without carrying it. What is under a body — its compound's parts, its
+/// mesh — is local to it, as anywhere else. Since 2026-11-23 (docs/ENGINE.md §3 item 7): the render
+/// composed a body with its parent while the physics did not, and a box parented under a moving
+/// truck was simulated in one place and drawn in another.
+fn is_body(world: &gizmo_core::world::World, entity: Entity) -> bool {
+    #[cfg(feature = "physics")]
+    {
+        world.get::<crate::physics::RigidBody>(entity).is_some()
+    }
+    #[cfg(not(feature = "physics"))]
+    {
+        let _ = (world, entity);
+        false
+    }
+}
+
 impl gizmo_core::system::System for TransformPropagateSystem {
     fn access_info(&self) -> gizmo_core::system::AccessInfo {
         let mut info = gizmo_core::system::AccessInfo::new();
@@ -160,8 +178,9 @@ impl gizmo_core::system::System for TransformPropagateSystem {
                     // Same compare-then-write as the root loop. Note the compare is on the
                     // COMPOSED world matrix, not the local one: a child whose own `Transform`
                     // never moves still lands somewhere new when its parent does, and must be
-                    // stamped for it (T18).
-                    set_global_matrix(&mut global, parent_matrix * local.local_matrix);
+                    // stamped for it (T18). A rigid body is a root wherever it hangs (`is_body`).
+                    let matrix = if is_body(world, current_id) { local.local_matrix } else { parent_matrix * local.local_matrix };
+                    set_global_matrix(&mut global, matrix);
 
                     {
                         let cq = &mut children_query;
@@ -189,7 +208,8 @@ impl gizmo_core::system::System for TransformPropagateSystem {
 /// in game code it is a frame behind: an entity spawned this frame still holds the default (the
 /// origin), and a child of something that moved this frame is where it was. A collision test
 /// against freshly spawned obstacles reads them all at the origin. This walks up the [`Parent`]
-/// links and composes the local transforms from their fields, so it sees this frame's writes.
+/// links and composes the local transforms from their fields, so it sees this frame's writes. The
+/// walk ends at a rigid body, whose `Transform` is already its world pose (`is_body`).
 ///
 /// `None` when the entity is dead or has no `Transform`, or when the chain up from it cannot be
 /// followed the way propagation would: an ancestor with no `Transform`, a `Parent` naming a dead
@@ -218,6 +238,10 @@ pub fn world_matrix(world: &gizmo_core::world::World, entity: gizmo_core::entity
     let mut matrix = local(world.get::<Transform>(entity)?);
     let mut current = entity;
     for _ in 0..MAX_DEPTH {
+        // A rigid body's `Transform` is already its world pose (`is_body`): the chain ends there.
+        if is_body(world, current) {
+            return Some(matrix);
+        }
         let Some(parent) = world.get::<Parent>(current) else {
             return Some(matrix);
         };
@@ -245,7 +269,8 @@ pub fn world_position(world: &gizmo_core::world::World, entity: gizmo_core::enti
 ///
 /// The world pose is kept exactly under uniform scales. A non-uniform scale with a rotation above
 /// the child makes a shear no `Transform` can hold, and the nearest scale, rotation and translation
-/// is kept. A child with no `Transform` has no pose to keep and is linked as it is. Returns `false`
+/// is kept. A child with no `Transform` has no pose to keep and is linked as it is, and so is a
+/// rigid body, whose `Transform` is its world pose under any parent (`is_body`). Returns `false`
 /// and changes nothing when the link would make a cycle, or when a child with a `Transform` cannot
 /// keep its pose: it or its new parent has no world pose ([`world_matrix`]), or the new parent's is
 /// singular (a zero scale).
@@ -268,7 +293,8 @@ pub fn set_parent_keeping_world_pose(
             }
         }
     };
-    if world.get::<gizmo_physics_core::Transform>(child).is_none() {
+    // No pose to keep, or a rigid body's, which is world wherever it hangs (`is_body`).
+    if world.get::<gizmo_physics_core::Transform>(child).is_none() || is_body(world, child) {
         link(world);
         return true;
     }
@@ -451,6 +477,64 @@ mod tests {
         assert!(world.get::<gizmo_core::component::Parent>(child).is_none());
         let t = *world.get::<Transform>(child).unwrap();
         assert!(t.position.abs_diff_eq(at, 1e-4) && t.scale.abs_diff_eq(Vec3::ONE, 1e-4), "back at the root: {t:?}");
+    }
+
+    /// A rigid body is drawn where the physics has it, whatever its parent: its `Transform` is its
+    /// world pose, and what hangs under it is local to it. Until 2026-11-23 the render composed a
+    /// body with its parent while the physics stepped it in world space — this box, under a parent
+    /// turned and set ten metres off, was drawn ten metres from where it fell (docs/ENGINE.md §3
+    /// item 7).
+    #[cfg(feature = "physics")]
+    #[test]
+    fn a_body_is_drawn_where_the_physics_has_it_whatever_its_parent() {
+        use crate::math::{Quat, Vec3};
+        use crate::physics::world::PhysicsWorld;
+        use crate::physics::{Collider, RigidBody, Velocity};
+        use gizmo_core::hierarchy::HierarchyExt;
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+        let group = world.spawn();
+        world.add_component(group, Transform::new(Vec3::new(10.0, 0.0, 0.0)).with_rotation(Quat::from_rotation_y(0.7)));
+        world.add_component(group, GlobalTransform::default());
+        let floor = world.spawn();
+        world.add_component(floor, Transform::new(Vec3::new(0.0, -0.5, 0.0)));
+        world.add_component(floor, Collider::box_collider(Vec3::new(20.0, 0.5, 20.0)));
+        let crate_ = world.spawn();
+        world.add_component(crate_, Transform::new(Vec3::new(0.0, 3.0, 0.0)));
+        world.add_component(crate_, GlobalTransform::default());
+        world.add_component(crate_, RigidBody::new(1.0, true));
+        world.add_component(crate_, Velocity::default());
+        world.add_component(crate_, Collider::box_collider(Vec3::splat(0.5)));
+        world.add_child(group, crate_);
+        let mesh = world.spawn();
+        world.add_component(mesh, Transform::new(Vec3::new(0.0, 0.5, 0.0)));
+        world.add_component(mesh, GlobalTransform::default());
+        world.add_child(crate_, mesh);
+
+        for _ in 0..180 {
+            world.tick += 1;
+            gizmo_physics_rigid::system::physics_step_system(&world, 1.0 / 60.0);
+            world.apply_commands();
+        }
+        TransformSyncSystem.run(&world, 0.0);
+        TransformPropagateSystem.run(&world, 0.0);
+
+        let simulated = {
+            let physics = world.get_resource::<PhysicsWorld>().unwrap();
+            let row = *physics.entity_index_map.get(&crate_.id()).expect("the crate's row");
+            physics.transforms[row].position
+        };
+        assert!((simulated.y - 0.5).abs() < 0.05 && simulated.x.abs() < 1e-3, "the crate fell onto the floor under it: {simulated}");
+        let drawn = world.get::<GlobalTransform>(crate_).unwrap().matrix.w_axis.truncate();
+        assert!(drawn.abs_diff_eq(simulated, 1e-4), "drawn at {drawn}, simulated at {simulated}");
+        assert!(world_matrix(&world, crate_).unwrap().w_axis.truncate().abs_diff_eq(simulated, 1e-4), "world_matrix agrees");
+        let mesh_at = world.get::<GlobalTransform>(mesh).unwrap().matrix.w_axis.truncate();
+        assert!(mesh_at.abs_diff_eq(simulated + Vec3::new(0.0, 0.5, 0.0), 1e-3), "the mesh hangs under the crate: {mesh_at}");
+
+        // Reparented, a body keeps its `Transform`: it is the world pose already.
+        let before = *world.get::<Transform>(crate_).unwrap();
+        assert!(set_parent_keeping_world_pose(&mut world, crate_, None));
+        assert_eq!(*world.get::<Transform>(crate_).unwrap(), before);
     }
 
     /// A link that would make a cycle, or a parent with a zero scale, changes nothing.

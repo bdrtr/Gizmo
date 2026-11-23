@@ -237,21 +237,27 @@ the first write (Unity's material instance — a hidden un-sharing).
 >
 >    Their tests are `#[cfg(not(gizmo_forward_only))]`, the reason beside each, pointing here. STATUS
 >    lists the three as absent from the browser.
-> 7. **(2026-11-23) A body under a parent is simulated at its own `Transform` as a world pose, and
->    drawn at its parent's pose composed with it.** The physics reads and writes a body's
->    `Transform` in world space whatever its `Parent`; the render's propagation composes it with
->    the parent's, as for any child. The two agree only under a parent at the origin, unturned and
->    unscaled: a box parented under a moving truck is simulated in one place and drawn in another.
->    There are two ways to make them one:
->    - (a) a body is a root of the propagation: its `Transform` is world, and its parent organises
->      the hierarchy and carries nothing. Small, but an exception to "a child's `Transform` is
->      local", and moving a group in the editor would not move its bodies.
->    - (b) the physics composes the parent chain when it reads a parented body, and writes the
->      pose back in the parent's frame. This keeps the rule everywhere, and the editor's
->      behaviour, at the cost of the step's sync, its debug checks and `KinematicTarget`.
->
->    Its own design. Its compound half — the parent's shape took the child body in — was closed
->    the same day.
+> 7. ~~**A body under a parent was simulated at its own `Transform` as a world pose, and drawn at
+>    its parent's pose composed with it.**~~ **Closed 2026-11-23, option (a), the owner's choice:**
+>    a rigid body is a root of the propagation. Its `Transform` is its world pose whatever its
+>    `Parent`, and its parent organises the hierarchy without carrying it; what hangs under a body
+>    (its compound's parts, its mesh) is local to it, as anywhere else. The one rule: *a
+>    `RigidBody`'s `Transform` is world; every other `Transform` is local.* It is kept in three places
+>    in `gizmo::systems::transform` (`is_body`): the propagation, `world_matrix`'s walk up the chain,
+>    and `set_parent_keeping_world_pose`, which links a body without touching its pose. The physics
+>    and every consumer of a body's pose — vehicles, characters, boats, ragdolls, fracture,
+>    explosions — already read it as world, so nothing there changed; a box under a moving truck is
+>    carried by friction, not by the hierarchy. The fighters' hitbox walk was the one consumer that
+>    composed through a body, and stops there now. The editor keeps a moved group whole: its gizmo
+>    and its inspector rows carry every body under a moved entity by that entity's change in the
+>    world, and record it in the same undo (`gizmo-editor`'s `carried_bodies`); the gizmo stands at
+>    a child's world pose too, where it had stood at the child's local position read as world.
+>    *(Was:)* a box parented under a parent turned and set ten metres off was simulated
+>    under it and drawn ten metres away (`a_body_is_drawn_where_the_physics_has_it_whatever_its_parent`).
+>    Option (b) — the physics composes the chain — was weighed against it: it keeps `Transform` local
+>    everywhere, but every one of those consumers would have had to follow the chain, and a dynamic
+>    body under a moving parent would be teleported with it rather than simulated. Its compound half
+>    — the parent's shape took the child body in — was closed the same day.
 > 8. ~~**A substep solved every contact island to the end, then every joint, each blind to the
 >    other.**~~ **Closed 2026-11-23, the same night it was opened.** Joints are edges of the contact
 >    islands now (`IslandManager::build_islands_with_joints`, union-find over the dynamic bodies),

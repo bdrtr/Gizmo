@@ -64,13 +64,29 @@ pub fn draw_transform_section(
         if changed {
             t.update_local_matrix();
         }
+        // The rigid bodies under the edited entity go with it (`carried_bodies`): written once the
+        // undo bookkeeping below has read them as they were.
+        let carried = match (changed, old_t) {
+            (true, Some(before)) => {
+                let selection: Vec<_> = state.selection.entities.iter().copied().collect();
+                crate::carried_bodies::carried(world, entity_id, &before, &t, &selection)
+            }
+            _ => Vec::new(),
+        };
         
         // --- UNDO/REDO TRACKING (INSPECTOR) ---
         if pointer_down && changed && state.inspector_drag_original_transforms.is_empty() {
-            // Sürükleme (drag) işlemi başladı, asıl transformları yedekle
-            for &ent in state.selection.entities.iter() {
-                if let Some(original_t) = transforms.get_mut(ent).map(|t| *t) {
-                    state.inspector_drag_original_transforms.insert(ent, original_t);
+            // Sürükleme (drag) işlemi başladı, asıl transformları yedekle — the edited entity's as it was
+            // before this frame's change (`t` already holds it), and the bodies the selection carries.
+            let selection: Vec<_> = state.selection.entities.iter().copied().collect();
+            let mut recorded = selection.clone();
+            for &ent in &selection {
+                recorded.extend(crate::carried_bodies::bodies_under(world, ent, &selection));
+            }
+            for ent in recorded {
+                let original_t = if ent == entity_id { old_t } else { transforms.get_mut(ent).map(|t| *t) };
+                if let Some(original_t) = original_t {
+                    state.inspector_drag_original_transforms.entry(ent).or_insert(original_t);
                 }
             }
         } else if !pointer_down && !state.inspector_drag_original_transforms.is_empty() {
@@ -93,7 +109,8 @@ pub fn draw_transform_section(
         // Eğer pointer down değilse ama değer changed ise, direkt geçmişe kaydet
         else if !pointer_down && changed && state.inspector_drag_original_transforms.is_empty() {
             if let Some(old_transform) = old_t {
-                let undo_changes = vec![(entity_id, old_transform, *t)];
+                let mut undo_changes = vec![(entity_id, old_transform, *t)];
+                undo_changes.extend(carried.iter().copied());
                 
                 // Çoklu seçim varsa diğerlerinin de son halini kaydetmeliyiz.
                 // Not: Delta hesaplaması hemen aşağıda olduğu için, onların yeni t'sini bir sonraki kareye bırakamayız.
@@ -104,6 +121,11 @@ pub fn draw_transform_section(
         }
         
         ui.separator();
+        for (body, _, next) in carried {
+            if let Some(mut b) = transforms.get_mut(body) {
+                *b = next;
+            }
+        }
     }
 
     // Çoklu seçim (Multi-Object Editing) Delta Uygulaması
@@ -119,12 +141,22 @@ pub fn draw_transform_section(
                 );
 
                 let others: Vec<_> = state.selection.entities.iter().copied().filter(|&e| e != entity_id).collect();
+                let selection: Vec<_> = state.selection.entities.iter().copied().collect();
                 for e in others {
+                    let Some(before) = transforms.get_mut(e).map(|t| *t) else { continue };
+                    let mut after = before;
+                    after.position += delta_pos;
+                    after.rotation = delta_rot * after.rotation;
+                    after.scale *= delta_scale;
+                    after.update_local_matrix();
+                    let carried = crate::carried_bodies::carried(world, e, &before, &after, &selection);
                     if let Some(mut other_t) = transforms.get_mut(e) {
-                        other_t.position += delta_pos;
-                        other_t.rotation = delta_rot * other_t.rotation;
-                        other_t.scale *= delta_scale;
-                        other_t.update_local_matrix();
+                        *other_t = after;
+                    }
+                    for (body, _, next) in carried {
+                        if let Some(mut b) = transforms.get_mut(body) {
+                            *b = next;
+                        }
                     }
                 }
             }
@@ -159,6 +191,62 @@ pub fn euler_deg_to_quat(rx: f32, ry: f32, rz: f32) -> gizmo_math::Quat {
 mod tests {
     use super::*;
     use gizmo_math::{Quat, Vec3};
+
+    /// Every painted text and where it starts, `Shape::Vec` recursed into.
+    fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Pos2)> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.visual_bounding_rect().center())),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+        out
+    }
+
+    /// A group moved from the inspector's Position X takes the rigid body in it along — a body's
+    /// `Transform` is its world pose, so the hierarchy alone does not move it (docs/ENGINE.md §3
+    /// item 7) — and one undo puts both back where they were before the drag's first frame.
+    #[test]
+    fn a_group_moved_in_the_inspector_carries_its_body() {
+        use gizmo_core::hierarchy::HierarchyExt;
+        let mut world = World::new();
+        let group = world.spawn_bundle((Transform::new(Vec3::ZERO),));
+        let body = world.spawn_bundle((Transform::new(Vec3::new(0.0, 2.0, 0.0)), gizmo_physics_rigid::components::RigidBody::new(1.0, true)));
+        world.add_child(group, body);
+        let mut state = EditorState::default();
+        state.select_exclusive(group);
+        let ctx = egui::Context::default();
+        let frame = |events: Vec<egui::Event>, state: &mut EditorState| {
+            let output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| draw_transform_section(ui, &world, group, state));
+            let found = texts(&output.shapes);
+            output.drop_without_applying_deltas();
+            found
+        };
+        // The first number after the "Pozisyon:" row's "X" is Position X.
+        let shown = frame(vec![], &mut state);
+        let x_label = shown.iter().position(|(t, _)| t == "X").expect("the X label");
+        let at = shown[x_label + 1].1;
+        let pointer = |pos: egui::Pos2, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(vec![egui::Event::PointerMoved(at)], &mut state);
+        frame(vec![pointer(at, true)], &mut state);
+        for dx in [5.0, 10.0, 15.0, 20.0] {
+            frame(vec![egui::Event::PointerMoved(at + egui::vec2(dx, 0.0))], &mut state);
+        }
+        frame(vec![pointer(at + egui::vec2(20.0, 0.0), false)], &mut state);
+        frame(vec![], &mut state);
+
+        let read = |world: &World, e| *world.get::<Transform>(e).unwrap();
+        let (g, b) = (read(&world, group), read(&world, body));
+        assert!(g.position.x > 0.1, "the drag did not move the group: {}", g.position);
+        assert!(b.position.abs_diff_eq(Vec3::new(g.position.x, 2.0, 0.0), 1e-4), "the body stayed behind: {} (group at {})", b.position, g.position);
+        assert!(state.history.can_undo(), "the drag is not in the history");
+        state.history.undo(&mut world);
+        assert_eq!(read(&world, group).position, Vec3::ZERO, "the undo missed the drag's first frame");
+        assert_eq!(read(&world, body).position, Vec3::new(0.0, 2.0, 0.0), "the undo left the body where it was carried");
+    }
 
     /// Checks whether two quaternions represent the SAME rotation by rotating the three basis
     /// vectors and comparing the results. That naturally sidesteps both `q` and `-q` being the

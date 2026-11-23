@@ -252,12 +252,17 @@ fn transform_gizmo(ui: &mut egui::Ui, world: &World, state: &mut EditorState, re
     };
     state.transform_gizmo.update_config(config);
 
-    // Tüm seçili objelerin transformlarını topla
+    // Tüm seçili objelerin transformlarını topla — in the world: the gizmo stands where the entity
+    // is drawn, and a child's `Transform` is local to its parent's frame (`frames`).
     let mut gizmo_transforms = Vec::new();
     let mut selected_ids = Vec::new();
+    let mut frames = Vec::new();
 
     for &id in state.selection.entities.iter() {
-        if let Some(t) = transforms.get_mut(id).map(|t| *t) {
+        if let Some(local) = transforms.get_mut(id).map(|t| *t) {
+            let Some(frame) = crate::carried_bodies::parent_frame(world, id) else { continue };
+            let t = if frame == gizmo_math::Mat4::IDENTITY { local } else { in_frame(frame, &local) };
+            frames.push(frame);
             let translation = transform_gizmo_egui::mint::Vector3 { x: t.position.x as f64, y: t.position.y as f64, z: t.position.z as f64 };
             let rotation = transform_gizmo_egui::mint::Quaternion { v: transform_gizmo_egui::mint::Vector3 { x: t.rotation.x as f64, y: t.rotation.y as f64, z: t.rotation.z as f64 }, s: t.rotation.w as f64 };
             let scale = transform_gizmo_egui::mint::Vector3 { x: t.scale.x as f64, y: t.scale.y as f64, z: t.scale.z as f64 };
@@ -274,20 +279,40 @@ fn transform_gizmo(ui: &mut egui::Ui, world: &World, state: &mut EditorState, re
     let is_primary_down = ui.input(|i| i.pointer.primary_down());
 
     if let Some((_result, new_transforms)) = state.transform_gizmo.interact(ui, &gizmo_transforms) {
-        // Undo (Geri Al) için harekete başlarken ilk değerleri sakla
-        remember_originals(&mut state.scene.gizmo_original_transforms, &selected_ids, |id| transforms.get_mut(id).map(|t| *t));
+        // Undo (Geri Al) için harekete başlarken ilk değerleri sakla — the dragged entities' and the
+        // bodies they carry (`carried_bodies`), so one Ctrl+Z puts the bodies back too.
+        let mut recorded = selected_ids.clone();
+        for &id in &selected_ids {
+            recorded.extend(crate::carried_bodies::bodies_under(world, id, &selected_ids));
+        }
+        remember_originals(&mut state.scene.gizmo_original_transforms, &recorded, |id| transforms.get_mut(id).map(|t| *t));
 
         for (i, new_t) in new_transforms.iter().enumerate() {
-            if let Some(&entity_id) = selected_ids.get(i) {
-                if let Some(mut t) = transforms.get_mut(entity_id) {
-                    let nt: transform_gizmo_egui::mint::Vector3<f64> = new_t.translation;
-                    let nr: transform_gizmo_egui::mint::Quaternion<f64> = new_t.rotation;
-                    let ns: transform_gizmo_egui::mint::Vector3<f64> = new_t.scale;
-
-                    t.position = gizmo_math::Vec3::new(nt.x as f32, nt.y as f32, nt.z as f32);
-                    t.rotation = gizmo_math::Quat::from_xyzw(nr.v.x as f32, nr.v.y as f32, nr.v.z as f32, nr.s as f32);
-                    t.scale = gizmo_math::Vec3::new(ns.x as f32, ns.y as f32, ns.z as f32);
-                    t.update_local_matrix();
+            let (Some(&entity_id), Some(&frame)) = (selected_ids.get(i), frames.get(i)) else { continue };
+            let Some(before) = transforms.get_mut(entity_id).map(|t| *t) else { continue };
+            let nt: transform_gizmo_egui::mint::Vector3<f64> = new_t.translation;
+            let nr: transform_gizmo_egui::mint::Quaternion<f64> = new_t.rotation;
+            let ns: transform_gizmo_egui::mint::Vector3<f64> = new_t.scale;
+            let mut placed = before;
+            placed.position = gizmo_math::Vec3::new(nt.x as f32, nt.y as f32, nt.z as f32);
+            placed.rotation = gizmo_math::Quat::from_xyzw(nr.v.x as f32, nr.v.y as f32, nr.v.z as f32, nr.s as f32);
+            placed.scale = gizmo_math::Vec3::new(ns.x as f32, ns.y as f32, ns.z as f32);
+            // Back into the parent's frame; a root's and a body's frame is the world, written as it is.
+            let mut after = if frame == gizmo_math::Mat4::IDENTITY {
+                placed
+            } else if frame.determinant().abs() > f32::EPSILON {
+                in_frame(frame.inverse(), &placed)
+            } else {
+                continue;
+            };
+            after.update_local_matrix();
+            let carried = crate::carried_bodies::carried(world, entity_id, &before, &after, &selected_ids);
+            if let Some(mut t) = transforms.get_mut(entity_id) {
+                *t = after;
+            }
+            for (body, _, next) in carried {
+                if let Some(mut t) = transforms.get_mut(body) {
+                    *t = next;
                 }
             }
         }
@@ -303,6 +328,18 @@ fn transform_gizmo(ui: &mut egui::Ui, world: &World, state: &mut EditorState, re
         }
     }
     false
+}
+
+/// `t` carried into the frame `frame` maps from: `frame * t`, as a `Transform`. A shear (a
+/// non-uniform scale under a rotation) has no `Transform`, and the nearest one is kept.
+fn in_frame(frame: gizmo_math::Mat4, t: &gizmo_physics_core::Transform) -> gizmo_physics_core::Transform {
+    let local = gizmo_math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position);
+    let (scale, rotation, position) = (frame * local).to_scale_rotation_translation();
+    let mut out = *t;
+    out.position = position;
+    out.rotation = rotation.normalize();
+    out.scale = scale;
+    out
 }
 
 /// A gizmo drag's first frame: each dragged entity's transform before the drag, for its undo.
@@ -1121,6 +1158,73 @@ mod gizmo_undo_tests {
         assert_eq!(changes[0].0, cube);
         assert_eq!(changes[0].2.position.x, 2.0);
         assert!(originals.is_empty());
+    }
+
+    /// Drags the translate gizmo of the selection's primary along X, through the real panel: on the X
+    /// arrow, which runs right from an entity at the viewport's centre.
+    fn drag_along_x(world: &World, state: &mut EditorState) {
+        state.gizmo_mode = crate::editor_state::GizmoMode::Translate;
+        state.camera.view = Some(gizmo_math::Mat4::look_at_rh(gizmo_math::Vec3::new(0.0, 5.0, 10.0), gizmo_math::Vec3::ZERO, gizmo_math::Vec3::Y));
+        state.camera.proj = Some(gizmo_math::Mat4::perspective_rh(0.8, 640.0 / 480.0, 0.1, 100.0));
+        let ctx = egui::Context::default();
+        let primary = |x: f32, pressed| egui::Event::PointerButton {
+            pos: egui::pos2(x, 240.0),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let moved = |x: f32| egui::Event::PointerMoved(egui::pos2(x, 240.0));
+        for events in [vec![moved(360.0)], vec![moved(360.0)], vec![primary(360.0, true)], vec![moved(375.0)], vec![moved(390.0)], vec![primary(390.0, false)], vec![]] {
+            let output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                let mut panel = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(640.0, 480.0))));
+                ui_scene_view(&mut panel, world, state);
+            });
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    /// A group dragged in the editor takes the rigid body in it along — a body's `Transform` is its
+    /// world pose, so the hierarchy alone does not move it (docs/ENGINE.md §3 item 7) — and one undo
+    /// puts both back.
+    #[test]
+    fn a_dragged_group_carries_its_body_and_one_undo_puts_both_back() {
+        use gizmo_core::hierarchy::HierarchyExt;
+        use gizmo_physics_core::Transform;
+        let mut world = World::new();
+        let group = world.spawn_bundle((Transform::new(gizmo_math::Vec3::ZERO),));
+        let body = world.spawn_bundle((Transform::new(gizmo_math::Vec3::new(0.0, 2.0, 0.0)), gizmo_physics_rigid::components::RigidBody::new(1.0, true)));
+        world.add_child(group, body);
+        let mut state = EditorState::default();
+        state.select_exclusive(group);
+        drag_along_x(&world, &mut state);
+        let read = |world: &World, e| *world.get::<Transform>(e).unwrap();
+        let (g, b) = (read(&world, group), read(&world, body));
+        assert!(g.position.x > 0.1, "the gizmo did not move the group: {}", g.position);
+        assert!(b.position.abs_diff_eq(gizmo_math::Vec3::new(g.position.x, 2.0, 0.0), 1e-4), "the body stayed behind: {}", b.position);
+        state.history.undo(&mut world);
+        assert_eq!(read(&world, group).position, gizmo_math::Vec3::ZERO);
+        assert_eq!(read(&world, body).position, gizmo_math::Vec3::new(0.0, 2.0, 0.0), "the undo left the body where it was carried");
+    }
+
+    /// The gizmo of a child stands where the child is drawn, not at its local position read as a
+    /// world one, and the drag is written back local. This child is ten metres along a parent turned
+    /// a quarter about Y — at the origin in the world, (0, 0, −10) in its `Transform`.
+    #[test]
+    fn a_childs_gizmo_stands_where_it_is_drawn() {
+        use gizmo_core::hierarchy::HierarchyExt;
+        use gizmo_physics_core::Transform;
+        let mut world = World::new();
+        let parent = world.spawn_bundle((Transform::new(gizmo_math::Vec3::new(10.0, 0.0, 0.0)).with_rotation(gizmo_math::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),));
+        let child = world.spawn_bundle((Transform::new(gizmo_math::Vec3::new(0.0, 0.0, -10.0)),));
+        world.add_child(parent, child);
+        let mut state = EditorState::default();
+        state.select_exclusive(child);
+        drag_along_x(&world, &mut state);
+        let t = *world.get::<Transform>(child).unwrap();
+        // The world's +X is the parent's +Z: dragged along the world's X, the child's local Z grows.
+        assert!(t.position.z > -9.9, "the gizmo was not on the child: {}", t.position);
+        assert!(t.position.x.abs() < 1e-3 && t.position.y.abs() < 1e-3, "moved off the world's X: {}", t.position);
+        assert!(t.rotation.abs_diff_eq(gizmo_math::Quat::IDENTITY, 1e-4), "a slide turned it: {:?}", t.rotation);
     }
 
     /// The whole path, through the real panel: the translate gizmo dragged along X, on an entity on a
