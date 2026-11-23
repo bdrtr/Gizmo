@@ -103,6 +103,142 @@ pub struct SmokeVolume {
     obstacle_bounds: [[f32; 3]; 2], // (min, max) the obstacle field was last voxelized against
 }
 
+/// The advect pass: its pipeline, and a bind group for each way the density moves between the two
+/// buffers — `[0]` reads 0 and writes 1, `[1]` the other way.
+fn advect_pass(
+    device: &wgpu::Device,
+    params: &wgpu::Buffer,
+    density: &[wgpu::Buffer; 2],
+    obstacle: &wgpu::Buffer,
+) -> (wgpu::ComputePipeline, [wgpu::BindGroup; 2]) {
+    use crate::descriptors::{buffer_entry, compute_pipeline, whole_buffer_entries};
+    use wgpu::BufferBindingType::{Storage, Uniform};
+    let stage = wgpu::ShaderStages::COMPUTE;
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("smoke_compute_layout"),
+        entries: &[
+            buffer_entry(0, stage, Uniform),
+            buffer_entry(1, stage, Storage { read_only: true }),
+            buffer_entry(2, stage, Storage { read_only: false }),
+            // binding 3: obstacle solidity field (read-only).
+            buffer_entry(3, stage, Storage { read_only: true }),
+        ],
+    });
+    let group = |src: &wgpu::Buffer, dst: &wgpu::Buffer, label: &str| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &layout,
+            entries: &whole_buffer_entries(&[params, src, dst, obstacle]),
+        })
+    };
+    let groups = [
+        group(&density[0], &density[1], "smoke_advect_0to1"),
+        group(&density[1], &density[0], "smoke_advect_1to0"),
+    ];
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Smoke Advect Shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/smoke_advect.wgsl").into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Smoke Advect Layout"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    (compute_pipeline(device, "Smoke Advect Pipeline", &pipeline_layout, &shader, "main"), groups)
+}
+
+/// The raymarch pass's pipeline and the groups it binds over the scene's global group.
+struct RaymarchPass {
+    pipeline: wgpu::RenderPipeline,
+    /// The frame's depth, bound per draw ([`SmokeVolume::raymarch`]).
+    depth_layout: wgpu::BindGroupLayout,
+    params_bind_group: wgpu::BindGroup,
+    /// `[i]` reads density buffer `i`.
+    density_bg: [wgpu::BindGroup; 2],
+}
+
+/// The raymarch (render) pass: the volume marched in front of the frame's depth and composited over
+/// it, premultiplied.
+fn raymarch_pass(
+    device: &wgpu::Device,
+    scene_global_layout: &wgpu::BindGroupLayout,
+    output_format: wgpu::TextureFormat,
+    params: &wgpu::Buffer,
+    density: &[wgpu::Buffer; 2],
+) -> RaymarchPass {
+    use crate::descriptors::{buffer_entry, fragment_texture, whole_buffer_entries};
+    use wgpu::BufferBindingType::{Storage, Uniform};
+    let stage = wgpu::ShaderStages::FRAGMENT;
+    let layout_of = |label: &str, entry: wgpu::BindGroupLayoutEntry| {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(label), entries: &[entry] })
+    };
+    let depth_layout = layout_of(
+        "smoke_depth_layout",
+        fragment_texture(0, wgpu::TextureViewDimension::D2, wgpu::TextureSampleType::Depth),
+    );
+    let params_layout = layout_of("smoke_params_layout", buffer_entry(0, stage, Uniform));
+    let density_layout = layout_of("smoke_density_layout", buffer_entry(0, stage, Storage { read_only: true }));
+    let group = |label: &str, layout: &wgpu::BindGroupLayout, buffer: &wgpu::Buffer| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout,
+            entries: &whole_buffer_entries(&[buffer]),
+        })
+    };
+    let params_bind_group = group("smoke_params_bg", &params_layout, params);
+    let density_bg = [
+        group("smoke_rm_density_0", &density_layout, &density[0]),
+        group("smoke_rm_density_1", &density_layout, &density[1]),
+    ];
+    let shader = crate::pipeline::load_shader_composed(
+        device,
+        "demo/assets/shaders/smoke_raymarch.wgsl",
+        include_str!("shaders/smoke_raymarch.wgsl"),
+        "Smoke Raymarch Shader",
+    );
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Smoke Raymarch Layout"),
+        bind_group_layouts: &[
+            Some(scene_global_layout),
+            Some(&depth_layout),
+            Some(&params_layout),
+            Some(&density_layout),
+        ],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Smoke Raymarch Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: output_format,
+                // One / OneMinusSrcAlpha for colour and alpha alike.
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+    RaymarchPass { pipeline, depth_layout, params_bind_group, density_bg }
+}
+
 impl SmokeVolume {
     /// Allocates the density grid and builds the compute and raymarch pipelines.
     pub fn new(
@@ -151,200 +287,9 @@ impl SmokeVolume {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // ── Compute (advect) ──
-        let compute_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("smoke_compute_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 3: obstacle solidity field (read-only).
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let mk_compute_bg = |src: &wgpu::Buffer, dst: &wgpu::Buffer, label: &str| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &compute_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: params_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: src.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: dst.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 3, resource: obstacle.as_entire_binding() },
-                ],
-            })
-        };
-        let compute_bg = [
-            mk_compute_bg(&density[0], &density[1], "smoke_advect_0to1"),
-            mk_compute_bg(&density[1], &density[0], "smoke_advect_1to0"),
-        ];
-        let advect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Smoke Advect Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/smoke_advect.wgsl").into()),
-        });
-        let compute_pl_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Smoke Advect Layout"),
-            bind_group_layouts: &[Some(&compute_layout)],
-            immediate_size: 0,
-        });
-        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Smoke Advect Pipeline"),
-            layout: Some(&compute_pl_layout),
-            module: &advect_shader,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-
-        // ── Raymarch (render) ──
-        let depth_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("smoke_depth_layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
-        let params_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("smoke_params_layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let density_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("smoke_density_layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let params_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("smoke_params_bg"),
-            layout: &params_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: params_buffer.as_entire_binding() }],
-        });
-        let mk_density_bg = |buf: &wgpu::Buffer, label: &str| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &density_layout,
-                entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }],
-            })
-        };
-        let density_bg = [
-            mk_density_bg(&density[0], "smoke_rm_density_0"),
-            mk_density_bg(&density[1], "smoke_rm_density_1"),
-        ];
-
-        let rm_shader = crate::pipeline::load_shader_composed(
-            device,
-            "demo/assets/shaders/smoke_raymarch.wgsl",
-            include_str!("shaders/smoke_raymarch.wgsl"),
-            "Smoke Raymarch Shader",
-        );
-        let rm_pl_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Smoke Raymarch Layout"),
-            bind_group_layouts: &[
-                Some(scene_global_layout),
-                Some(&depth_layout),
-                Some(&params_layout),
-                Some(&density_layout),
-            ],
-            immediate_size: 0,
-        });
-        let raymarch_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Smoke Raymarch Pipeline"),
-            layout: Some(&rm_pl_layout),
-            vertex: wgpu::VertexState {
-                module: &rm_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &rm_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: output_format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let (compute_pipeline, compute_bg) = advect_pass(device, &params_buffer, &density, &obstacle);
+        let RaymarchPass { pipeline: raymarch_pipeline, depth_layout, params_bind_group, density_bg } =
+            raymarch_pass(device, scene_global_layout, output_format, &params_buffer, &density);
 
         Self {
             grid_n,
