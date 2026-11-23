@@ -223,10 +223,11 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    follows the parent's scale (`Relative::then`). `misket` divides its tray walls' half sizes by
 >    the tray's scale by hand. A decision to make: scale shapes by the world scale, as Unity does,
 >    or keep scale visual-only and say so where a scaled parent is given a child collider.
-> 6. **(2026-11-23) The forward-only path — every browser's and phone's frame — draws no
->    volumetric light.** Found running that path's plain (not `#[ignore]`d) tests for the first
->    time: the recipe in use ran only the ignored GPU tests, and decals, GPU particles and the fluid
->    were missing with it. Each its own design, and a phone's measurement:
+> 6. ~~**(2026-11-23) The forward-only path — every browser's and phone's frame — draws no
+>    volumetric light.**~~ **Closed 2026-11-23**, with the decals, the GPU particles and the fluid
+>    below. Found running that path's plain (not `#[ignore]`d) tests for the first time: the recipe
+>    in use ran only the ignored GPU tests, and decals, GPU particles and the fluid were missing with
+>    it. Each its own design, and a phone's measurement:
 >    - ~~decals~~ **closed the same day, in the lit shader (the owner's choice over a pass of their
 >      own):** the deferred pass paints the G-buffer's albedo, which this path does not have, so its
 >      lit shader projects each decal over the surface before the light (`shader.wgsl`'s `DECALS`
@@ -249,10 +250,23 @@ the first write (Unity's material instance — a hidden un-sharing).
 >      `with_scene_render`, with the water of a game that had a `FluidSimulation`. It is built now
 >      when a scene first has one, as large as it asks (`Renderer::fluid_or_build`). Not measured on
 >      a phone: what live particles cost a frame there.
->    - volumetric light: built over the G-buffer and the desktop's cascades.
->
->    Its tests are `#[cfg(not(gizmo_forward_only))]`, the reason beside each, pointing here. STATUS
->    lists it as absent from the browser.
+>    - ~~volumetric light~~ **closed the same day, the desktop's march on every path:** it read only
+>      the frame's depth of the G-buffer's state (`DeferredState::depth_view`, the renderer's own
+>      depth) and its pass binds three groups of WebGPU's four, so it is built over the renderer's
+>      depth (`VolumetricState::new`) and drawn wherever the renderer is. The veil — the nearest
+>      surface that blends, where the air is split — was drawn through the G-buffer's depth prepass,
+>      six groups; it is drawn through the shadow pipelines now, from the camera
+>      (`VolumetricState::veil_pass`, `ShadowVsUniform`): depth only, both faces, cutting what a
+>      cut-out or a game's surface cuts, on both paths. The march reads as many cascades as the
+>      sun's array holds (one there), and **found with it, on both paths:** the air where the
+>      cascades do not reach had no sun at all — past their distance, outside their map, and in a
+>      frame that draws none. That path's one cascade reaches 40 m and is fitted to the scene's
+>      depth, where the march goes 100 m: the air beyond a pinball table's 4 m was dark although
+>      nothing can shadow it. It takes all of the sun there now, as a surface there is lit
+>      (`sun_reach` in `volumetric.wgsl`). Its tests, un-gated, run on both paths. Not measured on
+>      a phone: what the march costs a frame there — the desktop's half resolution and sixteen
+>      steps, on by default as on the desktop (`VolumetricState::enabled`,
+>      `set_march_divisor`).
 > 7. ~~**A body under a parent was simulated at its own `Transform` as a world pose, and drawn at
 >    its parent's pose composed with it.**~~ **Closed 2026-11-23, option (a), the owner's choice:**
 >    a rigid body is a root of the propagation. Its `Transform` is its world pose whatever its

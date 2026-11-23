@@ -483,7 +483,6 @@ impl GpuParticleSystem {
 
     /// Records the billboards depth only, where they show at all, into a pass whose depth attachment
     /// is the volumetric march's `veil_depth_view`: what it splits the air at.
-    #[cfg(not(gizmo_forward_only))]
     pub fn record_veil<'a>(
         &'a self,
         rpass: &mut wgpu::RenderPass<'a>,

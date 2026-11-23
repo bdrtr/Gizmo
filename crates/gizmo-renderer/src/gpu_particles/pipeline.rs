@@ -18,9 +18,7 @@ pub struct ParticlePipelines {
     /// in the FS.
     pub flipbook_bind_group_layout: wgpu::BindGroupLayout,
     /// The same billboards, depth only, where they show at all (`fs_veil`): what the volumetric
-    /// march splits the air at (`VolumetricState::veil_depth_view`). Native: the forward-only path
-    /// has no volumetric light.
-    #[cfg(not(gizmo_forward_only))]
+    /// march splits the air at (`VolumetricState::veil_depth_view`). On every path, as the march is.
     pub veil_pipeline: wgpu::RenderPipeline,
 }
 
@@ -87,7 +85,6 @@ pub fn create_particle_pipelines(
         // için) çizilir; occlusion + soft-fade FS'te sahne derinliğinden manuel yapılır.
         None,
     );
-    #[cfg(not(gizmo_forward_only))]
     let veil_pipeline = billboard(
         "Particle Veil Pipeline",
         "fs_veil",
@@ -107,7 +104,6 @@ pub fn create_particle_pipelines(
         render_pipeline,
         depth_bind_group_layout,
         flipbook_bind_group_layout,
-        #[cfg(not(gizmo_forward_only))]
         veil_pipeline,
     }
 }

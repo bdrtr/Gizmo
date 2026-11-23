@@ -460,8 +460,9 @@ mod tests {
             defs.insert("PLANAR".to_string(), ShaderDefValue::Bool(true));
             compose_wgsl(water, "water.wgsl (planar)", defs);
         }
-        // Native-only (no web schema): the deferred pass, the shadow pass, the volumetric march
-        // (which reads the same shadow group the lit passes do) and the seen mask.
+        // Native schema only: the deferred pass, the shadow pass, the volumetric march and the seen
+        // mask. The march and the shadow pass are drawn on the forward-only path too, composed under this
+        // schema there as well (`load_shader_composed`): they bind groups of their own, not the lit ones.
         let native_only: &[(&str, &str)] = &[
             ("deferred_lighting.wgsl", include_str!("../shaders/deferred_lighting.wgsl")),
             ("gbuffer.wgsl", include_str!("../shaders/gbuffer.wgsl")),

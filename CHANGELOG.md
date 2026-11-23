@@ -549,6 +549,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The browser and the phone draw the volumetric light.** The desktop's march, on every path: it
+  is built over the renderer's depth (`VolumetricState::new`, `resize` and `set_march_divisor` take
+  the depth view where they took the `DeferredState`), and the veil it splits the air at is drawn
+  through the shadow pipelines from the camera (`VolumetricState::veil_pass`, `write_veil_pass`),
+  where it was drawn through the G-buffer's prepass. `Renderer::keep_gbuffer_readers` keeps it.
+  docs/ENGINE.md §3 item 6, now closed. Its nine GPU tests run on both paths.
+  - **Fixed:** the air the sun's cascades do not reach had no sun in it — past their distance,
+    outside their map, and in a frame that draws none. It takes all of it now, as a surface there
+    is lit. The forward-only path's one cascade is fitted to the scene's depth, so there every ray
+    past the scene was dark.
 - **The browser and the phone draw decals, lit.** The forward-only path's lit shader projects each
   decal over the surface it shades before the light, as the deferred pass paints the G-buffer's
   albedo — the same projection and blend, the surface's normal and metal kept — in a tier built

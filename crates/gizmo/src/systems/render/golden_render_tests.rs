@@ -3737,7 +3737,8 @@ fn a_wet_baked_road_glints_with_the_lamps_over_it() {
 /// reflections, GI, TAA and the volumetric light went on reading targets nothing drew. Now the lit
 /// pipelines read an empty volume (`Renderer::irradiance_group`) and the G-buffer's readers go with it
 /// (`Renderer::keep_gbuffer_readers`): a lit box on a lit floor, under the sun, every effect at its
-/// default, draws — the box and the floor lit, the readers gone.
+/// default, draws — the box and the floor lit, the readers gone. The volumetric light stays: it reads
+/// the frame's depth since 2026-11-23.
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn a_desktop_view_without_the_deferred_path_draws_lit_surfaces_forward() {
@@ -3772,9 +3773,11 @@ fn a_desktop_view_without_the_deferred_path_draws_lit_surfaces_forward() {
         render_world(&mut renderer, &mut world).await;
         let pixels = render_world(&mut renderer, &mut world).await;
         assert!(
-            renderer.ssr.is_none() && renderer.ssao.is_none() && renderer.ssgi.is_none() && renderer.taa.is_none() && renderer.volumetric.is_none() && renderer.decal.is_none(),
+            renderer.ssr.is_none() && renderer.ssao.is_none() && renderer.ssgi.is_none() && renderer.taa.is_none() && renderer.decal.is_none(),
             "the G-buffer's readers went with it"
         );
+        // The volumetric light reads the frame's depth, and stays (as on the forward-only path).
+        assert!(renderer.volumetric.is_some(), "the volumetric light needs no G-buffer");
         let px = |x: usize, y: usize| [pixels[(y * 128 + x) * 4], pixels[(y * 128 + x) * 4 + 1], pixels[(y * 128 + x) * 4 + 2]];
         let red = (0..128 * 128).filter(|&i| { let p = px(i % 128, i / 128); p[0] > 80 && p[0] > p[1] + 40 }).count();
         let grey = (0..128 * 128).filter(|&i| { let p = px(i % 128, i / 128); p[0] > 60 && p[0].abs_diff(p[1]) < 10 && p[1].abs_diff(p[2]) < 12 }).count();
@@ -5567,7 +5570,6 @@ async fn render_sunbeam_full(
 /// So this guards volumetric on the only ground where the question is meaningful, and it is
 /// the standing counter-example to reading one scene's zero as a dead pass.
 #[test]
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light (ENGINE.md §3).
 fn volumetric_god_rays_reach_the_frame() {
     let _gpu = crate::test_gpu::gpu_lock();
     if !pollster::block_on(Renderer::headless_adapter_available())
@@ -5625,7 +5627,6 @@ fn the_defaults_are_the_shader_literals_they_replaced() {
     });
 }
 
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
 /// Every one of the six has to actually reach the frame, or it is a field, not a control.
 ///
 /// Each parameter needs the scene that can show it, and finding those was most of the work:
@@ -5702,7 +5703,6 @@ fn every_volumetric_parameter_changes_the_frame() {
     });
 }
 
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
 /// `steps` is a cost knob, not a look knob, and the measurement has to be told that.
 ///
 /// Scattering accumulates as `Σ contribution × step_size` with `step_size = max_distance /
@@ -5762,7 +5762,6 @@ fn the_step_count_refines_the_march_without_changing_what_it_renders() {
     });
 }
 
-#[cfg(not(gizmo_forward_only))] // The air tests' own: that path has no volumetric light.
 /// A half-float's bits as an `f32`: what a `Rgba16Float` target holds.
 fn f16_bits_to_f32(bits: u16) -> f32 {
     let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
@@ -5775,14 +5774,13 @@ fn f16_bits_to_f32(bits: u16) -> f32 {
     }
 }
 
-#[cfg(not(gizmo_forward_only))] // The air tests' own: that path has no volumetric light.
 /// What the volumetric march put in the air of `world`, texel by texel: its own target (half the
 /// frame's size a side, `Rgba16Float`) read back before the apply pass blurs it into the frame,
 /// as r + g + b. The frame's bytes would bury a lamp's air under the floor it lights; this is the
 /// scattering term alone. No sun in these scenes, so it is the local lights' term alone.
 async fn volumetric_air(renderer: &mut Renderer, world: &mut World) -> (Vec<f32>, usize) {
     render_world(renderer, world).await;
-    let vol = renderer.volumetric.as_ref().expect("the deferred path marches the air");
+    let vol = renderer.volumetric.as_ref().expect("every path marches the air");
     let side = vol.volumetric_texture.width();
     assert_eq!(side, vol.volumetric_texture.height(), "a square frame has a square march");
     let bytes = read_target(renderer, &vol.volumetric_texture, side).await;
@@ -5795,7 +5793,6 @@ async fn volumetric_air(renderer: &mut Renderer, world: &mut World) -> (Vec<f32>
     (air, side as usize)
 }
 
-#[cfg(not(gizmo_forward_only))] // That path has no volumetric light.
 /// **A coarse march keeps a lamp's halo off the post in front of it** (`VolumetricState::set_march_divisor`,
 /// `volumetric_apply.wgsl`). A post 12 cm across, 4 m off, stands in front of a lamp's air: marched at a
 /// sixteenth of the frame's pixels, the post's pixels are as dark as when every pixel is marched — the
@@ -5815,9 +5812,9 @@ fn a_coarse_march_keeps_a_lamps_halo_off_the_post_in_front_of_it() {
     async fn frame(divisor: u32) -> (f64, f64) {
         let mut renderer = air_renderer().await;
         {
-            let Renderer { volumetric, device, deferred, .. } = &mut renderer;
-            if let (Some(air), Some(deferred)) = (volumetric.as_mut(), deferred.as_ref()) {
-                air.set_march_divisor(device, deferred, divisor);
+            let Renderer { volumetric, device, depth_texture_view, .. } = &mut renderer;
+            if let Some(air) = volumetric.as_mut() {
+                air.set_march_divisor(device, depth_texture_view, divisor);
             }
         }
         let mut world = World::new();
@@ -5861,15 +5858,13 @@ fn a_coarse_march_keeps_a_lamps_halo_off_the_post_in_front_of_it() {
     });
 }
 
-#[cfg(not(gizmo_forward_only))] // The air tests' own: that path has no volumetric light.
 /// The sum of `air` over columns `xs` and rows `ys` of a `side`-wide target.
 fn air_in(air: &[f32], side: usize, xs: std::ops::Range<usize>, ys: std::ops::Range<usize>) -> f32 {
     ys.flat_map(|y| xs.clone().map(move |x| (x, y))).map(|(x, y)| air[y * side + x]).sum()
 }
 
-#[cfg(not(gizmo_forward_only))] // The air tests' own: that path has no volumetric light.
-/// A renderer for the air tests: the deferred path with its volumetric march and nothing that
-/// reads the frame back over time.
+/// A renderer for the air tests: the path's own, with its volumetric march and nothing that reads the
+/// frame back over time.
 async fn air_renderer() -> Renderer {
     let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
     renderer.taa = None;
@@ -5885,7 +5880,6 @@ async fn air_renderer() -> Renderer {
     renderer
 }
 
-#[cfg(not(gizmo_forward_only))] // The air tests' own: that path has no volumetric light.
 /// A box of half extents `half` at `at` (the cube mesh spans −1…1), white and matte, casting and
 /// receiving as any mesh does.
 fn air_box(world: &mut World, renderer: &Renderer, assets: &mut AssetManager, at: Vec3, half: Vec3) {
@@ -5903,7 +5897,6 @@ fn air_box(world: &mut World, renderer: &Renderer, assets: &mut AssetManager, at
     world.add_component(e, MeshRenderer::new());
 }
 
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
 /// **A lamp behind a wall lights no air in front of it, when it casts.** A point light stands
 /// a metre behind a 10 cm wall that fills the view; the camera looks at the wall from the other
 /// side. Every point of air the camera sees is in the wall's shadow, so the march must find
@@ -5959,7 +5952,6 @@ fn a_lamp_behind_a_wall_lights_no_air_in_front_of_it() {
     });
 }
 
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
 /// **A spot lights the air of its cone, and the cone's air is shadowed and patterned as its
 /// floor is.** A narrow spot points straight down, seen from the side; the march's target is
 /// cut into a middle band (the cone) and two outer bands (the air beside it, inside the light's
@@ -6076,7 +6068,6 @@ fn a_spot_lights_the_air_of_its_cone_as_it_lights_its_floor() {
     });
 }
 
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
 /// **The march stops at a wall drawn forward as at one drawn deferred.** A lamp stands behind a
 /// wall the camera faces; the march must stop at the wall whether the wall is lit through the
 /// G-buffer or drawn unlit, forward. The march read where to stop from the G-buffer, which an
@@ -6735,7 +6726,6 @@ async fn forward_motion(kind: &str, behind: bool, reader: bool) -> [f32; 2] {
     }
 }
 
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
 /// **A smoke splits the volumetric air as a pane does.** A wall of GPU particles stands at z = 2
 /// between the camera and a lamp a metre behind it. The march splits the air at the nearest thing
 /// that blends — the air behind it is added ahead of it and shows through it as much as it lets
@@ -6837,7 +6827,6 @@ fn a_smoke_splits_the_volumetric_air_as_a_pane_does() {
     });
 }
 
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
 /// **A pane shows the air behind it as much as it lets through, and dims none in front of it.** A
 /// lamp stands a metre behind a pane the camera faces, then halfway between them; the pane is
 /// opaque, drawn deferred, or 98 % opaque and blending. What the volumetric light moves in the

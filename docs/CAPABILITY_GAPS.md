@@ -888,8 +888,9 @@ cube cookies for point lights, and no cookies on web. Each item:
   its air was added over everything: a 99 % opaque floor a metre under a lamp read 229.55 against the
   opaque floor's 228.45 — the air under the floor showed through it. Added ahead of what blends, as SSR
   and SSGI now are, the air in front of a pane would be dimmed as much as the air behind. So the
-  nearest surface that blends is drawn alone, depth only, ahead of them (through the G-buffer's prepass,
-  into `VolumetricState::veil_depth_view`; an additive one is left out, as it only adds), and the march
+  nearest surface that blends is drawn alone, depth only, ahead of them (through the shadow pipelines
+  from the camera since 2026-11-23 — the G-buffer's prepass until then, which the forward-only path does
+  not have — into `VolumetricState::veil_depth_view`; an additive one is left out, as it only adds), and the march
   splits the air there: what is behind it is added ahead of what blends, which shows it as much as it
   lets through, what is in front over everything. The floor reads 227.94. A lamp a metre behind a pane
   the camera faces moves 2 381 984 of the frame through an opaque pane, 3 926 242 through one 98 %

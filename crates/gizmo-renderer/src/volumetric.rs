@@ -1,5 +1,4 @@
 
-use crate::deferred::DeferredState;
 use crate::pipeline::{load_shader_composed, SceneState};
 
 /// The six numbers that shape the volumetric march.
@@ -67,6 +66,11 @@ impl Default for VolumetricParams {
 /// less — and applied over the HDR target through a depth-aware upsample: each pixel takes the march's
 /// four nearest texels weighted by how near their surfaces stand to its own, so the air marched past a
 /// lamp post does not spill onto the post. The effect is low-frequency; the cost is the march's pixels.
+///
+/// On every path: it reads the frame's depth, the sun's cascades, the local lights' layers and the
+/// clusters, which the forward-only path (a browser's, a phone's) has as the desktop does, and draws the
+/// veil through the shadow pipelines ([`veil_pass`](Self::veil_pass)), which every path builds. Built
+/// over the G-buffer's depth until 2026-11-23, and so on no browser or phone.
 pub struct VolumetricState {
     /// The marched scattering term in front of the nearest surface that blends — all of it where
     /// none does — added over the finished frame.
@@ -83,6 +87,11 @@ pub struct VolumetricState {
     pub veil_depth_texture: wgpu::Texture,
     /// Its view, the depth attachment of that pass.
     pub veil_depth_view: wgpu::TextureView,
+    /// That pass's group 0, in the shadow pass's layout: the camera's matrix where a cascade's stands, so
+    /// that the pass draws through the shadow pipelines — depth only, both faces, cutting what a
+    /// cut-out cuts — which every path has. Written each view by [`write_veil_pass`](Self::write_veil_pass).
+    pub veil_pass: wgpu::BindGroup,
+    veil_pass_buffer: wgpu::Buffer,
 
     /// The raymarch pass.
     pub volumetric_pipeline: wgpu::RenderPipeline,
@@ -129,11 +138,12 @@ pub struct VolumetricState {
 }
 
 impl VolumetricState {
-    /// Builds every volumetric resource for a target of the given size.
+    /// Builds every volumetric resource for a target of the given size, over the frame's depth
+    /// (`depth_view`, the renderer's `depth_texture_view`), where each ray stops.
     pub fn new(
         device: &wgpu::Device,
         scene: &SceneState,
-        deferred: &DeferredState,
+        depth_view: &wgpu::TextureView,
         width: u32,
         height: u32,
     ) -> Self {
@@ -167,16 +177,26 @@ impl VolumetricState {
         let volumetric_bind_group = Self::mk_volumetric_bg(
             device,
             &volumetric_bgl,
-            &deferred.depth_view,
+            depth_view,
             &linear_sampler,
             &params_buffer,
             &veil_depth_view,
         );
 
-        let apply_bind_group =
-            Self::mk_apply_bg(device, &apply_bgl, &volumetric_view, &linear_sampler, &deferred.depth_view);
-        let behind_apply_bind_group =
-            Self::mk_apply_bg(device, &apply_bgl, &behind_view, &linear_sampler, &deferred.depth_view);
+        let apply_bind_group = Self::mk_apply_bg(device, &apply_bgl, &volumetric_view, &linear_sampler, depth_view);
+        let behind_apply_bind_group = Self::mk_apply_bg(device, &apply_bgl, &behind_view, &linear_sampler, depth_view);
+
+        let veil_pass_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("volumetric veil pass"),
+            size: std::mem::size_of::<crate::gpu_types::ShadowVsUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let veil_pass = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("volumetric veil pass bg"),
+            layout: &scene.shadow_pass_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: veil_pass_buffer.as_entire_binding() }],
+        });
 
         let volumetric_pipeline = Self::mk_volumetric_pipeline(device, scene, &volumetric_bgl);
         let apply_pipeline = Self::mk_apply_pipeline(device, &apply_bgl, scene);
@@ -191,6 +211,8 @@ impl VolumetricState {
             behind_view,
             veil_depth_texture,
             veil_depth_view,
+            veil_pass,
+            veil_pass_buffer,
             volumetric_pipeline,
             volumetric_bgl,
             volumetric_bind_group,
@@ -214,19 +236,28 @@ impl VolumetricState {
     /// Marches one pixel of `divisor` × `divisor` of the frame's (1 – 8; 2 is the default), rebuilding the
     /// targets when it changes. The march's cost is its pixels: 4 is a quarter of 2's. `nfsu2-gizmo`'s
     /// lamp-lit streets took 4.3 ms of haze at 2 (1080p, AMD 780M).
-    pub fn set_march_divisor(&mut self, device: &wgpu::Device, deferred: &DeferredState, divisor: u32) {
+    pub fn set_march_divisor(&mut self, device: &wgpu::Device, depth_view: &wgpu::TextureView, divisor: u32) {
         let divisor = divisor.clamp(1, 8);
         if divisor != self.march_divisor {
             self.march_divisor = divisor;
-            self.resize(device, deferred, self.width, self.height);
+            self.resize(device, depth_view, self.width, self.height);
         }
     }
 
-    /// Rebuilds the size-dependent texture and the bind groups that read it.
+    /// Writes the veil pass's matrix — the view's own, `view_proj`, as its depth was drawn — with the
+    /// frame's camera and clock, which a surface that cuts itself by them reads (`ShadowVsUniform`).
+    /// Before each view's pass: each view is its own submission.
+    pub fn write_veil_pass(&self, queue: &wgpu::Queue, view_proj: gizmo_math::Mat4, camera: gizmo_math::Vec3, clock: f32) {
+        let uniform = crate::gpu_types::ShadowVsUniform::new(view_proj.to_cols_array_2d(), camera.to_array(), clock);
+        queue.write_buffer(&self.veil_pass_buffer, 0, bytemuck::bytes_of(&uniform));
+    }
+
+    /// Rebuilds the size-dependent textures and the bind groups that read them, over the frame's depth
+    /// at that size (`depth_view`).
     pub fn resize(
         &mut self,
         device: &wgpu::Device,
-        deferred: &DeferredState,
+        depth_view: &wgpu::TextureView,
         width: u32,
         height: u32,
     ) {
@@ -245,16 +276,14 @@ impl VolumetricState {
         self.volumetric_bind_group = Self::mk_volumetric_bg(
             device,
             &self.volumetric_bgl,
-            &deferred.depth_view,
+            depth_view,
             &self.linear_sampler,
             &self.params_buffer,
             &self.veil_depth_view,
         );
 
-        self.apply_bind_group =
-            Self::mk_apply_bg(device, &self.apply_bgl, &self.volumetric_view, &self.linear_sampler, &deferred.depth_view);
-        self.behind_apply_bind_group =
-            Self::mk_apply_bg(device, &self.apply_bgl, &self.behind_view, &self.linear_sampler, &deferred.depth_view);
+        self.apply_bind_group = Self::mk_apply_bg(device, &self.apply_bgl, &self.volumetric_view, &self.linear_sampler, depth_view);
+        self.behind_apply_bind_group = Self::mk_apply_bg(device, &self.apply_bgl, &self.behind_view, &self.linear_sampler, depth_view);
 
         self.width = width;
         self.height = height;

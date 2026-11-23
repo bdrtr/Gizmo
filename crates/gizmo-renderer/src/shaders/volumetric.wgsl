@@ -155,6 +155,39 @@ fn local_air(light: LightData, j: u32, kind: u32, p: vec3<f32>, ray_dir: vec3<f3
     return colour * light.position.w * reach;
 }
 
+// How much of the sun reaches the point `p` of the air: its cascades' say where they cover it, and all of
+// it where they do not — past the shadow's distance, outside the map, or with no cascades drawn this frame
+// (`cascade_splits` is zeros then: a frame that draws no shadow map, the forward-only path's with
+// `ShadowSettings::forward_only` off) — as a surface there is lit. The air left out of the cascades was
+// dark until 2026-11-23: the forward-only path's one cascade reaches 40 m and is fitted to how deep the
+// scene is (`ShadowSettings::fit_to_scene`), where the march goes 100 m, and the air beyond a pinball
+// table's 4 m, which nothing can shadow, had no sun in it.
+fn sun_reach(p: vec3<f32>, cam_pos: vec3<f32>) -> f32 {
+    let view_depth = dot(p - cam_pos, scene.camera_forward.xyz);
+    if (view_depth >= scene.cascade_splits.w) {
+        return 1.0;
+    }
+    // As many cascades as the array holds: four on the desktop, one on the forward-only path, where every
+    // matrix of `light_view_proj` is that one (`csm::CASCADES_DRAWN`).
+    let ci = min(select_cascade(view_depth), textureNumLayers(t_shadow) - 1u);
+    let m = scene.light_view_proj[ci];
+    let light_clip = m * vec4<f32>(p, 1.0);
+    let light_ndc = light_clip.xyz / light_clip.w;
+    let shadow_uv = vec2<f32>(light_ndc.x * 0.5 + 0.5, light_ndc.y * -0.5 + 0.5);
+    if (any(shadow_uv < vec2<f32>(0.0)) || any(shadow_uv > vec2<f32>(1.0)) || light_ndc.z > 1.0) {
+        return 1.0;
+    }
+    // Metres, not NDC — the fourth and last path that sampled the cascades with a flat constant. See
+    // `baked_lit.wgsl` for the reasoning and what widening `CASTER_REACH` did to it: the same 0.0015 went
+    // from 0.16 m of world depth to 0.82 m. Ray-marched scattering is more forgiving than a surface
+    // shadow, but a bias that changes meaning when an unrelated constant moves is not something to leave
+    // in four places and fix in three. `ShadowSettings::depth_bias` scales it, as it scales every
+    // lookup's (it was left out here).
+    let sz = length(vec3<f32>(m[0][2], m[1][2], m[2][2]));
+    let bias = params.shadow_bias * sz * scene.shadow_bias.x;
+    return textureSampleCompareLevel(t_shadow, s_shadow, shadow_uv, i32(ci), light_ndc.z - bias);
+}
+
 fn phase_function(g: f32, cos_theta: f32) -> f32 {
     let g2 = g * g;
     let num = 1.0 - g2;
@@ -246,30 +279,7 @@ fn fs_main(in: VertexOutput) -> MarchOut {
         // Not at all when the sun scatters nothing: a cascade lookup a step for no light (a night whose
         // sun is there for a car's paint, not for its air).
         if (scene.sun_direction.w > 0.5 && params.sun_scatter > 0.0) {
-            let view_depth = dot(current_pos - cam_pos, scene.camera_forward.xyz);
-            let ci = select_cascade(view_depth);
-            
-            let m = scene.light_view_proj[ci];
-            let light_clip = m * vec4<f32>(current_pos, 1.0);
-            let light_ndc = light_clip.xyz / light_clip.w;
-            let shadow_uv = vec2<f32>(light_ndc.x * 0.5 + 0.5, light_ndc.y * -0.5 + 0.5);
-            
-            if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
-                // Metres, not NDC — the fourth and last path that sampled the cascades with a
-                // flat constant. See `baked_lit.wgsl` for the reasoning and what widening
-                // `CASTER_REACH` did to it: the same 0.0015 went from 0.16 m of world depth to
-                // 0.82 m. Ray-marched scattering is more forgiving than a surface shadow, but a
-                // bias that changes meaning when an unrelated constant moves is not something to
-                // leave in four places and fix in three.
-                let sz = length(vec3<f32>(m[0][2], m[1][2], m[2][2]));
-                // `ShadowSettings::depth_bias` scales it, as it scales every lookup's (it was left out here).
-                let bias = params.shadow_bias * sz * scene.shadow_bias.x;
-                let shadow_val = textureSampleCompareLevel(t_shadow, s_shadow, shadow_uv, ci, light_ndc.z - bias);
-                
-                if (shadow_val > 0.0) {
-                    total_scatter += sun_intensity * sun_phase * shadow_val * step_size;
-                }
-            }
+            total_scatter += sun_intensity * sun_phase * sun_reach(current_pos, cam_pos) * step_size;
         }
         
         // ── 2. Local lights: what of each reaches this point of the air ──

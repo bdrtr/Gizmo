@@ -369,10 +369,8 @@ pub struct DrawItem {
     /// A surface the game registered (`MaterialType::CustomSurface`): lit and routed as PBR, drawn
     /// with that surface's pipelines wherever the engine's material would use its own.
     pub(super) surface: Option<gizmo_renderer::custom_material::SurfaceId>,
-    /// The mesh closes over a volume (`Mesh::closed`): the shadow pass casts it from its back faces,
-    /// and an open one from both. Read only by `passes::shadow`, which the forward-only path does not
-    /// have — written there all the same, as `casts_shadows` is, since it is part of the key.
-    #[cfg_attr(gizmo_forward_only, allow(dead_code))]
+    /// The mesh closes over a volume (`Mesh::closed`): the sun's cascades cast it from its front
+    /// faces, and an open one from both (`pipelines::build_shadow_pipelines`). Read by `passes::shadow`.
     pub(super) closed: bool,
     /// The Gerstner water surface: `water.wgsl` and the water pipeline, chosen in
     /// `passes::forward`. Rides `unlit` out of the deferred and shadow passes like every other
@@ -391,14 +389,9 @@ pub struct DrawItem {
     /// The forward-only path's middle tier: see `routing::needs_details`.
     pub(super) details: bool,
     /// Per-object shadow casting (`MeshRenderer::shadows`). Two objects sharing a mesh and a
-    /// material can answer differently, so it belongs in the key.
-    ///
-    /// Read only by `passes::shadow`, which is `#[cfg(not(gizmo_forward_only))]` — the browser
-    /// pipeline is forward-only and has no shadow pass at all. The field is still *written* there,
-    /// and deliberately: it is part of `BatchKey`, so removing it on wasm would merge two objects
-    /// that disagree about shadows into one batch and change what the native build has to re-split
-    /// later. So the value is computed everywhere and consumed on one target.
-    #[cfg_attr(gizmo_forward_only, allow(dead_code))]
+    /// material can answer differently, so it belongs in the key. Read by `passes::shadow`, on every
+    /// path (the forward-only one draws the sun's cascade and the local lights' layers since
+    /// 2026-11-12).
     pub(super) casts_shadows: bool,
     /// Per-object visibility (`ShadowCasting::Only` casts without being drawn).
     pub(super) visible_in_camera: bool,
@@ -426,8 +419,7 @@ pub struct DrawItem {
     /// casters, after every camera instance in region B (see `collect_draw_items`) — cut into
     /// spatial runs with a box each, for the shadow passes to draw the ones their frustum meets
     /// (`gizmo_renderer::shadow_culling`). Empty for a batch that casts nothing, and on a frame that
-    /// draws no shadow map. (Only the shadow passes read it — no shadows on web or a phone.)
-    #[cfg_attr(gizmo_forward_only, allow(dead_code))]
+    /// draws no shadow map. Only the shadow passes read it.
     pub(super) shadow_chunks: Vec<gizmo_renderer::shadow_culling::ShadowChunk>,
     /// Representative distance used to sort BACKDROP and TRANSPARENT batches back-to-front
     /// (see `cmp_draw_order` / `batch_sort_depth`). 0.0 for opaque batches (unused —

@@ -385,8 +385,7 @@ struct SurfacePipelines {
     /// Glass, single-sided then double-sided.
     glass: [wgpu::RenderPipeline; 2],
     /// The shadow pass, a closed mesh then an open one, always through the cut-out stage: only the
-    /// surface's own code knows where it is cut. `None` on the forward-only path, which has no shadow
-    /// pass.
+    /// surface's own code knows where it is cut. On every path; the volumetric veil draws through it too.
     shadow: Option<[wgpu::RenderPipeline; 2]>,
 }
 

@@ -171,6 +171,12 @@ fn quiet(renderer: &mut Renderer) {
     renderer.taa = None;
     renderer.ssgi = None;
     renderer.ssr = None;
+    // These tests compare two draws, one after the other. The sun's cascade is fitted to the box the
+    // draw before drew (`ShadowSettings::fit_to_scene`, on by default on the forward-only path;
+    // `csm::SceneExtent`, one frame behind), so the first draw, or one after another world, is fitted
+    // otherwise than the next: the surfaces hardly show it, the air shafts' edges do (8 – 93 pixels,
+    // 2026-11-23, when the volumetric light came to that path).
+    renderer.shadow_settings = renderer.shadow_settings.with_fit_to_scene(false);
 }
 
 /// **The shake is in the picture and nowhere else**, with the clock on the preparation side: one

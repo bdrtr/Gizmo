@@ -551,17 +551,16 @@ impl Renderer {
     }
 
     /// Builds volumetric lighting (the god rays), at the renderer's size, unless it is there — as
-    /// [`enable_ssr`](Self::enable_ssr) does for reflections, and for the same reason. Nothing
-    /// without the deferred path.
+    /// [`enable_ssr`](Self::enable_ssr) does for reflections, and for the same reason. On every path:
+    /// it reads the frame's depth, not the G-buffer.
     pub fn enable_volumetric(&mut self) {
         if self.volumetric.is_some() {
             return;
         }
-        let Some(def) = self.deferred.as_ref() else { return };
         self.volumetric = Some(crate::volumetric::VolumetricState::new(
             &self.device,
             &self.scene,
-            def,
+            &self.depth_texture_view,
             self.size.width,
             self.size.height,
         ));
@@ -1359,8 +1358,8 @@ impl Renderer {
         if let (Some(ref mut ssao), Some(ref def)) = (&mut self.ssao, &self.deferred) {
             ssao.resize(&self.device, def, width, height);
         }
-        if let (Some(ref mut vol), Some(ref def)) = (&mut self.volumetric, &self.deferred) {
-            vol.resize(&self.device, def, width, height);
+        if let Some(ref mut vol) = self.volumetric {
+            vol.resize(&self.device, &self.depth_texture_view, width, height);
         }
         if let Some(ref mut fxaa) = self.fxaa {
             fxaa.resize(&self.device, &self.queue, self.config.format, width, height);
@@ -1543,10 +1542,11 @@ impl Renderer {
         }
     }
 
-    /// What reads the G-buffer — SSAO, screen-space reflections and GI, decals, TAA, the volumetric
-    /// light — exists only beside it: each is built with it, from its targets, and none on the
-    /// forward-only path. When a game takes the deferred path away ([`deferred`](Self::deferred)),
-    /// they would go on reading targets nothing draws any more; the frame drops them first.
+    /// What reads the G-buffer — SSAO, screen-space reflections and GI, decals, TAA — exists only
+    /// beside it: each is built with it, from its targets, and none on the forward-only path. When a
+    /// game takes the deferred path away ([`deferred`](Self::deferred)), they would go on reading
+    /// targets nothing draws any more; the frame drops them first. Not the volumetric light, which
+    /// reads the frame's depth and is drawn on every path.
     pub fn keep_gbuffer_readers(&mut self) {
         if self.deferred.is_none() {
             self.ssao = None;
@@ -1554,7 +1554,6 @@ impl Renderer {
             self.ssgi = None;
             self.decal = None;
             self.taa = None;
-            self.volumetric = None;
         }
     }
 

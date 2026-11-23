@@ -216,10 +216,12 @@ fn record_forward_motion(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer
 /// `veil_depth_view`: where it splits the air between what is added ahead of what blends and what is
 /// added over it. `blended` is what is drawn after the opaque world. An additive draw is left out: it
 /// only adds, so the air behind it is no less seen than the air in front, and putting it behind would
-/// dim it by whatever pane stands further back. Drawn through the G-buffer's depth prepass — no
-/// culling, as a blended draw has none, and cutting what a cut-out cuts — so a water surface splits
-/// the air where its mesh lies, not where its waves are. With `simulations`, the GPU particles too,
-/// where they show at all: a smoke shows the air behind it as much as it lets it through.
+/// dim it by whatever pane stands further back. Drawn through the shadow pipelines from the camera
+/// (`VolumetricState::veil_pass`) — both faces, as a blended draw has no culling, and cutting what a
+/// cut-out or a game's surface cuts — which every path has: the G-buffer's depth prepass it was drawn
+/// through until 2026-11-23 exists only on the desktop. So a water surface splits the air where its
+/// mesh lies, not where its waves are. With `simulations`, the GPU particles too, where they show at
+/// all: a smoke shows the air behind it as much as it lets it through.
 fn record_veil_depth(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &Renderer,
@@ -227,18 +229,15 @@ fn record_veil_depth(
     uploaded_instances: u32,
     simulations: bool,
 ) {
-    let (Some(def), Some(vol)) = (renderer.deferred.as_ref(), renderer.volumetric.as_ref()) else {
+    let Some(vol) = renderer.volumetric.as_ref() else {
         return;
     };
     // The particles' soft-fade group reads the frame's depth: built before the pass, which borrows it.
-    #[cfg(not(gizmo_forward_only))]
     let particles = renderer
         .gpu_particles
         .as_ref()
         .filter(|p| simulations && p.active_particles > 0)
         .map(|p| (p, p.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view, renderer.scene.view_cluster_buffers(), &renderer.scene.cookies)));
-    #[cfg(gizmo_forward_only)]
-    let _ = simulations;
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Volumetric Veil Depth"),
         color_attachments: &[],
@@ -251,11 +250,12 @@ fn record_veil_depth(
         occlusion_query_set: None,
         multiview_mask: None,
     });
-    pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
-    pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-    pass.set_bind_group(BG_INSTANCE, renderer.scene.view_instance_bind_group(), &[]);
-    pass.set_bind_group(5, &def.motion.bind_group, &[]);
+    // The shadow pipelines' groups: the pass's matrix, the material (read by a cut), the skeleton and
+    // the instances.
+    pass.set_bind_group(0, &vol.veil_pass, &[]);
+    pass.set_bind_group(3, renderer.scene.view_instance_bind_group(), &[]);
     let mut plan = super::plan::PassPlan::default();
+    let mut solid = None;
     for item in blended {
         if !item.visible_in_camera || item.blend_mode == crate::renderer::components::BlendMode::Additive {
             continue;
@@ -264,28 +264,11 @@ fn record_veil_depth(
         if instances.is_empty() {
             continue;
         }
-        let pipeline = match item.surface {
-            Some(id) => match renderer.custom_materials.surface(id) {
-                Some(s) if s.is_solid() => {
-                    if item.discards { &def.z_prepass_discard_pipelines[1] } else { &def.z_prepass_double_sided_pipeline }
-                }
-                Some(s) => match s.prepass_pipeline(true) {
-                    Some(pipeline) => pipeline,
-                    None => continue,
-                },
-                None => continue,
-            },
-            None if item.discards => &def.z_prepass_discard_pipelines[1],
-            None => &def.z_prepass_double_sided_pipeline,
-        };
-        plan.set_pipeline(pipeline);
-        let skeleton = item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-        plan.set_bind_group(3, skeleton.as_ref());
-        plan.set_bind_group(1, &item.bind_group);
+        let Some(pipeline) = super::shadow::caster_pipeline(renderer, item, false) else { continue };
+        super::shadow::bind_caster(&mut plan, renderer, item, pipeline, &mut solid);
         item.plan_draw(&mut plan, instances);
     }
     plan.replay(&mut pass, &renderer.device, renderer.multi_draw);
-    #[cfg(not(gizmo_forward_only))]
     if let Some((particles, depth)) = particles.as_ref() {
         particles.record_veil(&mut pass, renderer.scene.view_bind_group(), depth, particles.active_particles);
     }

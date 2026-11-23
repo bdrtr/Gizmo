@@ -590,6 +590,11 @@ fn upload_scene(renderer: &mut Renderer, setup: &SceneSetup, has_rain_map: bool,
             )),
         );
     }
+    // The volumetric veil's pass draws through the shadow pipelines, from the camera, as the frame is
+    // rasterised (`VolumetricState::veil_pass`).
+    if let Some(vol) = renderer.volumetric.as_ref().filter(|v| v.enabled) {
+        vol.write_veil_pass(&renderer.queue, setup.frame.camera.view_proj, cam_pos, elapsed_time);
+    }
 }
 
 /// TAA's and SSGI's per-view parameters: this frame's jitter, the blend, SSGI's history matrix.
@@ -632,9 +637,9 @@ fn resize_view_targets(renderer: &mut Renderer) {
                 ssr.resize(&renderer.device, def, &renderer.post.hdr_texture_view, w, h);
             }
         }
-        if let (Some(volumetric), Some(def)) = (&mut renderer.volumetric, &renderer.deferred) {
+        if let Some(volumetric) = &mut renderer.volumetric {
             if volumetric.width != w || volumetric.height != h {
-                volumetric.resize(&renderer.device, def, w, h);
+                volumetric.resize(&renderer.device, &renderer.depth_texture_view, w, h);
             }
         }
     }

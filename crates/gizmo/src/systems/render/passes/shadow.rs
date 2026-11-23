@@ -3,8 +3,8 @@ use super::super::*;
 /// What a draw casts with: a game's surface its own pipeline, anything else the engine's, by whether
 /// it is drawn by its front faces alone (`front_faces`: its mesh closes, and the pass is the sun's) and
 /// whether it cuts (a cut-out, a LOD crossfade). `None`: nothing it can cast with, which is a surface
-/// where there is no shadow pass.
-fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem, front_faces: bool) -> Option<&'a wgpu::RenderPipeline> {
+/// where there is no shadow pass. The volumetric veil draws through it too (`passes::forward`).
+pub(super) fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem, front_faces: bool) -> Option<&'a wgpu::RenderPipeline> {
     match item.surface {
         // A surface that never cuts casts as a plain solid does: no fragment stage to run.
         Some(id) => {
@@ -27,7 +27,7 @@ fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem, front_faces: boo
 /// first solid caster's). Bound each its own, a car's two dozen parts — one material each — were two
 /// dozen draws in every cascade, which runs of casters sharing everything else would draw as one
 /// (`PassPlan`'s multi-draws).
-fn bind_caster<'a>(
+pub(super) fn bind_caster<'a>(
     plan: &mut super::plan::PassPlan<'a>,
     renderer: &'a Renderer,
     item: &'a DrawItem,
