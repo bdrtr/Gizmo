@@ -61,7 +61,7 @@ impl Default for VolumetricParams {
 
 /// Whether a renderer's volumetric light is on as it is built ([`VolumetricState::enabled`]): on the
 /// desktop, and **off on the forward-only path** — a browser's, a phone's — where a game turns it on.
-/// Measured on an Adreno 618 (Nişancı, portrait, twenty readings each, one sitting, 2026-11-23): 119.6 fps
+/// Measured on an Adreno 618 (`nisanci`, portrait, twenty readings each, one sitting, 2026-11-23): 119.6 fps
 /// without it, 30.1 with the desktop's march (half the frame's size a side), 54.3 with a sixteenth of the
 /// pixels — 61.7 since the passes it does not need are skipped (`set_frame_scatters`, `veil_stale`),
 /// against 114.1 and 121.9 off. The owner's choice: built there, off until asked for.
