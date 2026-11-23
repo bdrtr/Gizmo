@@ -52,24 +52,39 @@ pub(crate) fn texture_2d_entry(binding: u32, visibility: wgpu::ShaderStages, fil
     }
 }
 
-/// A single-sampled texture of `dimension` and `sample_type` at `binding`, seen by the fragment stage:
-/// what nearly every texture a render pipeline binds is.
-pub(crate) fn fragment_texture(
+/// A single-sampled texture of `dimension` and `sample_type` at `binding`, seen by `visibility`.
+pub(crate) fn texture_entry(
     binding: u32,
+    visibility: wgpu::ShaderStages,
     dimension: wgpu::TextureViewDimension,
     sample_type: wgpu::TextureSampleType,
 ) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility,
         ty: wgpu::BindingType::Texture { sample_type, view_dimension: dimension, multisampled: false },
         count: None,
     }
 }
 
-/// A sampler of `kind` at `binding`, seen by the fragment stage.
+/// [`texture_entry`] seen by the fragment stage: what nearly every texture a render pipeline binds
+/// is.
+pub(crate) fn fragment_texture(
+    binding: u32,
+    dimension: wgpu::TextureViewDimension,
+    sample_type: wgpu::TextureSampleType,
+) -> wgpu::BindGroupLayoutEntry {
+    texture_entry(binding, wgpu::ShaderStages::FRAGMENT, dimension, sample_type)
+}
+
+/// A sampler of `kind` at `binding`, seen by `visibility`.
+pub(crate) fn sampler_entry(binding: u32, visibility: wgpu::ShaderStages, kind: wgpu::SamplerBindingType) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry { binding, visibility, ty: wgpu::BindingType::Sampler(kind), count: None }
+}
+
+/// [`sampler_entry`] seen by the fragment stage.
 pub(crate) fn fragment_sampler(binding: u32, kind: wgpu::SamplerBindingType) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(kind), count: None }
+    sampler_entry(binding, wgpu::ShaderStages::FRAGMENT, kind)
 }
 
 /// A bind group's entries for `buffers`, each bound whole at its index: the first at binding 0.

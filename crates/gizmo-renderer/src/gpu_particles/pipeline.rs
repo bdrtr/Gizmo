@@ -32,68 +32,30 @@ pub fn create_particle_pipelines(
     params_buffer: &wgpu::Buffer,
     particles_buffer: &wgpu::Buffer,
 ) -> ParticlePipelines {
-    let compute_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-            label: Some("particle_compute_layout"),
-        });
-
-    let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: &compute_bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: params_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: particles_buffer.as_entire_binding(),
-            },
-        ],
-        label: Some("particle_compute_bind_group"),
+    use crate::descriptors::{buffer_entry, compute_pipeline, whole_buffer_entries};
+    use wgpu::BufferBindingType::{Storage, Uniform};
+    let compute = wgpu::ShaderStages::COMPUTE;
+    let compute_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("particle_compute_layout"),
+        entries: &[buffer_entry(0, compute, Uniform), buffer_entry(1, compute, Storage { read_only: false })],
     });
-
+    let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("particle_compute_bind_group"),
+        layout: &compute_bind_group_layout,
+        entries: &whole_buffer_entries(&[params_buffer, particles_buffer]),
+    });
     let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Particle Compute Shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/particle_compute.wgsl").into()),
     });
-
     let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Particle Compute Pipeline Layout"),
         bind_group_layouts: &[Some(&compute_bind_group_layout)],
         immediate_size: 0,
     });
+    let compute_pipeline = compute_pipeline(device, "Particle Compute Pipeline", &compute_pipeline_layout, &compute_shader, "main");
 
-    let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Particle Compute Pipeline"),
-        layout: Some(&compute_pipeline_layout),
-        module: &compute_shader,
-        entry_point: Some("main"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-
+    let (depth_bind_group_layout, flipbook_bind_group_layout) = billboard_layouts(device);
     // Composed so particle_render.wgsl can `#import gizmo::common::{SceneUniforms}`.
     let render_shader = crate::pipeline::load_shader_composed(
         device,
@@ -101,86 +63,6 @@ pub fn create_particle_pipelines(
         include_str!("../shaders/particle_render.wgsl"),
         "Particle Render Shader",
     );
-
-    // Group 1: the scene's depth (soft particles, read with `textureLoad`), and what a lit particle is
-    // lit by at its centre, in the vertex stage: the view's clustered lights — the same buffers group 0
-    // has, bound again here because there they are the fragment stage's alone — and the spots' cookies.
-    let storage = |binding| wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::VERTEX,
-        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
-        count: None,
-    };
-    let depth_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("particle_depth_layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            storage(1),
-            storage(2),
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2Array,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 4,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
-    });
-
-    // Group 2: flipbook atlas dokusu (filterable) + sampler.
-    let flipbook_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("particle_flipbook_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                // binding 2: flipbook config uniform (x=tiles/kenar, y=açık 1/0)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    // The vertex stage reads it too: whether the particles are lit, and how they scatter.
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Particle Render Pipeline Layout"),
         bind_group_layouts: &[
@@ -190,87 +72,34 @@ pub fn create_particle_pipelines(
         ],
         immediate_size: 0,
     });
-
-    let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Particle Render Pipeline"),
-        layout: Some(&render_pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &render_shader,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &[
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![4 => Float32x2],
-                }),
-                Some(GpuParticle::desc()),
-            ],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &render_shader,
-            entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: output_format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            ..Default::default()
-        },
+    let billboard = |label: &str, fragment_entry: &str, targets: &[Option<wgpu::ColorTargetState>], depth_stencil| {
+        billboard_pipeline(device, label, &render_pipeline_layout, &render_shader, fragment_entry, targets, depth_stencil)
+    };
+    let render_pipeline = billboard(
+        "Particle Render Pipeline",
+        "fs_main",
+        &[Some(wgpu::ColorTargetState {
+            format: output_format,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        })],
         // Depth attachment YOK: particle'lar ayrı pass'te (soft-particle derinlik örneklemesi
         // için) çizilir; occlusion + soft-fade FS'te sahne derinliğinden manuel yapılır.
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-            cache: None,
-    });
-
+        None,
+    );
     #[cfg(not(gizmo_forward_only))]
-    let veil_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Particle Veil Pipeline"),
-        layout: Some(&render_pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &render_shader,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &[
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![4 => Float32x2],
-                }),
-                Some(GpuParticle::desc()),
-            ],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &render_shader,
-            entry_point: Some("fs_veil"),
-            compilation_options: Default::default(),
-            targets: &[],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
+    let veil_pipeline = billboard(
+        "Particle Veil Pipeline",
+        "fs_veil",
+        &[],
+        Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: Some(true),
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
+    );
 
     ParticlePipelines {
         compute_pipeline,
@@ -281,4 +110,85 @@ pub fn create_particle_pipelines(
         #[cfg(not(gizmo_forward_only))]
         veil_pipeline,
     }
+}
+
+/// The billboard draws' groups 1 and 2.
+///
+/// Group 1: the scene's depth (soft particles, read with `textureLoad`), and what a lit particle is
+/// lit by at its centre, in the vertex stage: the view's clustered lights — the same buffers group 0
+/// has, bound again here because there they are the fragment stage's alone — and the spots' cookies.
+///
+/// Group 2: the flipbook atlas (filterable) and its sampler, and the flipbook's config uniform
+/// (x = tiles per side, y = on 1 / off 0), which the vertex stage reads too: whether the particles
+/// are lit, and how they scatter.
+fn billboard_layouts(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::BindGroupLayout) {
+    use crate::descriptors::{buffer_entry, fragment_sampler, fragment_texture, sampler_entry, texture_entry};
+    use wgpu::{BufferBindingType, SamplerBindingType, ShaderStages, TextureSampleType, TextureViewDimension};
+    let lights = |binding| buffer_entry(binding, ShaderStages::VERTEX, BufferBindingType::Storage { read_only: true });
+    let filtered = TextureSampleType::Float { filterable: true };
+    let depth = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("particle_depth_layout"),
+        entries: &[
+            fragment_texture(0, TextureViewDimension::D2, TextureSampleType::Depth),
+            lights(1),
+            lights(2),
+            texture_entry(3, ShaderStages::VERTEX, TextureViewDimension::D2Array, filtered),
+            sampler_entry(4, ShaderStages::VERTEX, SamplerBindingType::Filtering),
+        ],
+    });
+    let flipbook = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("particle_flipbook_layout"),
+        entries: &[
+            fragment_texture(0, TextureViewDimension::D2, filtered),
+            fragment_sampler(1, SamplerBindingType::Filtering),
+            buffer_entry(2, ShaderStages::VERTEX_FRAGMENT, BufferBindingType::Uniform),
+        ],
+    });
+    (depth, flipbook)
+}
+
+/// A billboard draw of the particles: a quad's corners (location 4) per vertex, a [`GpuParticle`]
+/// per instance, a strip with nothing culled.
+fn billboard_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    fragment_entry: &str,
+    targets: &[Option<wgpu::ColorTargetState>],
+    depth_stencil: Option<wgpu::DepthStencilState>,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![4 => Float32x2],
+                }),
+                Some(GpuParticle::desc()),
+            ],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(fragment_entry),
+            compilation_options: Default::default(),
+            targets,
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
 }
