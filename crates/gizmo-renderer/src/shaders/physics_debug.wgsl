@@ -71,7 +71,8 @@ fn rotate_vec(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
 }
 
 fn emit_line(start: vec3<f32>, end: vec3<f32>, color: u32) {
-    let max_vertices = 65536u;  // 32768 lines * 2 == debug_lines capacity
+    // The buffer's own capacity (`DEBUG_MAX_LINES` in `system.rs`), so the two cannot disagree.
+    let max_vertices = arrayLength(&debug_lines);
     let vi = atomicAdd(&line_count, 2u); // 2 vertices per line
     if (vi >= max_vertices) {
         // Over capacity: undo the reservation so `line_count` (which is also the

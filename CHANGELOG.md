@@ -798,6 +798,21 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **The GPU bodies' collider overlay can no longer be turned on half-built, and costs nothing while
+  it shows nothing.** `GpuPhysicsSystem` held an empty placeholder bind group until `enable_debug`
+  built the real one. `toggle_debug` could turn the overlay on without it, and the next frame bound
+  the placeholder to a pipeline reading five buffers: measured, wgpu's `IncompatibleBindGroup`. And
+  `Renderer::enable_gpu_physics` turned the overlay on for every game, so each frame dispatched it
+  to make no lines: they are made only for `set_debug_flags`' flags, and only the editor sets any.
+  - The overlay is built whole with the system.
+  - Its passes run while `set_debug_flags` asks for something.
+  - `enable_debug` (whose device and flags arguments were unused), `toggle_debug` and the public
+    `debug_*` fields are gone.
+  - The shader reads the line buffer's capacity from the buffer (`arrayLength`) instead of a
+    second copy of the number.
+
+  `GpuPhysicsSystem::new` is 73 lines from 356: its buffers and its overlay are built by their own
+  parts. `the_collider_overlay_runs_on_its_flags_alone`.
 - **The GPU soft-body path (`gpu_physics`) is the CPU's step, with the element forces computed on
   the GPU.** Its shader had an integrator of its own, a copy of the CPU's that had drifted:
   - every body took the first body's `mu`, `lambda` and `damping`;

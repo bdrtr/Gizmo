@@ -41,9 +41,6 @@ fn run(cube_count: u32) {
             // empty: the field of cubes is this demo's, put in here.
             renderer.enable_gpu_physics();
             if let Some(physics) = renderer.gpu_physics.as_mut() {
-                if !physics.debug_enabled {
-                    physics.enable_debug(&renderer.device, 0);
-                }
                 let added = demo::gpu_box_field::add(physics, &renderer.queue, cube_count);
                 println!("    {added} küp tabloya girdi");
             }

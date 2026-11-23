@@ -158,25 +158,230 @@ pub struct GpuPhysicsSystem {
     /// The visible subset the culling pass compacts into, and the draw reads.
     pub culled_boxes_buffer: wgpu::Buffer,
 
-    // ═══ Debug Renderer ═══
-    /// Whether the debug overlay is generated this frame.
-    pub debug_enabled: bool,
-    /// The lines the debug compute pass emits.
-    pub debug_line_buffer: wgpu::Buffer,
-    /// How many it emitted, doubling as the indirect draw count — again, the CPU never learns the
-    /// number.
-    pub debug_line_count_buffer: wgpu::Buffer,
-    /// What the overlay should draw — see
-    /// [`DebugParams`].
-    pub debug_params_buffer: wgpu::Buffer,
-    /// The overlay's compute bind group.
-    pub debug_compute_bind_group: wgpu::BindGroup,
+    /// The collider overlay: lines made from the bodies and joints on the GPU and drawn over the
+    /// frame, while [`set_debug_flags`](Self::set_debug_flags) asks for any.
+    debug: DebugOverlay,
+}
+
+/// The solver's buffers, made together: the pipelines bind them all.
+struct SimBuffers {
+    boxes: wgpu::Buffer,
+    colliders: wgpu::Buffer,
+    awake_flags: wgpu::Buffer,
+    params: wgpu::Buffer,
+    grid_heads: wgpu::Buffer,
+    linked_nodes: wgpu::Buffer,
+    box_vertex: wgpu::Buffer,
+    box_index: wgpu::Buffer,
+    index_count: u32,
+    indirect: wgpu::Buffer,
+    culled_boxes: wgpu::Buffer,
+    joints: wgpu::Buffer,
+    box_contacts: wgpu::Buffer,
+    readback: wgpu::Buffer,
+}
+
+impl SimBuffers {
+    fn new(device: &wgpu::Device, max_boxes: u32, grid_size: u32, max_joints: u32, params: &PhysicsSimParams) -> Self {
+        let init = |label: &str, contents: &[u8], usage: wgpu::BufferUsages| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents, usage })
+        };
+        let empty = |label: &str, size: wgpu::BufferAddress, usage: wgpu::BufferUsages| {
+            device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage, mapped_at_creation: false })
+        };
+        let per_box = |size: usize| max_boxes as wgpu::BufferAddress * size as wgpu::BufferAddress;
+        use wgpu::BufferUsages as U;
+        // **Empty: every slot free.** The system is capacity, not a scene. It used to start with all
+        // `max_boxes` slots live — a grid of 50 000 one-kilo cubes falling from 30 m — and three
+        // static colliders (the ground plane, an 80 × 20 × 80 m platform round the origin and a wall
+        // beside it): the `1_milyon_kup` demo's scene, simulated and drawn in every game that turned
+        // GPU bodies on, whatever it put in itself (`kumas` hung its cloth inside the falling field).
+        // A game puts in what it wants (`add_box`, `add_boxes`, `add_collider`, or entities with a
+        // rigid body through the engine's submit path).
+        let boxes = init(
+            "GPU Physics Buffer",
+            bytemuck::cast_slice(&vec![GpuBox::FREE; max_boxes as usize]),
+            U::STORAGE | U::VERTEX | U::COPY_DST | U::COPY_SRC,
+        );
+        let colliders = init(
+            "GPU Static Colliders Buffer",
+            bytemuck::cast_slice(&vec![GpuCollider::NONE; MAX_STATIC_COLLIDERS as usize]),
+            U::STORAGE | U::COPY_DST,
+        );
+        let awake_flags =
+            init("GPU Physics Awake Flags Buffer", bytemuck::cast_slice(&vec![0u32; max_boxes as usize]), U::STORAGE | U::COPY_DST);
+        let params = init("GPU Physics Params Buffer", bytemuck::bytes_of(params), U::UNIFORM | U::COPY_DST);
+        let grid_heads =
+            init("GPU Physics Grid Heads Buffer", bytemuck::cast_slice(&vec![-1i32; grid_size as usize]), U::STORAGE | U::COPY_DST);
+        let linked_nodes =
+            init("GPU Physics Linked Nodes Buffer", bytemuck::cast_slice(&vec![-1i32; max_boxes as usize]), U::STORAGE | U::COPY_DST);
+        let (vertices, indices) = create_cube();
+        let box_vertex = init("Box Vertex Buffer", bytemuck::cast_slice(&crate::gpu_types::pack_vertices(&vertices)), U::VERTEX);
+        let box_index = init("Box Index Buffer", bytemuck::cast_slice(&indices), U::INDEX);
+        let indirect_data: [u32; 5] = [
+            indices.len() as u32, // vertex_count
+            0,                    // instance_count
+            0,                    // first_index
+            0,                    // base_vertex
+            0,                    // first_instance
+        ];
+        let indirect = init("Culling Indirect Buffer", bytemuck::cast_slice(&indirect_data), U::INDIRECT | U::STORAGE | U::COPY_DST);
+        Self {
+            boxes,
+            colliders,
+            awake_flags,
+            params,
+            grid_heads,
+            linked_nodes,
+            box_vertex,
+            box_index,
+            index_count: indices.len() as u32,
+            indirect,
+            culled_boxes: empty("Culled Boxes Buffer", per_box(std::mem::size_of::<GpuBox>()), U::STORAGE | U::VERTEX),
+            joints: empty(
+                "GPU Physics Joints Buffer",
+                max_joints as wgpu::BufferAddress * std::mem::size_of::<GpuJoint>() as wgpu::BufferAddress,
+                U::STORAGE | U::COPY_DST,
+            ),
+            // 352 bytes per box under std430 (see `GpuBoxContacts` for the offset walk). Driven by
+            // `size_of` so the CPU allocation and the shader's std430 element stride can never drift
+            // apart again.
+            box_contacts: empty("GPU Physics Box Contacts Cache", per_box(std::mem::size_of::<GpuBoxContacts>()), U::STORAGE | U::COPY_DST),
+            readback: empty("GPU Physics Readback Buffer", per_box(std::mem::size_of::<GpuBox>()), U::MAP_READ | U::COPY_DST),
+        }
+    }
+}
+
+/// How many lines the collider overlay holds. The shader reads its capacity from the buffer itself
+/// (`arrayLength`), so this is the one place it is set.
+const DEBUG_MAX_LINES: wgpu::BufferAddress = 32768;
+
+/// The collider overlay's resources, built with the system.
+///
+/// Until 2026-11-23 it was built in two halves: the pipelines with the system, and its bind group by
+/// `enable_debug`, the system holding an empty placeholder group until then. `toggle_debug` could
+/// turn the overlay on without it, and the next frame bound that empty group to a pipeline reading
+/// five buffers — a validation error. And the renderer turned it on for every game that used GPU
+/// bodies, so each frame dispatched it to draw nothing: lines are made only for the flags
+/// `set_debug_flags` sets, and only the editor sets any.
+struct DebugOverlay {
+    /// Which overlays are on, as [`DebugParams::show_wireframes`] holds them; the passes do nothing
+    /// while it is 0. Atomic because the flags are set through `&self`, from the editor's frame.
+    flags: std::sync::atomic::AtomicU32,
+    /// The lines the compute pass emits.
+    lines: wgpu::Buffer,
+    /// How many it emitted, doubling as the indirect draw count — the CPU never learns the number.
+    count: wgpu::Buffer,
+    /// What the overlay should draw — see [`DebugParams`].
+    params: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
     /// The pass that turns bodies and joints into line vertices.
-    pub debug_compute_pipeline: wgpu::ComputePipeline,
+    compute: wgpu::ComputePipeline,
     /// The pass that draws them.
-    pub debug_render_pipeline: wgpu::RenderPipeline,
-    /// The line buffer's capacity.
-    pub debug_max_lines: u32,
+    render: wgpu::RenderPipeline,
+}
+
+impl DebugOverlay {
+    fn new(
+        device: &wgpu::Device,
+        global_bind_group_layout: &wgpu::BindGroupLayout,
+        output_format: wgpu::TextureFormat,
+        depth_format: wgpu::TextureFormat,
+        max_boxes: u32,
+        boxes: &wgpu::Buffer,
+        joints: &wgpu::Buffer,
+    ) -> Self {
+        use crate::descriptors::{buffer_entry, compute_pipeline, whole_buffer_entries};
+        use wgpu::BufferBindingType::{Storage, Uniform};
+        use wgpu::BufferUsages as U;
+        let lines = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Debug Line Buffer"),
+            size: DEBUG_MAX_LINES * 2 * std::mem::size_of::<DebugVertex>() as wgpu::BufferAddress,
+            usage: U::STORAGE | U::VERTEX | U::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let count = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Debug Line Count"),
+            // IndirectDrawArgs: vertex_count, instance_count, first_vertex, first_instance
+            contents: bytemuck::cast_slice(&[0u32, 1u32, 0u32, 0u32]),
+            usage: U::STORAGE | U::INDIRECT | U::COPY_DST,
+        });
+        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Debug Params"),
+            contents: bytemuck::bytes_of(&DebugParams { num_boxes: max_boxes, num_joints: 0, show_wireframes: 0, _pad: 0 }),
+            usage: U::UNIFORM | U::COPY_DST,
+        });
+        let stage = wgpu::ShaderStages::COMPUTE;
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("debug_compute_layout"),
+            entries: &[
+                buffer_entry(0, stage, Uniform),
+                buffer_entry(1, stage, Storage { read_only: true }),
+                buffer_entry(2, stage, Storage { read_only: true }),
+                buffer_entry(3, stage, Storage { read_only: false }),
+                buffer_entry(4, stage, Storage { read_only: false }),
+            ],
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("debug_compute_bind_group"),
+            layout: &layout,
+            entries: &whole_buffer_entries(&[&params, boxes, joints, &lines, &count]),
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Physics Debug Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/physics_debug.wgsl").into()),
+        });
+        let pipeline_layout = |label: &str, group: &wgpu::BindGroupLayout| {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(label),
+                bind_group_layouts: &[Some(group)],
+                immediate_size: 0,
+            })
+        };
+        let compute = compute_pipeline(
+            device,
+            "Physics Debug Compute",
+            &pipeline_layout("Debug Compute Layout", &layout),
+            &shader,
+            "generate_debug_lines",
+        );
+        let render = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Physics Debug Lines"),
+            layout: Some(&pipeline_layout("Debug Render Layout", global_bind_group_layout)),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_debug"),
+                compilation_options: Default::default(),
+                buffers: &[Some(DebugVertex::desc())],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_debug"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: output_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::LineList, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: depth_format,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        Self { flags: std::sync::atomic::AtomicU32::new(0), lines, count, params, bind_group, compute, render }
+    }
+
+    fn on(&self) -> bool {
+        self.flags.load(Ordering::Relaxed) != 0
+    }
 }
 
 impl GpuPhysicsSystem {
@@ -188,153 +393,42 @@ impl GpuPhysicsSystem {
         output_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) -> Self {
-        // **Empty: every slot free.** The system is capacity, not a scene. It used to start with all
-        // `max_boxes` slots live — a grid of 50 000 one-kilo cubes falling from 30 m — and three
-        // static colliders (the ground plane, an 80 × 20 × 80 m platform round the origin and a wall
-        // beside it): the `1_milyon_kup` demo's scene, simulated and drawn in every game that turned
-        // GPU bodies on, whatever it put in itself (`kumas` hung its cloth inside the falling field).
-        // A game puts in what it wants (`add_box`, `add_boxes`, `add_collider`, or entities with a
-        // rigid body through the engine's submit path).
-        let initial_boxes = vec![GpuBox::FREE; max_boxes as usize];
-
-        let boxes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("GPU Physics Buffer"),
-            contents: bytemuck::cast_slice(&initial_boxes),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::VERTEX
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-        });
-
-        let initial_colliders = vec![GpuCollider::NONE; MAX_STATIC_COLLIDERS as usize];
-
-        let colliders_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("GPU Static Colliders Buffer"),
-            contents: bytemuck::cast_slice(&initial_colliders),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let initial_awake_flags: Vec<u32> = vec![0; max_boxes as usize];
-        let awake_flags_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("GPU Physics Awake Flags Buffer"),
-            contents: bytemuck::cast_slice(&initial_awake_flags),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-
         // The simulation steps on its own fixed-step clock, at 60 Hz until `update_params` says
         // otherwise; `advance` turns the game's time into whole steps of it.
         let clock = gizmo_core::time::PhysicsTime::new(60);
         let gravity = [0.0, -9.81, 0.0];
         let params = sim_params(clock.fixed_dt(), gravity, 0, 0, 0);
-
-        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("GPU Physics Params Buffer"),
-            contents: bytemuck::cast_slice(&[params]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
         let grid_size = 262144u32;
-        let initial_heads = vec![-1i32; grid_size as usize];
-        let grid_heads_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("GPU Physics Grid Heads Buffer"),
-            contents: bytemuck::cast_slice(&initial_heads),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let initial_nodes = vec![-1i32; max_boxes as usize];
-        let linked_nodes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("GPU Physics Linked Nodes Buffer"),
-            contents: bytemuck::cast_slice(&initial_nodes),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let (vertices, indices) = create_cube();
-
-        let box_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Box Vertex Buffer"),
-            contents: bytemuck::cast_slice(&crate::gpu_types::pack_vertices(&vertices)),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let box_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Box Index Buffer"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        let indirect_data: [u32; 5] = [
-            indices.len() as u32, // vertex_count
-            0,                    // instance_count
-            0,                    // first_index
-            0,                    // base_vertex
-            0,                    // first_instance
-        ];
-
-        let indirect_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Culling Indirect Buffer"),
-            contents: bytemuck::cast_slice(&indirect_data),
-            usage: wgpu::BufferUsages::INDIRECT
-                | wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let culled_boxes_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Culled Boxes Buffer"),
-            size: (max_boxes as wgpu::BufferAddress)
-                * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
-            mapped_at_creation: false,
-        });
-
-        // Joint buffer — max 16384 joints
         let max_joints = 16384u32;
-        let joints_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("GPU Physics Joints Buffer"),
-            size: (max_joints as wgpu::BufferAddress)
-                * std::mem::size_of::<GpuJoint>() as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // 352 bytes per box under std430 (see `GpuBoxContacts` for the offset
-        // walk). Driven by `size_of` so the CPU allocation and the shader's
-        // std430 element stride can never drift apart again.
-        let box_contacts_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("GPU Physics Box Contacts Cache"),
-            size: (max_boxes as wgpu::BufferAddress)
-                * std::mem::size_of::<GpuBoxContacts>() as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
+        let b = SimBuffers::new(device, max_boxes, grid_size, max_joints, &params);
         let pipelines = create_physics_pipelines(
             device,
             global_bind_group_layout,
             output_format,
             depth_format,
-            &params_buffer,
-            &boxes_buffer,
-            &grid_heads_buffer,
-            &linked_nodes_buffer,
-            &colliders_buffer,
-            &awake_flags_buffer,
-            &joints_buffer,
-            &box_contacts_buffer,
-            &culled_boxes_buffer,
-            &indirect_buffer,
+            &b.params,
+            &b.boxes,
+            &b.grid_heads,
+            &b.linked_nodes,
+            &b.colliders,
+            &b.awake_flags,
+            &b.joints,
+            &b.box_contacts,
+            &b.culled_boxes,
+            &b.indirect,
         );
-
+        let debug = DebugOverlay::new(device, global_bind_group_layout, output_format, depth_format, max_boxes, &b.boxes, &b.joints);
         Self {
             max_boxes,
             grid_size,
-            boxes_buffer,
-            params_buffer,
-            grid_heads_buffer,
-            linked_nodes_buffer,
-            box_contacts_buffer,
-            colliders_buffer,
-            awake_flags_buffer,
-            joints_buffer,
+            boxes_buffer: b.boxes,
+            params_buffer: b.params,
+            grid_heads_buffer: b.grid_heads,
+            linked_nodes_buffer: b.linked_nodes,
+            box_contacts_buffer: b.box_contacts,
+            colliders_buffer: b.colliders,
+            awake_flags_buffer: b.awake_flags,
+            joints_buffer: b.joints,
             joint_count: 0,
             max_joints,
             clock,
@@ -355,186 +449,14 @@ impl GpuPhysicsSystem {
             first_copy: vec![0; max_boxes as usize],
             params,
             pipelines,
-            box_vertex_buffer,
-            box_index_buffer,
-            index_count: indices.len() as u32,
-
-            readback_buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("GPU Physics Readback Buffer"),
-                size: (max_boxes as wgpu::BufferAddress)
-                    * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
+            box_vertex_buffer: b.box_vertex,
+            box_index_buffer: b.box_index,
+            index_count: b.index_count,
+            readback_buffer: b.readback,
             readback_state: Arc::new(AtomicU8::new(0)),
-
-            indirect_buffer,
-            culled_boxes_buffer,
-
-            // Debug Renderer — bind group ve pipeline enable_debug() ile oluşturulur
-            debug_enabled: false,
-            debug_line_buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Debug Line Buffer"),
-                size: 32768 * 2 * std::mem::size_of::<DebugVertex>() as wgpu::BufferAddress,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::VERTEX
-                    | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            debug_line_count_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Debug Line Count"),
-                contents: bytemuck::cast_slice(&[0u32, 1u32, 0u32, 0u32]), // IndirectDrawArgs: vertex_count, instance_count, first_vertex, first_instance
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::INDIRECT
-                    | wgpu::BufferUsages::COPY_DST,
-            }),
-            debug_params_buffer: {
-                let dp = DebugParams {
-                    num_boxes: max_boxes,
-                    num_joints: 0,
-                    show_wireframes: 0,
-                    _pad: 0,
-                };
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Debug Params"),
-                    contents: bytemuck::cast_slice(&[dp]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                })
-            },
-            // Dummy — enable_debug() ile yeniden oluşturulur
-            debug_compute_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    entries: &[],
-                    label: Some("empty_layout"),
-                }),
-                entries: &[],
-                label: Some("debug_placeholder"),
-            }),
-            debug_compute_pipeline: {
-                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Physics Debug Compute Shader"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        include_str!("../shaders/physics_debug.wgsl").into(),
-                    ),
-                });
-                let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Debug Compute Layout"),
-                    bind_group_layouts: &[Some(&device.create_bind_group_layout(
-                        &wgpu::BindGroupLayoutDescriptor {
-                            entries: &[
-                                wgpu::BindGroupLayoutEntry {
-                                    binding: 0,
-                                    visibility: wgpu::ShaderStages::COMPUTE,
-                                    ty: wgpu::BindingType::Buffer {
-                                        ty: wgpu::BufferBindingType::Uniform,
-                                        has_dynamic_offset: false,
-                                        min_binding_size: None,
-                                    },
-                                    count: None,
-                                },
-                                wgpu::BindGroupLayoutEntry {
-                                    binding: 1,
-                                    visibility: wgpu::ShaderStages::COMPUTE,
-                                    ty: wgpu::BindingType::Buffer {
-                                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                        has_dynamic_offset: false,
-                                        min_binding_size: None,
-                                    },
-                                    count: None,
-                                },
-                                wgpu::BindGroupLayoutEntry {
-                                    binding: 2,
-                                    visibility: wgpu::ShaderStages::COMPUTE,
-                                    ty: wgpu::BindingType::Buffer {
-                                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                        has_dynamic_offset: false,
-                                        min_binding_size: None,
-                                    },
-                                    count: None,
-                                },
-                                wgpu::BindGroupLayoutEntry {
-                                    binding: 3,
-                                    visibility: wgpu::ShaderStages::COMPUTE,
-                                    ty: wgpu::BindingType::Buffer {
-                                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                                        has_dynamic_offset: false,
-                                        min_binding_size: None,
-                                    },
-                                    count: None,
-                                },
-                                wgpu::BindGroupLayoutEntry {
-                                    binding: 4,
-                                    visibility: wgpu::ShaderStages::COMPUTE,
-                                    ty: wgpu::BindingType::Buffer {
-                                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                                        has_dynamic_offset: false,
-                                        min_binding_size: None,
-                                    },
-                                    count: None,
-                                },
-                            ],
-                            label: Some("debug_compute_layout_inner"),
-                        },
-                    ))],
-                    immediate_size: 0,
-                });
-                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("Physics Debug Compute"),
-                    layout: Some(&layout),
-                    module: &shader,
-                    entry_point: Some("generate_debug_lines"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                })
-            },
-            debug_render_pipeline: {
-                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Physics Debug Shader"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        include_str!("../shaders/physics_debug.wgsl").into(),
-                    ),
-                });
-                let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Debug Render Layout"),
-                    bind_group_layouts: &[Some(global_bind_group_layout)],
-                    immediate_size: 0,
-                });
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("Physics Debug Lines"),
-                    layout: Some(&layout),
-                    vertex: wgpu::VertexState {
-                        module: &shader,
-                        entry_point: Some("vs_debug"),
-                        compilation_options: Default::default(),
-                        buffers: &[Some(DebugVertex::desc())],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &shader,
-                        entry_point: Some("fs_debug"),
-                        compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: output_format,
-                            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::LineList,
-                        ..Default::default()
-                    },
-                    depth_stencil: Some(wgpu::DepthStencilState {
-                        format: depth_format,
-                        depth_write_enabled: Some(false),
-                        depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                        stencil: wgpu::StencilState::default(),
-                        bias: wgpu::DepthBiasState::default(),
-                    }),
-                    multisample: wgpu::MultisampleState::default(),
-                    multiview_mask: None,
-            cache: None,
-                })
-            },
-            debug_max_lines: 32768,
+            indirect_buffer: b.indirect,
+            culled_boxes_buffer: b.culled_boxes,
+            debug,
         }
     }
 
@@ -864,109 +786,18 @@ impl GpuPhysicsSystem {
         &self.clock
     }
 
-    /// Enables the debug visualisation, building the bind group from the real buffer
-    /// references.
-    pub fn enable_debug(&mut self, device: &wgpu::Device, _show_flags: u32) {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-            label: Some("debug_compute_layout"),
-        });
-
-        self.debug_compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.debug_params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.boxes_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.joints_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: self.debug_line_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: self.debug_line_count_buffer.as_entire_binding(),
-                },
-            ],
-            label: Some("debug_compute_bind_group"),
-        });
-
-        self.debug_enabled = true;
-    }
-
-    /// Turns the debug visualisation on or off.
-    pub fn toggle_debug(&mut self) {
-        self.debug_enabled = !self.debug_enabled;
-    }
-
-    /// Updates the debug flags (show_wireframes).
+    /// Which overlays the collider overlay draws: bit 0 the boxes' wireframes, bit 1 the joints, bit 2
+    /// the velocities ([`DebugParams::show_wireframes`]). With none (0, as the system starts) its
+    /// passes record nothing.
     pub fn set_debug_flags(&self, queue: &wgpu::Queue, show_wireframes: u32) {
+        self.debug.flags.store(show_wireframes, Ordering::Relaxed);
         let dp = DebugParams {
             num_boxes: self.max_boxes,
             num_joints: self.joint_count,
             show_wireframes,
             _pad: 0,
         };
-        queue.write_buffer(&self.debug_params_buffer, 0, bytemuck::cast_slice(&[dp]));
+        queue.write_buffer(&self.debug.params, 0, bytemuck::bytes_of(&dp));
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
@@ -1064,20 +895,20 @@ impl GpuPhysicsSystem {
 
     /// Records the dispatch that generates the debug overlay's lines.
     pub fn debug_compute_pass(&self, encoder: &mut wgpu::CommandEncoder) {
-        if !self.debug_enabled {
+        if !self.debug.on() {
             return;
         }
 
         // Clear line count to 0 (4 bytes)
-        encoder.clear_buffer(&self.debug_line_count_buffer, 0, Some(4));
+        encoder.clear_buffer(&self.debug.count, 0, Some(4));
 
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Physics Debug Compute Pass"),
             timestamp_writes: None,
         });
 
-        cpass.set_pipeline(&self.debug_compute_pipeline);
-        cpass.set_bind_group(0, &self.debug_compute_bind_group, &[]);
+        cpass.set_pipeline(&self.debug.compute);
+        cpass.set_bind_group(0, &self.debug.bind_group, &[]);
         // Enough workgroups for every slot in use and every joint; free slots draw no lines.
         cpass.dispatch_workgroups(
             self.box_high_water
@@ -1094,14 +925,14 @@ impl GpuPhysicsSystem {
         rpass: &mut wgpu::RenderPass<'a>,
         global_bind_group: &'a wgpu::BindGroup,
     ) {
-        if !self.debug_enabled {
+        if !self.debug.on() {
             return;
         }
 
-        rpass.set_pipeline(&self.debug_render_pipeline);
+        rpass.set_pipeline(&self.debug.render);
         rpass.set_bind_group(0, global_bind_group, &[]);
-        rpass.set_vertex_buffer(0, self.debug_line_buffer.slice(..));
-        rpass.draw_indirect(&self.debug_line_count_buffer, 0);
+        rpass.set_vertex_buffer(0, self.debug.lines.slice(..));
+        rpass.draw_indirect(&self.debug.count, 0);
     }
 
     /// Asks for a copy of the body buffer, if no readback is already in flight.
@@ -1218,4 +1049,38 @@ fn create_cube() -> (Vec<crate::gpu_types::Vertex>, Vec<u32>) {
     }
 
     (vertices, indices)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The collider overlay is whole from the start: its flags alone turn it on, and its dispatch is
+    /// valid. Until 2026-11-23 its bind group was made by `enable_debug` and an empty placeholder
+    /// stood in until then. Turned on without it (`toggle_debug`), the dispatch bound that group to a
+    /// pipeline reading five buffers; measured on the old code, wgpu's `IncompatibleBindGroup`
+    /// (`empty_layout` given, `debug_compute_layout_inner` expected).
+    #[test]
+    fn the_collider_overlay_runs_on_its_flags_alone() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        pollster::block_on(async {
+            let Some((device, queue)) = crate::test_gpu::headless_device().await else {
+                eprintln!("skipped: no GPU");
+                return;
+            };
+            let layouts = crate::pipeline::layouts::build_layouts(&device);
+            let physics =
+                GpuPhysicsSystem::new(&device, 64, &layouts.global, wgpu::TextureFormat::Rgba16Float, wgpu::TextureFormat::Depth32Float);
+            assert!(!physics.debug.on(), "off until a flag asks for a line");
+            physics.set_debug_flags(&queue, 1);
+            assert!(physics.debug.on());
+            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            physics.debug_compute_pass(&mut encoder);
+            queue.submit(Some(encoder.finish()));
+            assert!(scope.pop().await.is_none(), "the overlay's dispatch is valid");
+            physics.set_debug_flags(&queue, 0);
+            assert!(!physics.debug.on(), "and off again with no flag");
+        });
+    }
 }

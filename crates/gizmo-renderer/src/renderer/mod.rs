@@ -476,15 +476,13 @@ impl Renderer {
         if self.gpu_physics.is_some() {
             return;
         }
-        let mut physics = crate::gpu_physics::GpuPhysicsSystem::new(
+        self.gpu_physics = Some(crate::gpu_physics::GpuPhysicsSystem::new(
             &self.device,
             50_000,
             &self.scene.global_bind_group_layout,
             wgpu::TextureFormat::Rgba16Float,
             wgpu::TextureFormat::Depth32Float,
-        );
-        physics.enable_debug(&self.device, 0);
-        self.gpu_physics = Some(physics);
+        ));
     }
 
     /// Builds screen-space reflections, at the renderer's size, unless they are there: **the way
