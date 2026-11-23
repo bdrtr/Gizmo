@@ -549,6 +549,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A vehicle's powertrain says the rest of what a game's needs** (`nfsu2-gizmo`'s
+  `MOTOR-NOTLARI.md` #21, which wrote NFSU2's around the engine's step: the throttle cut before
+  it, engine braking taken off the wheels' spin after it). `VehicleTuning` gains a shift's two
+  halves (`shift_cut_share`: the part with the clutch open, no torque, before
+  `shift_torque_share` holds), a limiter's hysteresis (`fuel_resume_rpm`, state
+  `VehicleController::fuel_cut`, `fuel_is_cut`), braking with the fuel cut
+  (`fuel_cut_brake_share`, whatever the throttle — nothing is burning), and the overrun
+  (`overrun_share`, the net crank torque scaled when the engine brakes harder than it drives).
+  Each off by default. Two rules with them, which only a car that sets these knobs sees: no
+  engine braking while a shift is under way or at idle (the clutch is open, or slips), and
+  `shift_to` out of neutral or reverse takes no shift time (a pull-away, not a gear change).
+  `a_shift_has_two_halves_a_limiter_holds_its_cut_and_the_brake_has_three_shapes`.
 - **`sabir`, a game of Klondike** — the engine's first card game: seven columns, the stock, four
   foundations; a card and the ones on it dragged together, a double click sends one home, undo,
   a new deal, and the rest played out by itself once every card is face up. Each move slides from

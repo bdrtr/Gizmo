@@ -691,9 +691,25 @@ pub struct VehicleTuning {
     /// The share of the engine's torque that reaches the wheels during a shift — `0` cuts it
     /// (the default), `0.7` keeps most of it.
     pub shift_torque_share: f32,
+    /// The first part of a shift, as a share of [`shift_time`](Self::shift_time), in which no
+    /// torque reaches the wheels at all — the clutch opening — before
+    /// [`shift_torque_share`](Self::shift_torque_share) holds for the rest, the clutch closing. `0`
+    /// (the default): the share holds for the whole shift. NFSU2's: a third.
+    pub shift_cut_share: f32,
     /// Above this many rpm the engine makes no torque — a rev limiter that cuts fuel, rather than
     /// the rpm clamp at [`max_rpm`](Self::max_rpm) alone. `None` (the default): no cut.
     pub fuel_cut_rpm: Option<f32>,
+    /// Once cut, the fuel comes back only below this many rpm: a limiter's hysteresis, so it does
+    /// not flicker on and off at one rpm. `None` (the default): as soon as the rpm is below
+    /// [`fuel_cut_rpm`](Self::fuel_cut_rpm).
+    pub fuel_resume_rpm: Option<f32>,
+    /// How hard the engine brakes while its fuel is cut, as a share of
+    /// [`engine_brake_curve`](Self::engine_brake_curve) — whatever the throttle, since nothing is
+    /// burning. `1` (the default) is the closed throttle's braking; NFSU2's is twice it.
+    pub fuel_cut_brake_share: f32,
+    /// When the engine brakes harder than it drives — on the overrun — the net torque at the crank
+    /// is scaled by this. `1` (the default): as it is; NFSU2's is 0.85.
+    pub overrun_share: f32,
     /// Engine braking: `(rpm, N·m)` points of the torque a closed throttle drags the engine down
     /// with, interpolated as [`torque_curve`](Self::torque_curve) is. Applied as
     /// `(1 − throttle) · curve(rpm)` to the driven wheels through the gearbox, against their spin —
@@ -725,7 +741,11 @@ impl Default for VehicleTuning {
             torque_curve: Vec::new(),
             shift_time: 0.0,
             shift_torque_share: 0.0,
+            shift_cut_share: 0.0,
             fuel_cut_rpm: None,
+            fuel_resume_rpm: None,
+            fuel_cut_brake_share: 1.0,
+            overrun_share: 1.0,
             engine_brake_curve: Vec::new(),
         }
     }
@@ -849,6 +869,9 @@ pub struct VehicleController {
     pub extra_crank_torque: f32,
     /// State: seconds left of the gear change in progress — see [`VehicleTuning::shift_time`].
     pub shift_remaining: f32,
+    /// State: the rev limiter has cut the fuel, and it has not come back yet — see
+    /// [`VehicleTuning::fuel_resume_rpm`].
+    pub fuel_cut: bool,
 }
 
 #[cfg(feature = "ecs")]
@@ -873,6 +896,7 @@ impl Default for VehicleController {
             drivetrain: Drivetrain::Rwd,
             extra_crank_torque: 0.0,
             shift_remaining: 0.0,
+            fuel_cut: false,
         }
     }
 }
@@ -949,25 +973,60 @@ impl VehicleController {
             Self::torque_from_curve(&t.torque_curve, self.engine_rpm)
         };
         let t = &self.tuning;
-        if t.fuel_cut_rpm.is_some_and(|cut| self.engine_rpm >= cut) {
+        if self.fuel_is_cut() {
             return 0.0;
         }
         let made = nm * self.throttle_input.abs() + self.extra_crank_torque;
         if self.shift_remaining > 0.0 {
-            made * t.shift_torque_share
+            // The clutch opening carries nothing; closing, the share.
+            let elapsed = 1.0 - self.shift_remaining / t.shift_time.max(1e-6);
+            if elapsed < t.shift_cut_share {
+                0.0
+            } else {
+                made * t.shift_torque_share
+            }
         } else {
             made
         }
     }
 
+    /// Whether the rev limiter has the fuel cut at the current rpm: from [`VehicleTuning::fuel_cut_rpm`]
+    /// up while it is not, and down to [`VehicleTuning::fuel_resume_rpm`] once it is ([`fuel_cut`](Self::fuel_cut)
+    /// is the last step's answer).
+    pub fn fuel_is_cut(&self) -> bool {
+        let t = &self.tuning;
+        let Some(cut) = t.fuel_cut_rpm else { return false };
+        if self.fuel_cut {
+            self.engine_rpm >= t.fuel_resume_rpm.unwrap_or(cut)
+        } else {
+            self.engine_rpm >= cut
+        }
+    }
+
     /// Engine braking at the crank, in N·m, ≥ 0: `(1 − throttle) · engine_brake_curve(rpm)` — see
-    /// [`VehicleTuning::engine_brake_curve`]. Zero with no curve.
+    /// [`VehicleTuning::engine_brake_curve`]. Zero with no curve, while a shift is under way (the
+    /// clutch is open) and at idle (the clutch slips: the wheels turn the engine slower than it
+    /// idles). With the fuel cut, [`fuel_cut_brake_share`](VehicleTuning::fuel_cut_brake_share)
+    /// of the curve whatever the throttle; on the overrun, the net crank torque scaled by
+    /// [`overrun_share`](VehicleTuning::overrun_share).
     pub fn engine_brake_torque(&self) -> f32 {
-        let curve = &self.tuning.engine_brake_curve;
-        if curve.is_empty() {
+        let t = &self.tuning;
+        if t.engine_brake_curve.is_empty() || self.shift_remaining > 0.0 || self.engine_rpm <= t.idle_rpm {
             return 0.0;
         }
-        (1.0 - self.throttle_input.abs().min(1.0)) * Self::torque_from_curve(curve, self.engine_rpm)
+        let curve = Self::torque_from_curve(&t.engine_brake_curve, self.engine_rpm);
+        if self.fuel_is_cut() {
+            return t.fuel_cut_brake_share * curve;
+        }
+        let brake = (1.0 - self.throttle_input.abs().min(1.0)) * curve;
+        // The net at the crank is `drive − brake`; past zero it is scaled, which is the brake
+        // giving `drive + share · (brake − drive)`.
+        let drive = self.engine_torque();
+        if brake > drive {
+            drive + t.overrun_share * (brake - drive)
+        } else {
+            brake
+        }
     }
 
     /// Changes gear by hand, with the shift taking [`VehicleTuning::shift_time`] — what the
@@ -975,8 +1034,11 @@ impl VehicleController {
     /// shifts instantly.
     pub fn shift_to(&mut self, gear: usize) {
         if gear != self.current_gear {
+            // Out of neutral or reverse is a pull-away, not a gear change: no shift time.
+            if gear >= 2 && self.current_gear >= 2 {
+                self.shift_remaining = self.tuning.shift_time;
+            }
             self.current_gear = gear;
-            self.shift_remaining = self.tuning.shift_time;
         }
     }
 

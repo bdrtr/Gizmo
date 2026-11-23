@@ -402,6 +402,7 @@ fn drive_for_step(vehicle: &mut VehicleController, dt: f32) -> Drive {
         (wheel_rpm * total_ratio.abs()).clamp(vehicle.tuning.idle_rpm, vehicle.tuning.max_rpm);
 
     vehicle.shift_remaining = (vehicle.shift_remaining - dt).max(0.0);
+    vehicle.fuel_cut = vehicle.fuel_is_cut();
     let engine_torque = vehicle.engine_torque();
     // Engine braking at the driven wheels, against their spin like a brake (it never drives a
     // stopped car backwards): the crank's drag through the gearbox, shared out like the torque.
@@ -1236,6 +1237,64 @@ mod tests {
         auto.engine_rpm = auto.tuning.upshift_rpm + 1.0;
         auto.auto_shift_tick(0.016);
         assert_eq!((auto.current_gear, auto.shift_remaining), (3, 0.4), "the automatic box arms the shift too");
+    }
+
+    /// **A shift opens the clutch and then closes it; a limiter holds its cut; the engine brakes
+    /// harder with no fuel and less on the overrun; not with the clutch open** — what a game needs
+    /// to write NFSU2's powertrain in the engine's knobs (`nfsu2-gizmo` MOTOR-NOTLARI #21). Each
+    /// knob off by default leaves the crank as it was.
+    #[test]
+    fn a_shift_has_two_halves_a_limiter_holds_its_cut_and_the_brake_has_three_shapes() {
+        let mut vc = VehicleController::new();
+        vc.tuning.torque_curve = vec![(0.0, 300.0), (9000.0, 300.0)];
+        vc.tuning.engine_brake_curve = vec![(0.0, 100.0), (9000.0, 100.0)];
+        vc.throttle_input = 1.0;
+        vc.engine_rpm = 4000.0;
+        // A third of half a second with no torque, then 70 %.
+        vc.tuning.shift_time = 0.5;
+        vc.tuning.shift_torque_share = 0.7;
+        vc.tuning.shift_cut_share = 1.0 / 3.0;
+        vc.shift_to(3);
+        assert_eq!(vc.engine_torque(), 0.0, "the clutch opening carries nothing");
+        vc.shift_remaining = 0.2;
+        assert!((vc.engine_torque() - 210.0).abs() < 1e-3, "closing, 70 %: {}", vc.engine_torque());
+        vc.throttle_input = 0.0;
+        assert_eq!(vc.engine_brake_torque(), 0.0, "no engine braking with the clutch open");
+        vc.shift_remaining = 0.0;
+        assert_eq!(vc.engine_brake_torque(), 100.0, "closed throttle, the curve");
+        // Out of neutral is a pull-away, not a shift.
+        let mut launch = vc.clone();
+        launch.current_gear = 1;
+        launch.shift_to(2);
+        assert_eq!(launch.shift_remaining, 0.0, "a pull-away takes no shift time");
+        // Below idle the clutch slips: no braking.
+        let mut idle = vc.clone();
+        idle.engine_rpm = idle.tuning.idle_rpm;
+        assert_eq!(idle.engine_brake_torque(), 0.0, "an idling engine does not brake");
+        // The limiter cuts at 6000, comes back below 5900, and brakes twice as hard while cut.
+        vc.tuning.fuel_cut_rpm = Some(6000.0);
+        vc.tuning.fuel_resume_rpm = Some(5900.0);
+        vc.tuning.fuel_cut_brake_share = 2.0;
+        vc.throttle_input = 1.0;
+        vc.engine_rpm = 6000.0;
+        vc.fuel_cut = vc.fuel_is_cut();
+        assert!(vc.fuel_cut && vc.engine_torque() == 0.0, "cut at the limit");
+        assert_eq!(vc.engine_brake_torque(), 200.0, "with the fuel cut, twice the curve whatever the throttle");
+        vc.engine_rpm = 5950.0;
+        vc.fuel_cut = vc.fuel_is_cut();
+        assert!(vc.fuel_cut, "still cut above the resume rpm");
+        vc.engine_rpm = 5899.0;
+        vc.fuel_cut = vc.fuel_is_cut();
+        assert!(!vc.fuel_cut && vc.engine_torque() == 300.0, "back below it");
+        // The overrun: half throttle makes 150 and brakes 50 — no overrun; a quarter makes 75 and
+        // brakes 75 — none either; an eighth makes 37.5 against 87.5, and the 50 of net braking
+        // is scaled to 42.5.
+        vc.tuning.overrun_share = 0.85;
+        vc.throttle_input = 0.5;
+        assert_eq!(vc.engine_brake_torque(), 50.0);
+        vc.throttle_input = 0.125;
+        let net = vc.engine_torque() - vc.engine_brake_torque();
+        assert!((net + 42.5).abs() < 1e-3, "net on the overrun, scaled: {net}");
     }
 
     /// **Engine braking slows a coasting car and never drives a stopped one backwards**, and drag
