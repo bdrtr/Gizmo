@@ -50,6 +50,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`domino`, thirty stones along a path that bends.** A straight, a quarter circle and a
+  straight; stones 10 cm thick and 1 m tall, 0.5 m apart, standing asleep until a thrown ball
+  tips the first. `--test` checks:
+  - every stone stood and slept before the throw;
+  - all thirty fell in order (the wave runs at 3.3 m/s, 1.05 √(g·h));
+  - none left its place;
+  - the pile came to rest asleep at the angle its geometry sets: two stones touch when their
+    perpendicular gap is a thickness, `cos θ = thickness / spacing`, 78.5°, every stone within
+    1.6° of it.
+
+  Tried at 2 cm stones and at 0.8 and 0.95 m spacing too: the same, at 87.7°, 82.8° and 84.0°.
+  It found nothing to fix.
 - **`bilardo`, a billiards table at real scale.** A 2.54 × 1.27 m cloth, 28.6 mm balls of 170 g,
   cushions, and six pockets as triggers under the cloth's edge. It sets its own restitution
   threshold for its scale (`ConstraintSolver::restitution_velocity_threshold`). `--test` plays
