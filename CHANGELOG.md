@@ -549,6 +549,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **An Android game survives the screen going off, or the home button, while it starts.** The
+  renderer's pipelines — some fifteen seconds on an Adreno 618 — were built inside the first
+  `resumed`, on the event loop's thread, and the system waits on that thread at every turn of the
+  app's life: a pause in those seconds held its UI thread 14.8 s, input waited more than eight, and
+  it killed the game (`Input dispatching timed out … FocusEvent(hasFocus=false)`), or the game came
+  back with nothing on the screen. They are built on a thread of their own now while the loop goes
+  on answering: `Renderer::start` does what touches the window — instance, surface, adapter, device,
+  the surface configured — and `RendererStart::split` hands the rest (`RendererGpu::build`) away;
+  `Renderer::attach_surface` puts them together, with a new surface where the window went and came
+  back meanwhile. Every native app starts so; `Renderer::new` is the two on one thread.
+  - **Fixed with it:** the loop ran with `ControlFlow::Poll`, so with the screen off — Android stops
+    the redraws and keeps the window — it went round with nothing to do, a core at 100 %. It waits
+    now (`ControlFlow::Wait`); every frame still asks for the next.
 - **The forward-only path draws a decal over its own pixels only.** Its lit pipelines had the decal
   code in them while a frame had a decal, and an Adreno 618 paid about 5 ms for it over every lit
   pixel. They are built without it now. The opaque lit draws a decal's box meets are drawn a second

@@ -146,12 +146,60 @@ impl<State: 'static> App<State> {
     /// Build the renderer, user state, and editor once the window exists (called
     /// from `resumed`). Stores the resulting runtime into `self`.
     #[cfg(not(target_arch = "wasm32"))]
-    async fn initialize(
-        &mut self,
-        window: Arc<winit::window::Window>,
-    ) -> Result<(), crate::AppError> {
-        #[cfg_attr(target_os = "android", allow(unused_mut))]
-        let mut renderer = Renderer::new(window.clone()).await;
+    /// Begins the renderer on `window` — what touches the window, here (`Renderer::start`) — and builds
+    /// its pipelines on a thread of their own, which hands the renderer to `try_finish_init` and wakes
+    /// the loop. See `PendingInit` for why not here.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn begin_initialize(&mut self, window: Arc<winit::window::Window>) {
+        let (instance, surface, gpu) = pollster::block_on(Renderer::start(window.clone())).split();
+        let (handed, built) = std::sync::mpsc::sync_channel(1);
+        let waker = window.clone();
+        let builder = std::thread::Builder::new()
+            .name("gizmo-renderer-build".into())
+            .spawn(move || {
+                let _ = handed.send(gpu.build());
+                waker.request_redraw();
+            })
+            .expect("the renderer's build thread could not be started");
+        self.pending_init = Some(super::PendingInit {
+            window,
+            instance,
+            surface: Some(surface),
+            on_screen: true,
+            built,
+            builder: Some(builder),
+        });
+    }
+
+    /// Native: if the renderer `begin_initialize` started has been built, gives it its surface — or a
+    /// new one, where the window went and came back meanwhile — and runs the rest of the
+    /// initialization. Nothing while it is being built; until then `handle_event` returns early, as
+    /// `self.window` is `None`. A build that panicked panics here, with its message.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn try_finish_init(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(pending) = self.pending_init.as_mut() else { return };
+        let mut renderer = match pending.built.try_recv() {
+            Ok(renderer) => renderer,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                let result = pending.builder.take().map(std::thread::JoinHandle::join);
+                let message = match result {
+                    Some(Err(payload)) => payload
+                        .downcast_ref::<&str>()
+                        .map(|s| (*s).to_string())
+                        .or_else(|| payload.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "a panic with no message".into()),
+                    _ => "the build thread ended without a renderer".into(),
+                };
+                panic!("building the renderer failed: {message}")
+            }
+        };
+        let Some(pending) = self.pending_init.take() else { return };
+        let had_surface = pending.surface.is_some();
+        renderer.attach_surface(pending.instance, pending.surface);
+        if !had_surface && pending.on_screen {
+            renderer.resume_surface(pending.window.clone());
+        }
         // `GIZMO_VSYNC=0`: present without waiting for the display, for measuring a frame. With it on —
         // the default — a frame on a 60 Hz screen takes 16.7 ms whatever it cost, and one that misses a
         // refresh takes 33.3: what a frame time says is then the screen's, not the frame's.
@@ -159,12 +207,43 @@ impl<State: 'static> App<State> {
         if std::env::var("GIZMO_VSYNC").as_deref() == Ok("0") {
             renderer.set_present_mode(wgpu::PresentMode::AutoNoVsync);
         }
-        self.finish_initialize(window, renderer)
+        self.complete_initialize(pending.window, renderer, event_loop);
     }
 
-    /// The synchronous tail of initialization, shared by the native path
-    /// (`initialize`, via `pollster::block_on`) and the web path (the renderer
-    /// arrives later from a `spawn_local` future — see `try_finish_web_init`).
+    /// The renderer is here: the rest of the initialization, then the window's size as it is now — it
+    /// may have changed while the renderer was made, and the `Resized` that said so found none to
+    /// resize — and the first frame asked for. Both paths' end: the native build thread's and the web's
+    /// `spawn_local`.
+    fn complete_initialize(&mut self, window: Arc<winit::window::Window>, renderer: Renderer, event_loop: &ActiveEventLoop) {
+        if let Err(e) = self.finish_initialize(window.clone(), renderer) {
+            tracing::error!("App initialization failed: {}", e);
+            self.init_error = Some(e);
+            event_loop.exit();
+            return;
+        }
+        // The canvas's real size. The renderer was made from the window's size at creation, before
+        // the browser had laid the page out, and the `Resized` that then reported the real one came
+        // while the renderer was still being built and found none to resize: a phone's canvas
+        // stayed at 640 × 360, stretched over an upright screen, and the camera kept a landscape
+        // aspect. Apply it now, as that `Resized` would have.
+        let size = window.inner_size();
+        let effective = self.renderer_mut().map(|r| {
+            if r.size != size {
+                r.resize(size);
+            }
+            r.size
+        });
+        if let Some(effective) = effective {
+            let mut info = self.world.get_resource_mut_or_default::<gizmo_core::window::WindowInfo>();
+            info.width = effective.width as f32;
+            info.height = effective.height as f32;
+        }
+        window.request_redraw();
+    }
+
+    /// The synchronous tail of initialization, shared by the native path (`try_finish_init`, once the
+    /// build thread has made the renderer) and the web path (the renderer arrives later from a
+    /// `spawn_local` future — see `try_finish_web_init`).
     #[tracing::instrument(skip_all, name = "app_finish_initialize")]
     fn finish_initialize(
         &mut self,
@@ -307,37 +386,18 @@ impl<State: 'static> App<State> {
         };
         let window = pending.window.clone();
         self.pending_web_init = None;
-        if let Err(e) = self.finish_initialize(window.clone(), renderer) {
-            tracing::error!("App initialization failed: {}", e);
-            self.init_error = Some(e);
-            event_loop.exit();
-            return;
-        }
-        // The canvas's real size. The renderer was made from the window's size at creation, before
-        // the browser had laid the page out, and the `Resized` that then reported the real one came
-        // while the renderer was still being built and found none to resize: a phone's canvas
-        // stayed at 640 × 360, stretched over an upright screen, and the camera kept a landscape
-        // aspect. Apply it now, as that `Resized` would have.
-        let size = window.inner_size();
-        let effective = self.renderer_mut().map(|r| {
-            if r.size != size {
-                r.resize(size);
-            }
-            r.size
-        });
-        if let Some(effective) = effective {
-            let mut info = self.world.get_resource_mut_or_default::<gizmo_core::window::WindowInfo>();
-            info.width = effective.width as f32;
-            info.height = effective.height as f32;
-        }
-        // İlk kareyi tetikle — web'de sonraki kareler RedrawRequested
-        // zincirinden akar.
-        window.request_redraw();
+        self.complete_initialize(window, renderer, event_loop);
     }
 }
 
 impl<State: 'static> ApplicationHandler for App<State> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        // Back while the renderer is being built: it is given a new surface when it is done.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(pending) = self.pending_init.as_mut() {
+            pending.on_screen = true;
+            return;
+        }
         // `resumed` can fire more than once (e.g. on mobile); only build the
         // window + runtime the first time.
         if let Some(window) = self.window.clone() {
@@ -382,17 +442,10 @@ impl<State: 'static> ApplicationHandler for App<State> {
                 return;
             }
         };
+        // The pipelines are built off this thread; `try_finish_init` finishes the initialization when
+        // they are (an error there is stashed for `run` to return, as before).
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let Err(e) = pollster::block_on(self.initialize(window)) {
-                tracing::error!("App initialization failed: {}", e);
-                // Stash it so `run`/`run_default` can return the error after the
-                // loop exits — otherwise a missing setup hook / renderer failure
-                // would be silently swallowed and `run` would return `Ok(())`.
-                self.init_error = Some(e);
-                event_loop.exit();
-            }
-        }
+        self.begin_initialize(window);
         #[cfg(target_arch = "wasm32")]
         {
             // Web: `resumed` bloklayamaz. Async WebGPU init'i (adapter/device
@@ -417,6 +470,14 @@ impl<State: 'static> ApplicationHandler for App<State> {
     /// Off the screen: Android is about to destroy the native window, and the surface must not
     /// outlive it. Nothing is drawn until `resumed` makes another.
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        // Gone while the renderer is being built: its surface goes now, which the build never touches.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(pending) = self.pending_init.as_mut() {
+            tracing::info!("[App] suspended while the renderer is built: letting the surface go");
+            pending.surface = None;
+            pending.on_screen = false;
+            return;
+        }
         if let Some(renderer) = self.renderer_mut() {
             tracing::info!("[App] suspended: letting the surface go");
             renderer.suspend_surface();
@@ -431,12 +492,16 @@ impl<State: 'static> ApplicationHandler for App<State> {
     ) {
         #[cfg(target_arch = "wasm32")]
         self.try_finish_web_init(event_loop);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.try_finish_init(event_loop);
         self.handle_event(Event::WindowEvent { window_id, event }, event_loop);
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         #[cfg(target_arch = "wasm32")]
         self.try_finish_web_init(event_loop);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.try_finish_init(event_loop);
         self.handle_event(Event::AboutToWait, event_loop);
     }
 

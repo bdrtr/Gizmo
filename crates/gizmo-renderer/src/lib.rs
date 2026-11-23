@@ -321,7 +321,7 @@ pub use gpu_types::{
 pub use hot_reload::AssetWatcher;
 pub use pipeline::SceneState;
 pub use post_process::PostProcessState;
-pub use renderer::{RenderContext, Renderer};
+pub use renderer::{RenderContext, Renderer, RendererGpu, RendererStart};
 pub use gpu_context::GpuContext;
 pub use ssao::{SsaoParams, SsaoQuality, SsaoState};
 pub use ssgi::SsgiState;

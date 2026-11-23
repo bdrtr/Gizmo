@@ -57,13 +57,82 @@ pub(crate) fn within_pixel_budget(size: winit::dpi::PhysicalSize<u32>, budget: u
 }
 
 
+
+/// A renderer begun on a window ([`Renderer::start`]): what touches the window, done, and the GPU to
+/// build the rest on.
+pub struct RendererStart {
+    instance: wgpu::Instance,
+    surface: wgpu::Surface<'static>,
+    gpu: RendererGpu,
+}
+
+/// The device a [`RendererStart`] made, with the surface's configuration and size: everything
+/// [`build`](Self::build) needs, and nothing of the window. `Send`, so it can be built on another
+/// thread while the window stays with its own.
+pub struct RendererGpu {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+    size: winit::dpi::PhysicalSize<u32>,
+}
+
+impl RendererStart {
+    /// Builds the rest — every pipeline — and gives the renderer its surface.
+    #[must_use]
+    pub fn build(self) -> Renderer {
+        let mut renderer = self.gpu.build();
+        renderer.attach_surface(self.instance, Some(self.surface));
+        renderer
+    }
+
+    /// The instance and the surface, to keep with the window, and the GPU to build on
+    /// ([`RendererGpu::build`]) — elsewhere, while the window's thread goes on answering. The two
+    /// meet again in [`Renderer::attach_surface`].
+    #[must_use]
+    pub fn split(self) -> (wgpu::Instance, wgpu::Surface<'static>, RendererGpu) {
+        (self.instance, self.surface, self.gpu)
+    }
+}
+
+impl RendererGpu {
+    /// Every pipeline and pass, on this device: a renderer with no surface yet
+    /// ([`Renderer::attach_surface`]).
+    #[must_use]
+    pub fn build(self) -> Renderer {
+        Renderer::finish_construction(self.device, self.queue, None, self.config, self.size)
+    }
+}
+
+impl Renderer {
+    /// Gives a renderer built from a [`RendererGpu`] the instance and the surface it was begun with —
+    /// `None` where the window went while it was being built ([`suspend_surface`](Self::suspend_surface)
+    /// then, and [`resume_surface`](Self::resume_surface) when there is one again). The surface is
+    /// configured already ([`start`](Self::start)).
+    pub fn attach_surface(&mut self, instance: wgpu::Instance, surface: Option<wgpu::Surface<'static>>) {
+        self.instance = Some(instance);
+        self.surface = surface;
+    }
+}
+
 impl Renderer {
     /// Builds a renderer against a window: adapter, device, surface, and every pass the platform
     /// profile allows.
     ///
     /// On the web the render resolution is capped below the window size — see
     /// `cap_web_render_size` — and the heavy passes (deferred, SSAO, SSR, SSGI) are left `None`.
+    ///
+    /// [`start`](Self::start) and then [`RendererStart::build`], on this thread. An app whose event
+    /// loop must keep answering while the pipelines are made — Android's, which the system waits on —
+    /// builds on another ([`RendererStart::split`]).
     pub async fn new(window: Arc<Window>) -> Self {
+        Self::start(window).await.build()
+    }
+
+    /// The part of building a renderer that touches the window: the instance, the surface, the
+    /// adapter that can draw to it, the device, and the surface configured. Quick. What is left —
+    /// every pipeline, which takes an Adreno 618 some fifteen seconds — touches no window
+    /// ([`RendererStart::build`]).
+    pub async fn start(window: Arc<Window>) -> RendererStart {
         let size = cap_web_render_size(window.inner_size());
 
         #[cfg(target_arch = "wasm32")]
@@ -281,10 +350,9 @@ impl Renderer {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
+        surface.configure(&device, &config);
 
-        let mut renderer = Self::finish_construction(device, queue, Some(surface), config, size);
-        renderer.instance = Some(instance);
-        renderer
+        RendererStart { instance, surface, gpu: RendererGpu { device, queue, config, size } }
     }
 
     /// Probes whether a GPU adapter is available for headless rendering.
@@ -458,10 +526,7 @@ impl Renderer {
         config: wgpu::SurfaceConfiguration,
         size: winit::dpi::PhysicalSize<u32>,
     ) -> Self {
-        if let Some(ref surface) = surface {
-            surface.configure(&device, &config);
-        }
-
+        // A surface comes configured (`Renderer::start`, `attach_surface`).
         let depth_texture_view = Self::create_depth_texture(&device, config.width, config.height);
 
         let scene_state = crate::pipeline::build_scene_pipelines(&device, &queue);
@@ -746,5 +811,18 @@ mod budget_tests {
         assert_eq!((portrait.width, portrait.height), (350, 657));
         let small = PhysicalSize::new(300, 200);
         assert_eq!(within_pixel_budget(small, WEB_RENDER_PIXELS), small, "a small window is left alone");
+    }
+}
+
+#[cfg(test)]
+mod start_tests {
+    /// What an app builds off the thread the system waits on must be able to go there: Android's
+    /// event loop hands a [`RendererGpu`](super::RendererGpu) to a thread of its own and takes the
+    /// [`Renderer`](crate::Renderer) back (`gizmo-app`'s `PendingInit`).
+    #[test]
+    fn the_gpu_half_and_the_renderer_cross_threads() {
+        fn send<T: Send>() {}
+        send::<super::RendererGpu>();
+        send::<crate::Renderer>();
     }
 }

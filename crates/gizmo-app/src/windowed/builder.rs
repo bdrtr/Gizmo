@@ -52,6 +52,8 @@ impl<State: 'static> App<State> {
             app_state: None,
             #[cfg(target_arch = "wasm32")]
             pending_web_init: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_init: None,
             last_frame_time: None,
             light_time: 0.0,
             init_error: None,

@@ -33,6 +33,25 @@ struct PendingWebInit {
     renderer_slot: std::rc::Rc<std::cell::RefCell<Option<Renderer>>>,
 }
 
+/// Native: the renderer's pipelines being built on a thread of their own, while the event loop goes
+/// on answering the system. On Android the system waits on that loop for every turn of the app's life
+/// — a pause, the screen going off, the focus leaving — and the build takes an Adreno 618 some fifteen
+/// seconds: built inside `resumed`, a screen turned off in those seconds left the system's input
+/// waiting more than eight, and it killed the app (`Input dispatching timed out … FocusEvent`), or
+/// the app came back with nothing on the screen. The window's half — the instance, the surface —
+/// stays here, where the window's life is heard (`Renderer::start`, `RendererStart::split`).
+#[cfg(not(target_arch = "wasm32"))]
+struct PendingInit {
+    window: Arc<winit::window::Window>,
+    instance: wgpu::Instance,
+    /// `None` once the window has gone (`suspended`): the surface must not outlive it.
+    surface: Option<wgpu::Surface<'static>>,
+    /// Whether the app has a window on the screen now: `resumed` and `suspended` while it is built.
+    on_screen: bool,
+    built: std::sync::mpsc::Receiver<Renderer>,
+    builder: Option<std::thread::JoinHandle<()>>,
+}
+
 /// Plugin that registers the default renderer asset collections (`Assets<Mesh>` and
 /// `Assets<Material>`) and an [`AssetManager`](gizmo_renderer::asset::AssetManager) into the
 /// [`App`]'s world.
@@ -165,6 +184,9 @@ pub struct App<State: 'static = ()> {
     /// through this slot on the first wake-up.
     #[cfg(target_arch = "wasm32")]
     pending_web_init: Option<PendingWebInit>,
+    /// Native: the renderer being built off the event loop's thread (`PendingInit`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_init: Option<PendingInit>,
     last_frame_time: Option<FrameInstant>,
     light_time: f32,
     /// Set by `resumed` when lazy initialization (renderer build / setup hook)

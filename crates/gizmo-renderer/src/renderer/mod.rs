@@ -12,6 +12,7 @@ pub use crate::post_process::PostProcessState;
 // Each module holds `impl Renderer` blocks (private-field access preserved).
 mod assets;
 mod construction;
+pub use construction::{RendererGpu, RendererStart};
 // For a test device that binds what the desktop renderer's does (`test_gpu::headless_native_device`).
 #[cfg(all(test, not(gizmo_forward_only)))]
 pub(crate) use construction::{native_device_features, native_device_limits};

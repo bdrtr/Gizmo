@@ -208,7 +208,12 @@ impl<State: 'static> App<State> {
         let mut light_time = self.light_time;
 
         {
-                current_window.set_control_flow(ControlFlow::Poll);
+                // Wait, not Poll: every `AboutToWait` asks for the next frame (`request_redraw`), and
+                // a loop with a frame asked for does not wait — while the system lets it draw. When it
+                // does not — Android with the screen off, which stops the redraws and does not take
+                // the window — Poll ran the loop round with nothing to do, a core at 100 % for as long
+                // as the screen was off (measured 2026-11-24, on an Adreno 618 phone).
+                current_window.set_control_flow(ControlFlow::Wait);
 
                 // UI Entegrasyonu: Winit Olaylarını EGUI'ye Gönder
                 #[cfg(feature = "egui")]
