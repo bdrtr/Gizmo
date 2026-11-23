@@ -116,7 +116,10 @@ pub struct PhysicsMaterial {
     pub restitution: f32,
     /// Resistance to **rolling**, as a fraction of the normal force, in the same Coulomb
     /// form as [`dynamic_friction`](Self::dynamic_friction) but bounding a *torque* rather
-    /// than a tangential force. Zero by default, which is exactly the old behaviour.
+    /// than a tangential force: the textbook rolling-resistance coefficient, a torque of
+    /// `rolling_friction · N · r` through the rolling body's radius, so a rolling solid sphere
+    /// slows at `rolling_friction · g / 1.4` whatever its size. Zero by default, which is exactly
+    /// the old behaviour.
     ///
     /// **Sliding friction cannot stop a rolling ball, however large it is.** In pure rolling
     /// the contact point is instantaneously at rest, so Coulomb friction does no work there —
@@ -134,16 +137,14 @@ pub struct PhysicsMaterial {
     /// given rolling friction on a table left at the default rolls on forever (`robot`,
     /// 2026-11-04) — give both surfaces the value.
     ///
-    /// **Do not pick this value the way you would pick a rolling-resistance coefficient.** It is
-    /// not one, and choosing it for physical realism gets the wrong answer at both ends. Swept
-    /// against a rolling ball and against a settling pile (the table lives in
-    /// `tests/rolling_and_settling.rs`): a pile needs about **0.05** to come to rest inside ten
-    /// seconds, while a hard ball on hard ground has a real coefficient of 0.001-0.01 — a
-    /// physically chosen value is an order of magnitude too weak to stabilise anything. And what
-    /// it costs is consistently *above* the textbook `c·g`, around 1.5× at that settling end.
-    /// Treat it as a stabiliser with a physical flavour: start at 0.05 for things that must
-    /// settle, leave it at 0 for everything else, and measure rather than reason if the value
-    /// matters to how a scene feels.
+    /// **A ball wants its physical value; a pile wants a stabiliser's.** Swept against a rolling
+    /// ball and against a settling pile (the table lives in `tests/rolling_and_settling.rs`): the
+    /// deceleration is the textbook one plus a floor of about 0.1 m/s² from damping, and a pile
+    /// needs about **0.1** to come to rest inside ten seconds, while a hard ball on hard ground has
+    /// a real coefficient of 0.001-0.01 (a billiard ball on cloth about 0.02). Until 2026-11-23 the
+    /// torque was bounded with no radius, as though every ball were a metre across: a small ball
+    /// was braked many times harder than its value said (a billiard ball, 35 times), and a value
+    /// tuned then for a ball of radius `r` is `value / r` now.
     pub rolling_friction: f32,
     /// Mass per unit volume on a relative scale where water is about 1.0 — the presets are
     /// specific gravities (7.8 for steel-like [`METAL`](Self::METAL), 0.6 for

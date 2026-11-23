@@ -50,6 +50,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`bilardo`, a billiards table at real scale.** A 2.54 × 1.27 m cloth, 28.6 mm balls of 170 g,
+  cushions, and six pockets as triggers under the cloth's edge. It sets its own restitution
+  threshold for its scale (`ConstraintSolver::restitution_velocity_threshold`). `--test` plays
+  three shots:
+  - a head-on shot: the object ball goes straight, within a millimetre;
+  - a shot into a corner pocket;
+  - the break: every ball on the cloth or potted, all still, none faster than the cue ball, and
+    the table rolling for more than five seconds.
+
+  It found the rolling friction fix above.
+
 - **`inis`, a lunar lander.** A compound, breakable, planar lander, with a main engine and side
   thrusters (`ExternalForce`), lands on a pad under the moon's gravity. Its height comes from a ray
   that skips the lander itself. Controls go through `Input::move_axis`, so a stick throttles. An
@@ -810,6 +821,21 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **Rolling friction is the textbook coefficient, whatever the ball's size.** Behavioural. The
+  solver bounded the resisting torque by `rolling_friction · N`, a force spent as a torque with no
+  radius, as though every ball were a metre across. The resistance went as `1/r`:
+  - a billiard ball (28.6 mm) was braked 35 times harder than its coefficient said: its spin died
+    at once, and it slid to a halt at the sliding friction's `μ·g`, so a break's sixteen balls
+    were all still in 2.9 s;
+  - the 0.5 m spheres of `tests/rolling_and_settling.rs` were braked twice as hard, which is the
+    "about 1.5× `c·g`" its table recorded.
+
+  The torque now goes through the contact's lever (`rolling_lever`, the rolling body's radius), so
+  a rolling sphere slows at `c·g / 1.4` plus the damping's floor. The table was re-measured by a
+  new ignored test (`the_coefficient_table`): a pile now settles at 0.1 where it did at 0.05.
+  - **A value tuned for a ball of radius `r` is `value / r` now:** `golf` and `ccd_resting` go
+    from 0.08 to 0.4, `robot` to 0.44, and each plays as it did.
+  - `a_rolling_balls_slowdown_does_not_depend_on_its_size` is red on the code before.
 - **A ball dropped straight onto a floor bounces straight and rests where it fell.** A sphere's
   contact with a box, a hull, a cylinder or any other convex shape came from GJK/EPA, whose point
   and normal are estimates. For a ball resting on a box's top the point sat 2.7 mm off the centre

@@ -60,7 +60,7 @@ fn spawn_table(world: &mut World) {
         Transform::new(Vec3::new(0.0, -0.5, 0.0)),
         RigidBody::new_static(),
         Velocity::default(),
-        Collider::box_collider(Vec3::new(TABLE, 0.5, TABLE)).with_material(PhysicsMaterial { rolling_friction: 0.08, ..Default::default() }),
+        Collider::box_collider(Vec3::new(TABLE, 0.5, TABLE)).with_material(PhysicsMaterial { rolling_friction: 0.44, ..Default::default() }),
     ));
     // Kenarlar: toplar masadan düşmesin.
     for (centre, half) in [
@@ -129,7 +129,7 @@ fn spawn_balls(world: &mut World, visual: bool) -> Vec<Entity> {
         .map(|&(x, z)| {
             // Keçe kaplı masa: yuvarlanan top yavaşlar (yuvarlanma sürtünmesi olmadan bir küre
             // düz bir yüzeyde hiç durmuyordu — hedefi geçip masanın köşesine kadar gidiyordu).
-            let col = Collider::sphere(BALL).with_material(PhysicsMaterial { rolling_friction: 0.08, ..Default::default() });
+            let col = Collider::sphere(BALL).with_material(PhysicsMaterial { rolling_friction: 0.44, ..Default::default() });
             let mut rb = RigidBody::new(0.6, true);
             rb.update_inertia_from_collider(&col);
             let id = world.spawn_bundle((Transform::new(Vec3::new(x, BALL, z)), rb, Velocity::default(), col));

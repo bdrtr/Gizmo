@@ -65,7 +65,7 @@ fn apply_rolling(p: &mut Prepared, velocities: &mut [Velocity]) {
         (p.idx_a, p.idx_b),
         (p.dyn_a, p.dyn_b),
         (p.inv_i_a, p.inv_i_b),
-        p.rolling,
+        (p.rolling, super::rolling_lever(p.r_a, p.r_b, p.normal, (p.dyn_a, p.dyn_b))),
         p.acc_n,
         p.acc_r,
     );

@@ -15,17 +15,39 @@ mod block;
 mod standalone;
 mod tgs;
 
+/// The lever a contact's rolling resistance acts through: how far the rolling body's centre of
+/// mass stands off the contact along its normal — a ball's radius, a wheel's — averaged over the
+/// moving sides of the pair.
+pub(super) fn rolling_lever(r_a: Vec3, r_b: Vec3, normal: Vec3, (dyn_a, dyn_b): (bool, bool)) -> f32 {
+    let (a, b) = (r_a.dot(normal).abs(), r_b.dot(normal).abs());
+    match (dyn_a, dyn_b) {
+        (true, true) => 0.5 * (a + b),
+        (true, false) => a,
+        (false, true) => b,
+        (false, false) => 0.0,
+    }
+}
+
 /// One pass of the rolling-resistance row for a contact (see `tgs::apply_rolling` for why it
 /// exists): oppose the pair's relative spin with a torque impulse, bounded like friction by the
-/// contact's normal impulse `acc_n` times `rolling`. `acc_r` is the row's impulse accumulated so
-/// far this sweep; the new total is returned. Both contact solvers run it — the TGS path and the
+/// contact's normal impulse `acc_n` times `rolling` — through `lever`, the rolling body's radius
+/// ([`rolling_lever`]), so `rolling` is the textbook coefficient: a resisting force `rolling · N`
+/// at the contact, a torque `rolling · N · r`. `acc_r` is the row's impulse accumulated so far
+/// this sweep; the new total is returned. Both contact solvers run it — the TGS path and the
 /// split-impulse path an island with a CCD body takes.
+///
+/// Until 2026-11-23 the bound had no lever: a force-sized impulse spent as a torque, as though
+/// every ball were a metre across. The resistance went as `1/r` — a billiard ball (28.6 mm) was
+/// braked 35 times harder than its coefficient said, its spin killed at once and the ball left
+/// sliding to a halt at the sliding friction's `μ·g`; a 0.5 m sphere twice as hard, which is the
+/// "about 1.5× `c·g`" `tests/rolling_and_settling.rs` measured (a rolling solid sphere's is
+/// `c·g / 1.4`).
 pub(super) fn rolling_row(
     velocities: &mut [Velocity],
     (idx_a, idx_b): (usize, usize),
     (dyn_a, dyn_b): (bool, bool),
     (inv_i_a, inv_i_b): (gizmo_math::Mat3, gizmo_math::Mat3),
-    rolling: f32,
+    (rolling, lever): (f32, f32),
     acc_n: f32,
     acc_r: Vec3,
 ) -> Vec3 {
@@ -44,7 +66,7 @@ pub(super) fn rolling_row(
         return acc_r;
     }
     let mut acc = acc_r - axis * (len / k);
-    let max = rolling * acc_n;
+    let max = rolling * acc_n * lever;
     if acc.length() > max {
         acc = acc.normalize_or_zero() * max;
     }
@@ -1178,7 +1200,7 @@ impl ConstraintSolver {
             (idx_a, idx_b),
             (dyn_a, dyn_b),
             (inv_i_a, inv_i_b),
-            rolling_friction,
+            (rolling_friction, rolling_lever(r_a, r_b, normal, (dyn_a, dyn_b))),
             new_acc_n,
             *acc_roll,
         );

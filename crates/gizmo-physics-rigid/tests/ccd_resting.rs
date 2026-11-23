@@ -1,6 +1,7 @@
 //! A body with CCD rests on the ground as one without it does: touching it, with friction and
 //! rolling resistance. Two things stood in the way, both measured with a 0.2 m ball rolled at
-//! 1 m/s on flat ground with rolling friction 0.08, which stops it in a quarter of a second:
+//! 1 m/s on flat ground with rolling friction 0.08 (0.4 since the rolling torque goes through the
+//! ball's radius, 2026-11-23), which stops it in a quarter of a second:
 //!
 //! - **It never touched.** A speculative contact halts a body a skin (1 cm) short of the
 //!   surface, and it did so every step, so a CCD body at rest hovered: on terrain it had no real
@@ -20,7 +21,7 @@ use gizmo_physics_rigid::system::physics_step_system;
 use gizmo_physics_rigid::world::PhysicsWorld;
 
 fn material() -> PhysicsMaterial {
-    PhysicsMaterial { rolling_friction: 0.08, restitution: 0.1, ..Default::default() }
+    PhysicsMaterial { rolling_friction: 0.4, restitution: 0.1, ..Default::default() }
 }
 
 /// How far a 0.2 m ball sent at 1 m/s over `ground` goes before it stops, and how many frames

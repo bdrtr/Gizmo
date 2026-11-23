@@ -76,7 +76,7 @@ fn heights() -> Vec<f32> {
 
 fn terrain_collider() -> Collider {
     gizmo::systems::terrain_collider(heights(), SAMPLES, SAMPLES, SIZE, SIZE, MAX_HEIGHT)
-        .with_material(PhysicsMaterial { rolling_friction: 0.08, restitution: 0.1, ..Default::default() })
+        .with_material(PhysicsMaterial { rolling_friction: 0.4, restitution: 0.1, ..Default::default() })
 }
 
 /// Sahanın `(x, z)`'deki yüksekliği — aşağı bir ışınla, çarpıştırıcının kendisinden; `ball` (varsa)
@@ -98,7 +98,7 @@ fn spawn_course(world: &mut World) -> u32 {
 }
 
 fn spawn_ball(world: &mut World, at: Vec3) -> Entity {
-    let col = Collider::sphere(BALL_R).with_material(PhysicsMaterial { rolling_friction: 0.08, restitution: 0.1, ..Default::default() });
+    let col = Collider::sphere(BALL_R).with_material(PhysicsMaterial { rolling_friction: 0.4, restitution: 0.1, ..Default::default() });
     let mut rb = RigidBody::new(BALL_MASS, true);
     rb.linear_damping = 0.35;
     rb.angular_damping = 0.6;
