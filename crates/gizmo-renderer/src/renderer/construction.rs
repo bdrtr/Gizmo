@@ -464,29 +464,15 @@ impl Renderer {
 
         let depth_texture_view = Self::create_depth_texture(&device, config.width, config.height);
 
-        let scene = crate::pipeline::build_scene_pipelines(&device, &queue);
-        let post_res = crate::post_process::build_post_process_resources(
+        let scene_state = crate::pipeline::build_scene_pipelines(&device, &queue);
+        let post_state = crate::post_process::build_post_process_resources(
             &device,
             config.format,
             config.width,
             config.height,
             &depth_texture_view,
         );
-
-        // GPU particle buffer boyutu — ihtiyaca göre ayarlanabilir
-        #[cfg(not(gizmo_forward_only))]
-        let gpu_particles = {
-            let max_particles: u32 = 100_000;
-            Some(crate::gpu_particles::GpuParticleSystem::new(
-                &device,
-                max_particles,
-                &scene.global_bind_group_layout,
-                wgpu::TextureFormat::Rgba16Float,
-            ))
-        };
-        #[cfg(gizmo_forward_only)]
-        let gpu_particles: Option<crate::gpu_particles::GpuParticleSystem> = None;
-
+        let (gpu_particles, gpu_fluid) = gpu_simulations(&device, &queue, &scene_state, &post_state, &config);
         // GPU physics is OPT-IN — default `None`. When `Some`, the renderer runs its OWN
         // GPU rigid-body sim (`gpu_physics_submit_system` in `default_render_pass`), which
         // CONFLICTS with the CPU `PhysicsPlugin` (the common case) → wrong/blank scene, forcing
@@ -494,103 +480,12 @@ impl Renderer {
         // that for all of them AND skips a 50 000-sphere GPU allocation. Games that genuinely
         // want GPU physics (massive counts, GPU cloth) call [`Renderer::enable_gpu_physics`].
         let gpu_physics: Option<crate::gpu_physics::GpuPhysicsSystem> = None;
-
-        #[cfg(not(gizmo_forward_only))]
-        let gpu_fluid = Some(crate::gpu_fluid::GpuFluidSystem::new(
-            &device,
-            &queue,
-            100_000,
-            &scene.global_bind_group_layout,
-            post_res.hdr_texture.format(),
-            config.width,
-            config.height,
-        ));
-        #[cfg(gizmo_forward_only)]
-        let gpu_fluid: Option<crate::gpu_fluid::GpuFluidSystem> = None;
-        let debug_renderer = Some(crate::debug_renderer::GizmoRendererSystem::new(
-            &device,
-            &scene.global_bind_group_layout,
-            wgpu::TextureFormat::Rgba16Float,
-            wgpu::TextureFormat::Depth32Float,
-        ));
-        // The same two formats the debug lines use, and for the same reason: text is drawn into
-        // the HDR target after the world, against the main depth buffer.
-        let text = Some(crate::text::TextRenderer::new(
-            &device,
-            &queue,
-            &scene.global_bind_group_layout,
-            wgpu::TextureFormat::Rgba16Float,
-            wgpu::TextureFormat::Depth32Float,
-        ));
-        // Same target and depth as text: sprites are drawn into the HDR image just before it.
-        let sprites = Some(crate::sprite::SpriteRenderer::new(
-            &device,
-            wgpu::TextureFormat::Rgba16Float,
-            wgpu::TextureFormat::Depth32Float,
-        ));
-
-        let scene_state = scene;
-
-        #[cfg(not(gizmo_forward_only))]
-        let deferred = Some(crate::deferred::DeferredState::new(
-            &device,
-            &scene_state,
-            &depth_texture_view,
-            size.width,
-            size.height,
-        ));
-        #[cfg(gizmo_forward_only)]
-        let deferred: Option<crate::deferred::DeferredState> = None;
-
-        let ssao = deferred.as_ref().map(|def| {
-            crate::ssao::SsaoState::new(&device, &queue, &scene_state, def, size.width, size.height)
-        });
-
-        let decal = deferred
-            .as_ref()
-            .map(|def| crate::decal::DecalState::new(&device, &scene_state, def));
-
+        let (debug_renderer, text, sprites) = overlays(&device, &queue, &scene_state);
+        let (deferred, ssao, decal, taa) =
+            deferred_passes(&device, &queue, &scene_state, &depth_texture_view, &post_state.hdr_texture_view, size);
         #[cfg(not(gizmo_forward_only))]
         let empty_irradiance = crate::irradiance::IrradianceState::new(&device);
-
-        let taa = if let Some(ref def) = deferred {
-            Some(crate::taa::TaaState::new(
-                &device,
-                &post_res.hdr_texture_view,
-                &def.world_position_view,
-                &def.velocity_view,
-                size.width,
-                size.height,
-            ))
-        } else {
-            None
-        };
-
-        let post_state = post_res;
-
-        // Built, not enabled, as auto exposure: the frame is the authored one until a scene asks.
-        let local_exposure = post_state.local.as_ref().map(|l| crate::local_exposure::LocalExposureState::new(&device, &l.layout));
-        // Built, not enabled: an authored exposure stays authored until the scene asks.
-        let auto_exposure = post_state.exposure.as_ref().map(|e| {
-            crate::auto_exposure::AutoExposureState::new(
-                &device,
-                &post_state.hdr_texture_view,
-                size.width,
-                size.height,
-                &e.layout,
-            )
-        });
-
-        // === FXAA Başlatma ===
-        let fxaa = Some(crate::fxaa::FxaaState::new(
-            &device,
-            config.format,
-            size.width,
-            size.height,
-        ));
-
-        // Built, not enabled: sharpening changes every frame's look, so it is opt-in.
-        let cas = Some(crate::cas::CasState::new(&device, config.format, size.width, size.height));
+        let (local_exposure, auto_exposure, fxaa, cas) = screen_effects(&device, &post_state, &config, size);
         // Not built until asked for (`Renderer::set_smaa`): its shader is long, and a phone that never turns it
         // on should not compile it three times at every start.
         let smaa = None;
@@ -704,9 +599,6 @@ impl Renderer {
             // this field existed — so the default is the old behaviour exactly.
             vignette_intensity: 0.25,
             film_grain_intensity: 0.012, // Photographic film grain — ince (statik olduğu için düşük; yüksekte düz yüzeylerde sabit gürültü kaplaması görünür)
-            // The 100k-particle fluid system above is allocated but idle: its SSFR
-            // water surface only composites when a scene opts in. Otherwise every
-            // non-fluid scene got a stray mottled ocean drawn over it.
         };
         // The deferred passes that are built at start, through the one way to build each: a game
         // that switched one off with `= None` gets it back through the same call.
@@ -715,6 +607,106 @@ impl Renderer {
         renderer.enable_volumetric();
         renderer
     }
+}
+
+/// The GPU simulations a renderer is built with: the particles and the fluid, 100 000 each — the
+/// fluid allocated but idle until a scene opts in (its surface composites only then; otherwise every
+/// non-fluid scene got a stray mottled ocean drawn over it). Neither on the forward-only path.
+#[cfg_attr(gizmo_forward_only, allow(unused_variables))]
+fn gpu_simulations(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    scene: &crate::pipeline::SceneState,
+    post: &crate::post_process::PostProcessState,
+    config: &wgpu::SurfaceConfiguration,
+) -> (Option<crate::gpu_particles::GpuParticleSystem>, Option<crate::gpu_fluid::GpuFluidSystem>) {
+    #[cfg(not(gizmo_forward_only))]
+    let simulations = (
+        Some(crate::gpu_particles::GpuParticleSystem::new(device, 100_000, &scene.global_bind_group_layout, wgpu::TextureFormat::Rgba16Float)),
+        Some(crate::gpu_fluid::GpuFluidSystem::new(
+            device,
+            queue,
+            100_000,
+            &scene.global_bind_group_layout,
+            post.hdr_texture.format(),
+            config.width,
+            config.height,
+        )),
+    );
+    #[cfg(gizmo_forward_only)]
+    let simulations = (None, None);
+    simulations
+}
+
+/// What is drawn over the world into the HDR target, against the main depth buffer: the debug
+/// lines, then the sprites, then text.
+fn overlays(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    scene: &crate::pipeline::SceneState,
+) -> (
+    Option<crate::debug_renderer::GizmoRendererSystem>,
+    Option<crate::text::TextRenderer>,
+    Option<crate::sprite::SpriteRenderer>,
+) {
+    let (hdr, depth) = (wgpu::TextureFormat::Rgba16Float, wgpu::TextureFormat::Depth32Float);
+    (
+        Some(crate::debug_renderer::GizmoRendererSystem::new(device, &scene.global_bind_group_layout, hdr, depth)),
+        Some(crate::text::TextRenderer::new(device, queue, &scene.global_bind_group_layout, hdr, depth)),
+        Some(crate::sprite::SpriteRenderer::new(device, hdr, depth)),
+    )
+}
+
+/// The G-buffer and the passes that read it: SSAO, decals and TAA — none on the forward-only path,
+/// which has no G-buffer. SSR, SSGI and the volumetric light are built after the renderer, each by
+/// its own `enable_*`.
+#[cfg_attr(gizmo_forward_only, allow(unused_variables))]
+fn deferred_passes(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    scene: &crate::pipeline::SceneState,
+    depth: &wgpu::TextureView,
+    hdr: &wgpu::TextureView,
+    size: winit::dpi::PhysicalSize<u32>,
+) -> (
+    Option<crate::deferred::DeferredState>,
+    Option<crate::ssao::SsaoState>,
+    Option<crate::decal::DecalState>,
+    Option<crate::taa::TaaState>,
+) {
+    #[cfg(not(gizmo_forward_only))]
+    let deferred = Some(crate::deferred::DeferredState::new(device, scene, depth, size.width, size.height));
+    #[cfg(gizmo_forward_only)]
+    let deferred: Option<crate::deferred::DeferredState> = None;
+    let ssao = deferred.as_ref().map(|def| crate::ssao::SsaoState::new(device, queue, scene, def, size.width, size.height));
+    let decal = deferred.as_ref().map(|def| crate::decal::DecalState::new(device, scene, def));
+    let taa = deferred.as_ref().map(|def| {
+        crate::taa::TaaState::new(device, hdr, &def.world_position_view, &def.velocity_view, size.width, size.height)
+    });
+    (deferred, ssao, decal, taa)
+}
+
+/// The screen's own effects, built and off until a scene asks: local and automatic exposure (the
+/// frame is the authored one until then), FXAA, and CAS (sharpening changes every frame's look).
+fn screen_effects(
+    device: &wgpu::Device,
+    post: &crate::post_process::PostProcessState,
+    config: &wgpu::SurfaceConfiguration,
+    size: winit::dpi::PhysicalSize<u32>,
+) -> (
+    Option<crate::local_exposure::LocalExposureState>,
+    Option<crate::auto_exposure::AutoExposureState>,
+    Option<crate::fxaa::FxaaState>,
+    Option<crate::cas::CasState>,
+) {
+    (
+        post.local.as_ref().map(|l| crate::local_exposure::LocalExposureState::new(device, &l.layout)),
+        post.exposure.as_ref().map(|e| {
+            crate::auto_exposure::AutoExposureState::new(device, &post.hdr_texture_view, size.width, size.height, &e.layout)
+        }),
+        Some(crate::fxaa::FxaaState::new(device, config.format, size.width, size.height)),
+        Some(crate::cas::CasState::new(device, config.format, size.width, size.height)),
+    )
 }
 
 /// The features every native renderer device is asked for: line polygons (the debug wireframe), the
