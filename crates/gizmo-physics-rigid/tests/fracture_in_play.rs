@@ -213,10 +213,12 @@ fn a_planar_bodys_pieces_stay_in_its_plane() {
     for (e, _, body, t, v) in pieces.iter() {
         seen += 1;
         assert!(body.lock_translation_z && body.lock_rotation_x && body.lock_rotation_y, "{e:?} kept the lander's locks");
-        assert!(v.linear.z == 0.0 && t.position.z.abs() <= 0.5 + 1e-3, "{e:?} stayed in the slab: z = {}, vz = {}", t.position.z, v.linear.z);
+        // Not `== 0.0`: macOS's arm64 left −2.4·10⁻¹⁵ m/s there (CI, 2026-11-23) where x86 leaves
+        // none — rounding, not a body leaving its plane. Same-platform determinism is the contract.
+        assert!(v.linear.z.abs() < 1e-9 && t.position.z.abs() <= 0.5 + 1e-3, "{e:?} stayed in the slab: z = {}, vz = {}", t.position.z, v.linear.z);
     }
-    let leg_z = world.query::<&Transform>().get(leg).map(|t| t.position.z);
-    assert_eq!(leg_z, Some(0.0), "the leg, cut from nowhere, is on the plane itself");
+    let leg_z = world.query::<&Transform>().get(leg).map(|t| t.position.z).expect("the leg");
+    assert!(leg_z.abs() < 1e-6, "the leg, cut from nowhere, is on the plane itself: z = {leg_z}");
     assert!(seen > 1, "the debris and the leg were looked at: {seen}");
 }
 
