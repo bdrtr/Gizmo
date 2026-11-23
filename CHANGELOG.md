@@ -804,6 +804,15 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **The GPU bodies build on Windows.** `physics_compute.wgsl`'s `integrate` set a slab normal with
+  `n1[a] = -1.0` inside its three-axis loop: a write to a vector component through a run-time
+  index. D3D's FXC cannot address that, so it unrolls the loop. Under wgpu's loop bounding on
+  D3D12 it cannot prove the loop ends, and fails (X3511). So `GpuPhysicsSystem::new`, and with it
+  `Renderer::enable_gpu_physics`, failed validation on every Windows machine. Found by the first
+  test that built the system, `the_collider_overlay_runs_on_its_flags_alone`, on CI's Windows
+  runner. The normal is built from `axis_unit(a)` now, bit for bit the same.
+  `shader_contract::no_shader_writes_a_local_vector_component_through_a_runtime_index` walks every
+  shader's naga IR for such a write. It is red with the old line put back.
 - **The forward-only render path's plain tests are run and linted, in CI too.** The recipe in use
   ran only the `#[ignore]`d GPU tests, and the wasm and
   Android lints see no test target. Run for the first time on 2026-11-23, the path's

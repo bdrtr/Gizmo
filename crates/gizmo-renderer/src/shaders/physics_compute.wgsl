@@ -640,6 +640,11 @@ fn apply_restitution(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 }
 
+/// The unit vector along axis `a` (0, 1 or 2), built without writing a component through an index.
+fn axis_unit(a: i32) -> vec3<f32> {
+    return vec3<f32>(f32(a == 0), f32(a == 1), f32(a == 2));
+}
+
 // Pass 4
 @compute @workgroup_size(256)
 fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -789,8 +794,14 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let ood = 1.0 / ray_dir[a];
                     var t1 = (minkowski_min[a] - old_pos[a]) * ood;
                     var t2 = (minkowski_max[a] - old_pos[a]) * ood;
-                    var n1 = vec3<f32>(0.0); n1[a] = -1.0;
-                    var n2 = vec3<f32>(0.0); n2[a] = 1.0;
+                    // Not `n1[a] = -1.0`: a write to a vector's component through a loop index is not
+                    // addressable in D3D's FXC, which then has to unroll the loop, and with wgpu's loop
+                    // bounding on D3D12 it cannot prove the loop ends (X3511): `integrate` did not
+                    // compile on Windows at all until 2026-11-23. `0 - unit` keeps the other
+                    // components +0.0, as the write did.
+                    let unit = axis_unit(a);
+                    var n1 = vec3<f32>(0.0) - unit;
+                    var n2 = unit;
                     if (t1 > t2) {
                         let tmp = t1; t1 = t2; t2 = tmp;
                         let t_n = n1; n1 = n2; n2 = t_n;

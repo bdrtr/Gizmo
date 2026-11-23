@@ -510,3 +510,112 @@ fn every_gpu_body_declaration_matches_the_bytes_rust_uploads() {
     }
     assert!(problems.is_empty(), "GPU body layout disagreements:\n  {}", problems.join("\n  "));
 }
+
+/// Where a write's pointer has got to, walking from the local variable to the leaf.
+#[derive(Clone, Copy)]
+enum Place {
+    /// A value of this type.
+    Typed(naga::Handle<naga::Type>),
+    /// A matrix's column: a vector with no type of its own in the arena.
+    Column,
+}
+
+/// Whether `pointer` writes a component of a function-local vector or matrix through an index
+/// known only at run time — `v[i] = x`, `m[i] = c`, `m[1][i] = x`.
+fn writes_a_local_component_by_index(
+    func: &naga::Function,
+    types: &naga::UniqueArena<naga::Type>,
+    pointer: naga::Handle<naga::Expression>,
+) -> bool {
+    use naga::{Expression, TypeInner};
+    let mut chain = Vec::new();
+    let mut at = pointer;
+    let root = loop {
+        match &func.expressions[at] {
+            Expression::Access { base, .. } => {
+                chain.push(None);
+                at = *base;
+            }
+            Expression::AccessIndex { base, index } => {
+                chain.push(Some(*index));
+                at = *base;
+            }
+            Expression::LocalVariable(local) => break func.local_variables[*local].ty,
+            _ => return false,
+        }
+    };
+    let mut place = Place::Typed(root);
+    for step in chain.iter().rev() {
+        place = match (place, step) {
+            (Place::Column, None) => return true,
+            (Place::Column, Some(_)) => return false,
+            (Place::Typed(ty), step) => match (&types[ty].inner, step) {
+                (TypeInner::Vector { .. } | TypeInner::Matrix { .. }, None) => return true,
+                (TypeInner::Matrix { .. }, Some(_)) => Place::Column,
+                (TypeInner::Array { base, .. }, _) => Place::Typed(*base),
+                (TypeInner::Struct { members, .. }, Some(i)) => Place::Typed(members[*i as usize].ty),
+                _ => return false,
+            },
+        };
+    }
+    false
+}
+
+fn store_pointers(block: &naga::Block, out: &mut Vec<naga::Handle<naga::Expression>>) {
+    use naga::Statement;
+    for statement in block.iter() {
+        match statement {
+            Statement::Store { pointer, .. } => out.push(*pointer),
+            Statement::Block(inner) => store_pointers(inner, out),
+            Statement::If { accept, reject, .. } => {
+                store_pointers(accept, out);
+                store_pointers(reject, out);
+            }
+            Statement::Switch { cases, .. } => cases.iter().for_each(|case| store_pointers(&case.body, out)),
+            Statement::Loop { body, continuing, .. } => {
+                store_pointers(body, out);
+                store_pointers(continuing, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// No shader writes a component of a local vector or matrix through a run-time index.
+///
+/// D3D's FXC cannot address one: it unrolls the loop the write is in to make the index constant,
+/// and on D3D12 wgpu bounds every loop with a counter (`force_loop_bounding`), so FXC cannot prove
+/// the loop ends and gives up (X3511). `physics_compute.wgsl`'s `integrate` set a slab normal with
+/// `n1[a] = -1.0` in its three-axis loop, and the GPU bodies could not be built on Windows at all —
+/// found by the first test that built them, on CI's Windows runner, 2026-11-23. Nothing else here
+/// can see it: naga validates the write, and no Linux backend minds it. A local array is fine (an
+/// indexable register); so is a buffer.
+#[test]
+fn no_shader_writes_a_local_vector_component_through_a_runtime_index() {
+    let mut read = 0;
+    let mut problems = Vec::new();
+    for (name, src) in all_shaders() {
+        let composed = src.contains("#import") || src.contains("#ifdef") || src.contains("#{");
+        let module = if composed {
+            crate::pipeline::shaders::compose_module(&src, &name, crate::pipeline::shaders::native_render_defs()).map(|(m, _)| m).ok()
+        } else {
+            naga::front::wgsl::parse_str(&src).ok()
+        };
+        // A fragment concatenated into another shader (the fluid's) does not parse alone; it is
+        // read where it is concatenated, if that file is a shader here.
+        let Some(module) = module else { continue };
+        read += 1;
+        let functions = module.functions.iter().map(|(_, f)| f).chain(module.entry_points.iter().map(|e| &e.function));
+        for func in functions {
+            let mut pointers = Vec::new();
+            store_pointers(&func.body, &mut pointers);
+            for pointer in pointers {
+                if writes_a_local_component_by_index(func, &module.types, pointer) {
+                    problems.push(format!("{name}: in `{}`", func.name.as_deref().unwrap_or("?")));
+                }
+            }
+        }
+    }
+    assert!(read >= 40, "only {read} shaders could be read; the check has stopped seeing them");
+    assert!(problems.is_empty(), "a local vector's component written through a run-time index:\n  {}", problems.join("\n  "));
+}
