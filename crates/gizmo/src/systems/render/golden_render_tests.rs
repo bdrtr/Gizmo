@@ -17798,6 +17798,35 @@ fn a_textured_decal_shows_its_texture() {
     });
 }
 
+/// **A decal has no holes.** On the forward-only path the surface under a decal is drawn a second
+/// time through the lit shader with `DECALS`, where the depth is `Equal` to the first draw's
+/// (`DecalRedraw`): a pixel whose two depths differed by a bit would keep the first draw's colour
+/// there, a speck of floor inside the decal. So no pixel the decal leaves alone may have all four
+/// neighbours changed by it. On the desktop the decal paints the G-buffer, and the same holds.
+#[test]
+fn a_decal_has_no_holes() {
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let footprint = decal_footprint().await;
+        assert!(footprint.len() >= 200, "the decal covers {} pixels", footprint.len());
+        let mut changed = vec![false; 128 * 128];
+        for &p in &footprint {
+            changed[p] = true;
+        }
+        let holes = (1..127usize)
+            .flat_map(|y| (1..127usize).map(move |x| (x, y)))
+            .filter(|&(x, y)| !changed[y * 128 + x] && [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)].iter().all(|&(a, b)| changed[b * 128 + a]))
+            .count();
+        assert_eq!(holes, 0, "{holes} pixels inside the decal kept the floor ({} pixels decaled)", footprint.len());
+    });
+}
+
 /// **A decal is where its `GlobalTransform` is**: hung under an entity ten metres off, its own
 /// `Transform` taking it back, it is drawn where the unparented one is. Until 2026-11-23 a decal
 /// was placed by its `Transform` alone, and this one was drawn ten metres away.

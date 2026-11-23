@@ -73,6 +73,8 @@ pub fn record_forward_and_fluid(
         let mut render_pass = begin_forward_pass(encoder, renderer, hdr_load, depth_load);
         draw_environment_sky(&mut render_pass, renderer);
         draw_forward_items(&mut render_pass, renderer, &draw_items[..world_end], uploaded_instances, baked);
+        #[cfg(gizmo_forward_only)]
+        redraw_under_decals(&mut render_pass, renderer, &draw_items[..world_end], uploaded_instances, baked, inv_view_proj);
 
         // Draw GPU Physics Spheres!
         if let Some(physics) = &renderer.gpu_physics {
@@ -291,6 +293,72 @@ fn veils(item: &DrawItem, uploaded_instances: u32) -> bool {
 /// some are alive.
 fn particles_veil(renderer: &Renderer, simulations: bool) -> bool {
     simulations && renderer.gpu_particles.as_ref().is_some_and(|p| p.active_particles > 0)
+}
+
+/// The forward-only path's decals: every opaque lit draw a decal's box meets drawn again through the lit
+/// shader with `DECALS` (`DecalRedraw`), inside the rectangle on the screen that the decals it meets
+/// cover, where the depth is the one its first draw left. What it costs is the decals' pixels: every
+/// lit pixel paid for the decals' code while a frame had one until 2026-11-23, about 5 ms on an Adreno
+/// 618. Opaque surfaces alone, as the desktop's decals paint the G-buffer's. `inv_view_proj` is the
+/// view's (unjittered: this path has no TAA).
+#[cfg(gizmo_forward_only)]
+fn redraw_under_decals(
+    render_pass: &mut wgpu::RenderPass<'_>,
+    renderer: &Renderer,
+    items: &[DrawItem],
+    uploaded_instances: u32,
+    baked: BakedRoute,
+    inv_view_proj: [[f32; 4]; 4],
+) {
+    let Some(redraw) = renderer.scene.core.decal_redraw.as_ref() else {
+        return;
+    };
+    let decals = &renderer.scene.forward_decal_spheres;
+    if decals.is_empty() || renderer.wire_only {
+        return;
+    }
+    let (width, height) = (renderer.post.hdr_texture.width(), renderer.post.hdr_texture.height());
+    let view_proj = gizmo_math::Mat4::from_cols_array_2d(&inv_view_proj).inverse();
+    let boxes: Vec<(crate::math::Aabb, [u32; 4])> = decals
+        .iter()
+        .filter_map(|d| {
+            let r = gizmo_math::Vec3::splat(d.radius);
+            let b = crate::math::Aabb::new(d.center - r, d.center + r);
+            gizmo_renderer::decal::screen_rect(view_proj, b, width, height).map(|rect| (b, rect))
+        })
+        .collect();
+    if boxes.is_empty() {
+        return;
+    }
+    for item in items {
+        let receives = item.visible_in_camera
+            && !(item.is_skybox || item.is_backdrop || item.is_water || item.is_grid || item.baked_lit || item.unlit)
+            && !(item.is_transparent || item.is_transmissive)
+            && item.custom.is_none()
+            && item.surface.is_none()
+            && item.mirror.is_none()
+            && !item.drawn_reflective(baked);
+        let instances = item.camera_instance_range(uploaded_instances);
+        if !receives || instances.is_empty() || item.bounds.is_empty() {
+            continue;
+        }
+        let Some([x0, y0, x1, y1]) = boxes
+            .iter()
+            .filter(|(b, _)| item.bounds.intersects(*b))
+            .map(|(_, rect)| *rect)
+            .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])
+        else {
+            continue;
+        };
+        render_pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
+        let mut plan = super::plan::PassPlan::default();
+        plan.set_pipeline(redraw.pipeline(item.lobes, item.details, item.is_double_sided));
+        plan.set_bind_group(1, &item.bind_group);
+        plan.set_bind_group(BG_SKELETON, item.skeleton_bind_group.as_deref().unwrap_or(&*renderer.scene.dummy_skeleton_bind_group));
+        item.plan_draw(&mut plan, instances);
+        plan.replay(render_pass, &renderer.device, renderer.multi_draw);
+    }
+    render_pass.set_scissor_rect(0, 0, width, height);
 }
 
 /// The main pass over the HDR target and the depth buffer, with what every draw in it shares bound.

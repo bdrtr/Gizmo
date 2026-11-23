@@ -291,6 +291,34 @@ pub const NO_DECAL_TEXTURE: u32 = u32::MAX;
 /// The decal array's format: colour images, authored in sRGB, as a material's base colour is.
 pub const DECAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
+/// The rectangle of a `width` × `height` target that `bounds` covers seen through `view_proj`, as a
+/// scissor takes it — `[x0, y0, x1, y1]`, top-left first, `x1 > x0` and `y1 > y0` — or `None` where
+/// it covers none of it. The whole target where any of its corners is behind the camera: the
+/// projection of such a box does not bound it. What the forward-only path's decals are drawn inside
+/// (`DecalRedraw`).
+#[must_use]
+pub fn screen_rect(view_proj: gizmo_math::Mat4, bounds: gizmo_math::Aabb, width: u32, height: u32) -> Option<[u32; 4]> {
+    if width == 0 || height == 0 || bounds.is_empty() {
+        return None;
+    }
+    let (mut lo, mut hi) = (gizmo_math::Vec2::splat(f32::INFINITY), gizmo_math::Vec2::splat(f32::NEG_INFINITY));
+    for corner in bounds.corners() {
+        let clip = view_proj * gizmo_math::Vec4::new(corner.x, corner.y, corner.z, 1.0);
+        if clip.w <= 1e-4 {
+            return Some([0, 0, width, height]);
+        }
+        let ndc = gizmo_math::Vec2::new(clip.x, clip.y) / clip.w;
+        let px = gizmo_math::Vec2::new((ndc.x * 0.5 + 0.5) * width as f32, (0.5 - ndc.y * 0.5) * height as f32);
+        lo = lo.min(px);
+        hi = hi.max(px);
+    }
+    let x0 = lo.x.floor().clamp(0.0, width as f32) as u32;
+    let y0 = lo.y.floor().clamp(0.0, height as f32) as u32;
+    let x1 = hi.x.ceil().clamp(0.0, width as f32) as u32;
+    let y1 = hi.y.ceil().clamp(0.0, height as f32) as u32;
+    (x1 > x0 && y1 > y0).then_some([x0, y0, x1, y1])
+}
+
 /// One decal as the forward-only path's lit shader reads it (`DECALS` in `shader.wgsl`): a
 /// storage array of these, indexed from the decals' half of the cluster lists
 /// ([`ClusterAssignment::with_decals`](crate::clustered::ClusterAssignment::with_decals)).
@@ -525,5 +553,31 @@ impl DecalCopy {
             ..Default::default()
         });
         Self { pipeline, layout, sampler }
+    }
+}
+
+#[cfg(test)]
+mod screen_rect_tests {
+    use super::screen_rect;
+    use gizmo_math::{Aabb, Mat4, Vec3};
+
+    fn camera() -> Mat4 {
+        Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, 100.0) * Mat4::look_at_rh(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y)
+    }
+
+    /// A box in front of the camera covers its own rectangle; one beside the view none; one the
+    /// camera stands in, all of it.
+    #[test]
+    fn a_box_covers_the_rectangle_it_projects_to() {
+        let vp = camera();
+        // A metre-wide box whose near face is 9.5 m ahead, a 90° view 100 px wide: ±0.5/9.5 of the half
+        // width, 2.6 px each side of the middle, rounded out.
+        let [x0, y0, x1, y1] = screen_rect(vp, Aabb::new(Vec3::new(-0.5, -0.5, -10.5), Vec3::new(0.5, 0.5, -9.5)), 100, 100).expect("in view");
+        assert_eq!([x0, y0, x1, y1], [47, 47, 53, 53]);
+        // Up and to the right on the screen: the top right.
+        let [x0, _, _, y1] = screen_rect(vp, Aabb::new(Vec3::new(4.0, 4.0, -10.5), Vec3::new(5.0, 5.0, -9.5)), 100, 100).expect("in view");
+        assert!(x0 > 50 && y1 < 50, "up and right lands top right: x0 {x0}, y1 {y1}");
+        assert_eq!(screen_rect(vp, Aabb::new(Vec3::new(30.0, -0.5, -10.5), Vec3::new(31.0, 0.5, -9.5)), 100, 100), None, "beside the view");
+        assert_eq!(screen_rect(vp, Aabb::new(Vec3::splat(-1.0), Vec3::splat(1.0)), 100, 100), Some([0, 0, 100, 100]), "around the camera");
     }
 }

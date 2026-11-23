@@ -107,6 +107,42 @@ pub struct CorePipelines {
     /// The unlit pipeline under each of them — and, unlike `unlit`, not writing depth: a blended
     /// draw is sorted, and a glow writing depth would hide the glow behind it.
     pub blend_unlit: [wgpu::RenderPipeline; 3],
+    /// The forward-only path's decals ([`DecalRedraw`]): built while a frame draws one, `None` else
+    /// and on the desktop, which paints its decals over the G-buffer.
+    pub decal_redraw: Option<DecalRedraw>,
+}
+
+/// The forward-only path's decals, drawn where they are and nowhere else: the opaque lit surfaces a
+/// decal's box meets are drawn a second time, through the lit shader with `DECALS` on, inside the
+/// decal's rectangle on the screen and only where the depth is the one the first draw left
+/// (`Equal`, writing none — the position is `@invariant`), so the decal is lit as its surface is
+/// and the rest of the frame pays nothing. The lit shader had `DECALS` in every pipeline while a
+/// frame had a decal until 2026-11-23, and an Adreno 618 paid about 5 ms for it in every lit pixel,
+/// whether a decal was there or not — the code's presence, not its work: an early way out of it
+/// for a pixel outside every decal won back little (`ENABLED_BY_DEFAULT`'s sitting, ENGINE §3 item 6).
+pub struct DecalRedraw {
+    /// Over [`CorePipelines::render`]'s draws.
+    pub render: wgpu::RenderPipeline,
+    /// Over `render_details`' (`DETAILS`, single-sided).
+    pub render_details: wgpu::RenderPipeline,
+    /// Over `render_double_sided`'s.
+    pub render_double_sided: wgpu::RenderPipeline,
+    /// Over the lobes' single-sided and double-sided ones (`DETAILS`, `LOBES`).
+    pub lobes: [wgpu::RenderPipeline; 2],
+}
+
+impl DecalRedraw {
+    /// The redraw of an opaque lit draw that [`SceneState::lit_pipeline`](super::SceneState::lit_pipeline)
+    /// gave the same `lobes`, `details` and `double_sided`.
+    #[must_use]
+    pub fn pipeline(&self, lobes: bool, details: bool, double_sided: bool) -> &wgpu::RenderPipeline {
+        match (lobes, double_sided) {
+            (true, sided) => &self.lobes[usize::from(sided)],
+            (false, true) => &self.render_double_sided,
+            (false, false) if details => &self.render_details,
+            (false, false) => &self.render,
+        }
+    }
 }
 
 /// One forward pipeline over the engine's vertex layout, drawing into the HDR target against the shared
@@ -123,6 +159,23 @@ pub(crate) fn forward_pipeline(
     cull: Option<wgpu::Face>,
     blend: Option<wgpu::BlendState>,
     polygon_mode: wgpu::PolygonMode,
+) -> wgpu::RenderPipeline {
+    forward_pipeline_against(device, layout, module, entry, label, depth_write, cull, blend, polygon_mode, wgpu::CompareFunction::LessEqual)
+}
+
+/// [`forward_pipeline`] with its depth test `compare`: `Equal` for a [`DecalRedraw`].
+#[allow(clippy::too_many_arguments)]
+fn forward_pipeline_against(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    entry: &str,
+    label: &str,
+    depth_write: bool,
+    cull: Option<wgpu::Face>,
+    blend: Option<wgpu::BlendState>,
+    polygon_mode: wgpu::PolygonMode,
+    compare: wgpu::CompareFunction,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -155,7 +208,7 @@ pub(crate) fn forward_pipeline(
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: Some(depth_write),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            depth_compare: Some(compare),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -277,7 +330,9 @@ pub(super) fn build_core_pipelines(
     decals: bool,
 ) -> CorePipelines {
     let layouts = ForwardLayouts::new(device, layouts);
-    let scene = SceneDefs::new(probes, sun_shadows, local_light_maps, lights, decals);
+    // `DECALS` is the redraw's alone (`DecalRedraw`).
+    let scene = SceneDefs::new(probes, sun_shadows, local_light_maps, lights, false);
+    let decal_redraw = (cfg!(gizmo_forward_only) && decals).then(|| decal_redraw(device, &layouts, &SceneDefs::new(probes, sun_shadows, local_light_maps, lights, true)));
     let LitPipelines { render, render_double_sided, wireframe, transparent, blend_lit, lobes, render_details, transmissive } =
         lit_pipelines(device, &layouts, &scene);
     let UnlitPipelines {
@@ -316,6 +371,24 @@ pub(super) fn build_core_pipelines(
         unlit_keeps,
         transmissive,
         blend_unlit,
+        decal_redraw,
+    }
+}
+
+/// Builds [`DecalRedraw`] from `scene`'s defs, which have `DECALS` on.
+fn decal_redraw(device: &wgpu::Device, layouts: &ForwardLayouts, scene: &SceneDefs) -> DecalRedraw {
+    let redraw = |module: &wgpu::ShaderModule, label: &str, cull: Option<wgpu::Face>| {
+        forward_pipeline_against(device, &layouts.lit, module, "fs_main", label, false, cull, OPAQUE, wgpu::PolygonMode::Fill, wgpu::CompareFunction::Equal)
+    };
+    let plain = path_shader(device, "shader.wgsl", LIT_WGSL, "Decal Shader", &scene.lit(&[]));
+    let details = path_shader(device, "shader.wgsl", LIT_WGSL, "Decal Shader With Details", &scene.lit(&["DETAILS"]));
+    let lobes = path_shader(device, "shader.wgsl", LIT_WGSL, "Decal Shader With Lobes", &scene.lit(&["DETAILS", "LOBES"]));
+    let back = Some(wgpu::Face::Back);
+    DecalRedraw {
+        render: redraw(&plain, "Decal Redraw", back),
+        render_details: redraw(&details, "Decal Redraw (details)", back),
+        render_double_sided: redraw(&details, "Decal Redraw TwoSided", None),
+        lobes: [redraw(&lobes, "Decal Redraw (lobes)", back), redraw(&lobes, "Decal Redraw TwoSided (lobes)", None)],
     }
 }
 
@@ -379,8 +452,8 @@ impl ForwardLayouts {
 /// What the forward-only path builds its lit shaders for: the scene's reflection probes
 /// (`SceneState::set_forward_reflections`), whether they read the sun's shadow
 /// (`forward_sun_shadows`) and the local lights' shadows and cookies (`forward_local_light_maps`),
-/// the kinds of local light it has (`forward_lights`), and whether they project decals
-/// (`forward_decals_drawn`). A branch a phone does not take still
+/// the kinds of local light it has (`forward_lights`), and whether they project decals — the
+/// [`DecalRedraw`]'s alone. A branch a phone does not take still
 /// costs it. The desktop's shaders are built with all of it, deciding per pixel, and take none.
 #[derive(Default)]
 struct SceneDefs {

@@ -74,8 +74,9 @@ fn decals_in(world: &World) -> Vec<(Mat4, gizmo_math::Vec4, Arc<wgpu::BindGroup>
 /// The forward-only path's decals for this frame: each decal's texture placed in a layer of the
 /// decal array, copied in the first frame it is shown (`ForwardDecals::place`), the decals written
 /// where the lit shader reads them, the spheres round their boxes left for every view's clusters
-/// (`SceneState::forward_decal_spheres`), and the lit pipelines built again when a frame first has a
-/// decal or last had one (`SceneState::set_forward_decals`) — a scene with none pays nothing for them.
+/// (`SceneState::forward_decal_spheres`, which the redraw is also placed by), and the decal redraw's
+/// pipelines built when a frame first has a decal and dropped when one last had one
+/// (`SceneState::set_forward_decals`, `DecalRedraw`) — a scene with none pays nothing for them.
 ///
 /// A decal's texture is its bind group's base colour, which the asset manager made it from
 /// (`AssetManager::base_colour_view_of`); a decal over the white material is its tint. One whose

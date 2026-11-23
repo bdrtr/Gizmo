@@ -549,6 +549,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The forward-only path draws a decal over its own pixels only.** Its lit pipelines had the decal
+  code in them while a frame had a decal, and an Adreno 618 paid about 5 ms for it over every lit
+  pixel. They are built without it now. The opaque lit draws a decal's box meets are drawn a second
+  time through the lit shader with `DECALS` (`DecalRedraw`), inside the decals' rectangle on the
+  screen (`decal::screen_rect`) and `Equal` to the depth the first draw left — the lit shader's
+  position is `@invariant`. One 4 m decal costs Nişancı 100.5 fps against 115.0 without; 78.8 the old
+  way. A blended surface no longer takes decals there, as it never did on the desktop.
+  `a_decal_has_no_holes`; the decal tests pass on both paths.
 - **The GPU particles step and draw the live span of their ring, not the whole of it.** While a
   single particle was alive, the compute pass and the draw covered all 100 000 slots every frame.
   They cover the span from the oldest spawn that can still have a particle alive to the last one

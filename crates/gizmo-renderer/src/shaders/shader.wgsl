@@ -28,8 +28,10 @@
 #ifdef LOCAL_LIGHTS
 #import gizmo::common::{light_falloff, spot_cone, spot_cookie_uv, gizmo_cluster_index}
 #endif
-// The decals, on the forward-only path while a frame draws one: projected over the surface before it
-// is lit (`decaled`), read from their half of the cluster lists.
+// The decals, on the forward-only path: projected over the surface before it is lit (`decaled`), read
+// from their half of the cluster lists. In the decal redraw's pipelines alone (`DecalRedraw`), which draw
+// a surface a second time under a decal's rectangle on the screen: in every lit pipeline while a frame
+// had a decal, the code cost an Adreno 618 about 5 ms over all the lit pixels, decals or none.
 #ifdef DECALS
 #ifndef LOCAL_LIGHTS
 #import gizmo::common::{gizmo_cluster_index}
@@ -251,7 +253,10 @@ struct VertexInput {
 };
 
 struct VertexOutput {
-    @builtin(position) clip_position: vec4<f32>,
+    // `@invariant`: the forward-only path's decals draw a surface a second time, `Equal` to the depth
+    // its first draw left, through the shader composed with `DECALS` (`DecalRedraw`), and two
+    // compositions of one vertex stage must place it alike to the bit.
+    @invariant @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec3<f32>,
     @location(1) normal: vec3<f32>,
     // xy: the material's UV; zw: the lightmap's (`Vertex::lightmap_uv`), in one location — this

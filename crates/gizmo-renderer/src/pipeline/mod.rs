@@ -17,7 +17,7 @@ pub use shaders::{load_shader_composed_web, load_shader_composed_web_with};
 
 use layouts::{build_layouts, LayoutRefs};
 use pipelines::{build_core_pipelines, build_shadow_pipelines};
-pub use pipelines::CorePipelines;
+pub use pipelines::{CorePipelines, DecalRedraw};
 pub(crate) use pipelines::{forward_pipeline, lit_set, shadow_pipeline};
 use uniforms::{build_global_uniforms, build_shadow_resources};
 
@@ -88,8 +88,8 @@ pub struct SceneState {
     /// The kinds of local light the forward-only path's lit pipelines are built for
     /// ([`set_forward_lights`](Self::set_forward_lights)).
     pub(crate) forward_lights: LightShape,
-    /// Whether the forward-only path's lit pipelines project decals (`DECALS`): while a frame draws
-    /// one ([`set_forward_decals`](Self::set_forward_decals)).
+    /// Whether the forward-only path builds its decal redraw (`DECALS`, [`DecalRedraw`]): while a frame
+    /// draws a decal ([`set_forward_decals`](Self::set_forward_decals)). The lit pipelines never have it.
     pub(crate) forward_decals_drawn: bool,
     /// The forward-only path's decals — their textures' array, the decals themselves and the
     /// sampler, on its group 0 at bindings 15–17 ([`crate::decal::ForwardDecals`]). A texel until a
@@ -489,9 +489,9 @@ impl SceneState {
         changed
     }
 
-    /// Whether the forward-only path's lit pipelines project decals — `draws`: this frame draws one.
-    /// True when that changed, and the caller builds the pipelines again ([`rebuild_pipelines`]), as
-    /// for the lights: a scene with no decal pays nothing for them per fragment.
+    /// Whether the forward-only path builds its decal redraw ([`DecalRedraw`]) — `draws`: this frame
+    /// draws a decal. True when that changed, and the caller builds the pipelines again
+    /// ([`rebuild_pipelines`]): a scene with no decal holds none of it.
     pub fn set_forward_decals(&mut self, draws: bool) -> bool {
         let changed = draws != self.forward_decals_drawn;
         self.forward_decals_drawn = draws;

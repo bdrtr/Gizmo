@@ -242,10 +242,18 @@ the first write (Unity's material instance — a hidden un-sharing).
 >      decal was placed by its `Transform` alone, so one parented to a moved entity was drawn where
 >      the entity started. **Measured on the phone (2026-11-23, Adreno 618, Nişancı portrait, twenty
 >      readings each, one sitting): one 4 m decal on its floor took it from 118.8 fps to 73.3** —
->      about 5 ms, paid by every lit fragment of a draw on the tier, not by the decal's pixels: the
->      cluster lookup and its loop, which this phone charges for whether a fragment finds anything
->      (memory of 2026-11-13: the light loop with no lights, ~3.6 ms). OPEN: a decal tier whose
->      cost is the decals' pixels.
+>      about 5 ms, paid by every lit fragment of a draw on the tier, not by the decal's pixels: for
+>      the decal code's presence in the lit shader. Bisected the same night, the tier compiled with its
+>      code unused read 117.3; without the texture read 85.1; without the cluster lookup 79.0; an
+>      early way out for a pixel outside every decal won back little. **Closed the same night, the
+>      owner's choice:** the lit pipelines are built without `DECALS`, and the opaque lit draws a
+>      decal's box meets are drawn a second time through the lit shader with it (`DecalRedraw`),
+>      inside the decals' rectangle on the screen (`decal::screen_rect`, a scissor) and `Equal` to
+>      the depth their first draw left (`shader.wgsl`'s position is `@invariant` for it). So the
+>      decal is lit as its surface is, and what it costs is its pixels: 100.5 fps with the decal,
+>      115.0 without, 78.8 the old way, in one sitting. Opaque surfaces alone, as the desktop's
+>      decals paint the G-buffer's; a blended surface took decals on this path before.
+>      `a_decal_has_no_holes`.
 >    - ~~GPU particles and the fluid~~ **closed the same day:** both are built on this path. The
 >      particles' pass needs only the HDR target and the depth, which every path has, and steps and
 >      draws nothing with none alive; their tests, and the fluid's, run on it (the fluid's had been

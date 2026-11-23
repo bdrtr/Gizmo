@@ -432,6 +432,11 @@ pub struct DrawItem {
     pub(super) sort_depth: f32,
     /// Where an opaque item goes among the others — [`opaque_order`].
     pub(super) order: u128,
+    /// Every one of its camera-visible instances' world boxes, merged: what the forward-only path's
+    /// decals ask of a draw before drawing it again under one (`passes::forward`'s decal redraw).
+    /// Empty with none. That path's alone: the desktop's decals paint the G-buffer.
+    #[cfg(gizmo_forward_only)]
+    pub(super) bounds: crate::math::Aabb,
 }
 
 impl DrawItem {
@@ -1565,6 +1570,8 @@ fn build_draw_items(cache: &RenderCache, region_b: usize, cam_pos: Vec3, shadows
             },
             sort_depth,
             order: batch.order,
+            #[cfg(gizmo_forward_only)]
+            bounds: cache.bounds[run(batch.camera)].iter().fold(crate::math::Aabb::empty(), |all, b| all.merge(*b)),
         });
     }
 
