@@ -990,7 +990,7 @@ pub fn fracture_step(world: &World, dt: f32) -> Vec<crate::components::BreakEven
     // rest.
     // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
     let query_opt = unsafe {
-        world.query_filtered_unchecked::<(&mut Breakable, &Transform, &Collider, Option<&Velocity>), gizmo_core::query::Without<gizmo_core::pool::Pooled>>()
+        world.query_filtered_unchecked::<(&mut Breakable, &Transform, &Collider, Option<&Velocity>, Option<&RigidBody>), gizmo_core::query::Without<gizmo_core::pool::Pooled>>()
     };
     let mut query = query_opt;
 
@@ -1061,7 +1061,7 @@ pub fn fracture_step(world: &World, dt: f32) -> Vec<crate::components::BreakEven
             // Generation kontrolü, çarpışma olayı üretildikten sonra yeniden kullanılmış bir
             // slota yanlış yazmayı engeller.
             let resolved_a = world.entity(event.entity_a.id());
-            if let Some((entity_a, (mut breakable, transform, collider, vel))) =
+            if let Some((entity_a, (mut breakable, transform, collider, vel, body))) =
                 resolved_a.and_then(|e| query.get_mut(e).map(|q| (e, q)))
             {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
@@ -1075,11 +1075,13 @@ pub fn fracture_step(world: &World, dt: f32) -> Vec<crate::components::BreakEven
                             transform,
                             collider,
                             vel.copied().unwrap_or_default(),
+                            body,
                             -impact_normal,
                         );
                         if let Some(pieces) = pieces {
                             breakable.is_broken = true;
                             shattered.insert(event.entity_a.id());
+                            release_parts(world, &mut commands, entity_a, transform, vel.copied().unwrap_or_default(), body, breakable.debris_lifetime);
                             breaks.push(report_break(world, entity_a, &breakable, transform.position, impact_point, pieces));
                         }
                     }
@@ -1091,7 +1093,7 @@ pub fn fracture_step(world: &World, dt: f32) -> Vec<crate::components::BreakEven
         if !shattered.contains(&event.entity_b.id()) {
             // Resolved rather than fabricated — see the note on entity A above.
             let resolved_b = world.entity(event.entity_b.id());
-            if let Some((entity_b, (mut breakable, transform, collider, vel))) =
+            if let Some((entity_b, (mut breakable, transform, collider, vel, body))) =
                 resolved_b.and_then(|e| query.get_mut(e).map(|q| (e, q)))
             {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
@@ -1104,11 +1106,13 @@ pub fn fracture_step(world: &World, dt: f32) -> Vec<crate::components::BreakEven
                             transform,
                             collider,
                             vel.copied().unwrap_or_default(),
+                            body,
                             impact_normal,
                         );
                         if let Some(pieces) = pieces {
                             breakable.is_broken = true;
                             shattered.insert(event.entity_b.id());
+                            release_parts(world, &mut commands, entity_b, transform, vel.copied().unwrap_or_default(), body, breakable.debris_lifetime);
                             breaks.push(report_break(world, entity_b, &breakable, transform.position, impact_point, pieces));
                         }
                     }
@@ -1235,6 +1239,7 @@ fn shatter_entity(
     transform: &Transform,
     collider: &Collider,
     vel: Velocity,
+    body: Option<&RigidBody>,
     impact_direction: gizmo_math::Vec3,
 ) -> Option<u32> {
     use crate::fracture::voronoi_shatter;
@@ -1275,6 +1280,7 @@ fn shatter_entity(
         let chunk_collider = Collider::convex_hull(&local).with_material(collider.material);
         let mut rb = RigidBody::new(chunk.volume * collider.material.density, true);
         rb.update_inertia_from_collider(&chunk_collider);
+        keep_locks(&mut rb, body);
         commands
             .spawn()
             .insert(rb)
@@ -1292,6 +1298,87 @@ fn shatter_entity(
     }
 
     Some(pieces)
+}
+
+/// A piece of a broken body keeps the body's axis locks: what broke in a plane (`RigidBody::planar_xy`,
+/// every side-on game) breaks in it. The pieces were spawned free, and a 2-D game's debris and
+/// parts flew out of its plane — measured in `inis`, a lander's legs 1.7 m off it.
+fn keep_locks(piece: &mut RigidBody, broken: Option<&RigidBody>) {
+    let Some(b) = broken else { return };
+    piece.lock_translation_x = b.lock_translation_x;
+    piece.lock_translation_y = b.lock_translation_y;
+    piece.lock_translation_z = b.lock_translation_z;
+    piece.lock_rotation_x = b.lock_rotation_x;
+    piece.lock_rotation_y = b.lock_rotation_y;
+    piece.lock_rotation_z = b.lock_rotation_z;
+}
+
+/// What a shattered body held besides its own shape, let go of: each part of its compound — a
+/// descendant with a solid collider and no body of its own — becomes a body of its own where it
+/// was, moving as that point of the body was (`v + ω × r`), its shape at the scale it had there,
+/// and ages as debris (`lifetime`); its own children stay with it. A descendant with a body of its
+/// own lives on. Triggers and visuals under the broken body go with it.
+///
+/// Until 2026-11-23 the break despawned the body alone, and despawning a parent unparents its
+/// children: a lander's leg, parented one metre down and to the side, became static geometry at
+/// that LOCAL position read as a world one — beside the world's origin, half in the ground — and a
+/// mesh under the body was left drawn where the body had stood.
+fn release_parts(
+    world: &World,
+    commands: &mut gizmo_core::commands::Commands,
+    body: Entity,
+    transform: &Transform,
+    vel: Velocity,
+    broken: Option<&RigidBody>,
+    lifetime: f32,
+) {
+    use gizmo_core::component::{Children, Parent};
+    let children_q = world.query::<&Children>();
+    let trans_q = world.query::<&Transform>();
+    let col_q = world.query::<&Collider>();
+    let bodies = world.query::<&RigidBody>();
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(body);
+    let mut stack = vec![(body, Relative { position: gizmo_math::Vec3::ZERO, rotation: gizmo_math::Quat::IDENTITY, scale: transform.scale })];
+    while let Some((at, rel)) = stack.pop() {
+        let Some(children) = children_q.get(at) else { continue };
+        for &child in &children.0 {
+            if !world.is_alive(child) || !visited.insert(child) || bodies.get(child).is_some() {
+                continue;
+            }
+            let local = trans_q.get(child).copied().unwrap_or_default();
+            let here = rel.then(&local);
+            let Some(col) = col_q.get(child).filter(|c| !c.is_trigger) else {
+                commands.entity(child).despawn();
+                stack.push((child, here));
+                continue;
+            };
+            let above = gizmo_physics_core::components::collider::scale_along(rel.scale, local.rotation);
+            let mut part = col.clone();
+            part.shape = col.shape.scaled(above);
+            let position = transform.position + transform.rotation * here.position;
+            let pose = Transform::new(position).with_rotation(transform.rotation * here.rotation).with_scale(here.scale);
+            let moving = Velocity { linear: vel.linear + vel.angular.cross(position - transform.position), ..vel };
+            let mut rb = RigidBody::new((part.volume() * part.material.density).max(1e-3), true);
+            rb.update_inertia_from_collider(&part);
+            keep_locks(&mut rb, broken);
+            commands
+                .entity(child)
+                .remove::<Parent>()
+                .insert(pose)
+                .insert(part)
+                .insert(rb)
+                .insert(moving)
+                .insert(crate::components::Debris {
+                    source: body.id(),
+                    vertices: Vec::new(),
+                    normals: Vec::new(),
+                    indices: Vec::new(),
+                    age: 0.0,
+                    lifetime,
+                });
+        }
+    }
 }
 
 /// The [`BreakEvent`](crate::components::BreakEvent) for a body that has just shattered, also
@@ -1403,12 +1490,12 @@ pub fn explosion_step(world: &World, dt: f32) -> Vec<crate::components::BreakEve
     // Check for Breakables that should shatter
     // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
     let mut breakable_query_opt = unsafe {
-        world.query_filtered_unchecked::<(Entity, &mut crate::components::Breakable, &Transform, &Collider, Option<&Velocity>), gizmo_core::query::Without<gizmo_core::pool::Pooled>>()
+        world.query_filtered_unchecked::<(Entity, &mut crate::components::Breakable, &Transform, &Collider, Option<&Velocity>, Option<&RigidBody>), gizmo_core::query::Without<gizmo_core::pool::Pooled>>()
     };
     {
         let breakable_query = &mut breakable_query_opt;
         for (_exp_entity, explosion, exp_pos) in &active_explosions {
-            for (entity, mut breakable, transform, collider, vel) in breakable_query.iter_mut() {
+            for (entity, mut breakable, transform, collider, vel, body) in breakable_query.iter_mut() {
                 if breakable.is_broken || shattered.contains(&entity) {
                     continue;
                 }
@@ -1437,10 +1524,11 @@ pub fn explosion_step(world: &World, dt: f32) -> Vec<crate::components::BreakEve
                             // original in the scene beside its own debris and, since every
                             // damage path is gated on `!is_broken` and nothing clears it,
                             // permanently undamageable.
-                            let pieces = shatter_entity(&mut commands, entity, &breakable, transform, collider, exp_vel, dir);
+                            let pieces = shatter_entity(&mut commands, entity, &breakable, transform, collider, exp_vel, body, dir);
                             if let Some(pieces) = pieces {
                                 breakable.is_broken = true;
                                 shattered.insert(entity);
+                                release_parts(world, &mut commands, entity, transform, exp_vel, body, breakable.debris_lifetime);
                                 breaks.push(report_break(world, entity, &breakable, transform.position, *exp_pos, pieces));
                             }
                         }

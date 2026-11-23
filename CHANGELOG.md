@@ -50,6 +50,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`inis`, a lunar lander.** A compound, breakable, planar lander, with a main engine and side
+  thrusters (`ExternalForce`), lands on a pad under the moon's gravity. Its height comes from a ray
+  that skips the lander itself. Controls go through `Input::move_axis`, so a stick throttles. An
+  autopilot flies `--test`: a soft landing on the pad, and a hard fall onto rocks where it must
+  break and its legs fall free. It found both fracture fixes above.
+
 - **The fight HUD is the game's: `gizmo::systems::fight_hud`.** The two fighters' health bars and
   names, the round, its clock and the K.O., as UI nodes, built and kept in step by
   `fight_hud_system` while player 1 and player 2 are in the world and taken down when either is
@@ -804,6 +810,23 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A broken body lets go of its parts where it held them.** A break despawned the body alone,
+  and despawning a parent unparents its children. So a lander's leg, a child collider and part of
+  its compound, became static geometry at its local position read as a world one: beside the
+  world's origin, half in the ground. A mesh under the body stayed where the body had stood. Now,
+  on a break by impact or by blast (`release_parts`):
+  - each solid child collider becomes a body of its own, at its world pose and with the
+    velocity that point of the body had (`v + ω × r`);
+  - its shape is at the scale it had there, and it ages as the body's debris (`Debris` with no
+    cell: drawn by its own mesh, if it has one);
+  - triggers and visuals under the body go with it;
+  - a child with a body of its own lives on.
+- **What breaks in a plane breaks in it.** A broken body's debris and its released parts keep its
+  axis locks (`RigidBody::planar_xy`, every side-on game). They were spawned free; in `inis` a
+  lander's legs ended 1.7 m off the plane.
+
+  `fracture_in_play.rs` gains three tests, each red on the code before: a lander's leg let go of
+  where it was held, a planar body's pieces in its slab, and a blast's break letting go of a lid.
 - **The depth glass reads before a frame copies what is behind it is the far plane, as it said.**
   `SceneState::behind_depth_fallback` claimed to be "a texel at the far plane: nothing behind,
   which `behind_distance` reads as sky". It was a texture left as made, and a texture starts

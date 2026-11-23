@@ -137,3 +137,114 @@ fn a_blast_hurts_only_as_far_as_its_damage_radius() {
     let health = world.query::<&Breakable>().get(far).map(|b| b.current_health);
     assert_eq!(health, Some(50.0), "pushed, but outside the damage radius: unhurt");
 }
+
+/// A broken body lets go of what it held. A leg parented under a breakable lander — part of its
+/// compound — becomes a body of its own where the lander held it, ageing as debris; a bare visual
+/// under the lander goes with it.
+///
+/// Red on the code before: the break despawned the lander alone, and despawning a parent unparents
+/// its children, so the leg became static geometry at its LOCAL position (0.8, −0.8, 0) read as a
+/// world one — beside the origin, half in the ground — and the visual stayed where the lander was.
+#[test]
+fn a_broken_body_lets_go_of_its_parts_where_it_held_them() {
+    use gizmo_core::component::{Children, Parent};
+    let mut world = world_with_floor();
+    let lander = world.spawn();
+    world.add_component(lander, Transform::new(Vec3::new(4.0, 3.0, 0.0)));
+    world.add_component(lander, RigidBody::new(10.0, true));
+    world.add_component(lander, Velocity::new(Vec3::new(0.0, -15.0, 0.0)));
+    world.add_component(lander, Collider::box_collider(Vec3::new(1.0, 0.4, 0.5)));
+    world.add_component(lander, Breakable { debris_lifetime: 7.0, ..fragile() });
+    let leg = world.spawn();
+    world.add_component(leg, Transform::new(Vec3::new(0.8, -0.8, 0.0)));
+    world.add_component(leg, Collider::box_collider(Vec3::new(0.1, 0.4, 0.1)));
+    world.add_component(leg, Parent(lander));
+    let visual = world.spawn();
+    world.add_component(visual, Transform::new(Vec3::new(0.0, 0.5, 0.0)));
+    world.add_component(visual, Parent(lander));
+    world.add_component(lander, Children(vec![leg, visual]));
+
+    let mut held_at = None;
+    for _ in 0..60 {
+        let lander_at = world.query::<&Transform>().get(lander).map(|t| (t.position, t.rotation));
+        if !step(&mut world).is_empty() {
+            let (p, r) = lander_at.expect("the lander stood until this step");
+            held_at = Some(p + r * Vec3::new(0.8, -0.8, 0.0));
+            break;
+        }
+    }
+    let held_at = held_at.expect("the lander broke on the floor");
+    assert!(!world.is_alive(lander), "the lander is gone");
+    assert!(!world.is_alive(visual), "and its visual with it");
+    assert!(world.is_alive(leg), "the leg broke loose");
+    assert!(world.query::<&Parent>().get(leg).is_none(), "on its own");
+    assert!(world.query::<&RigidBody>().get(leg).is_some_and(|b| b.mass > 0.0), "a body of its own");
+    assert_eq!(world.query::<&Debris>().get(leg).map(|d| d.lifetime), Some(7.0), "ageing as the lander's debris");
+    let at = world.query::<&Transform>().get(leg).map(|t| t.position).expect("placed");
+    assert!(at.distance(held_at) < 0.3, "where the lander held it, {held_at}, not at {at}");
+}
+
+/// What breaks in a plane breaks in it: a planar body's debris and the parts it lets go of keep its
+/// axis locks, and do not leave the slab the body was (its pieces are cut through its depth, ±0.5
+/// here, and each keeps its own). Measured in `inis` on the code before: a lander's legs ended 1.7 m
+/// off the plane of a side-on game, and its pieces were spawned free.
+#[test]
+fn a_planar_bodys_pieces_stay_in_its_plane() {
+    use gizmo_core::component::{Children, Parent};
+    let mut world = world_with_floor();
+    let lander = world.spawn();
+    world.add_component(lander, Transform::new(Vec3::new(0.0, 3.0, 0.0)));
+    world.add_component(lander, RigidBody::new(10.0, true).planar_xy());
+    world.add_component(lander, Velocity::new(Vec3::new(1.0, -15.0, 0.0)));
+    world.add_component(lander, Collider::box_collider(Vec3::new(1.0, 0.4, 0.5)));
+    world.add_component(lander, fragile());
+    let leg = world.spawn();
+    world.add_component(leg, Transform::new(Vec3::new(0.8, -0.8, 0.0)));
+    world.add_component(leg, Collider::box_collider(Vec3::new(0.1, 0.4, 0.1)));
+    world.add_component(leg, Parent(lander));
+    world.add_component(lander, Children(vec![leg]));
+    let mut broke = false;
+    for _ in 0..180 {
+        broke |= !step(&mut world).is_empty();
+    }
+    assert!(broke, "the lander broke");
+    let pieces = world.query::<(gizmo_core::entity::Entity, &Debris, &RigidBody, &Transform, &Velocity)>();
+    let mut seen = 0;
+    for (e, _, body, t, v) in pieces.iter() {
+        seen += 1;
+        assert!(body.lock_translation_z && body.lock_rotation_x && body.lock_rotation_y, "{e:?} kept the lander's locks");
+        assert!(v.linear.z == 0.0 && t.position.z.abs() <= 0.5 + 1e-3, "{e:?} stayed in the slab: z = {}, vz = {}", t.position.z, v.linear.z);
+    }
+    let leg_z = world.query::<&Transform>().get(leg).map(|t| t.position.z);
+    assert_eq!(leg_z, Some(0.0), "the leg, cut from nowhere, is on the plane itself");
+    assert!(seen > 1, "the debris and the leg were looked at: {seen}");
+}
+
+/// A blast's break lets go of the parts too: the explosion path shatters through the same helper.
+#[test]
+fn a_blast_lets_go_of_a_bodys_parts() {
+    use gizmo_core::component::{Children, Parent};
+    let mut world = World::new();
+    world.insert_resource(PhysicsWorld::new());
+    let crate_ = world.spawn();
+    world.add_component(crate_, Transform::new(Vec3::new(1.0, 0.0, 0.0)));
+    world.add_component(crate_, Collider::box_collider(Vec3::splat(0.3)));
+    world.add_component(crate_, Breakable { threshold: 1.0, current_health: 50.0, max_health: 50.0, debris_lifetime: 3.0, ..Default::default() });
+    let lid = world.spawn();
+    world.add_component(lid, Transform::new(Vec3::new(0.0, 0.4, 0.0)));
+    world.add_component(lid, Collider::box_collider(Vec3::new(0.3, 0.05, 0.3)));
+    world.add_component(lid, Parent(crate_));
+    world.add_component(crate_, Children(vec![lid]));
+    let blast = world.spawn();
+    world.add_component(
+        blast,
+        Explosion { force_radius: 10.0, force: 500.0, damage: 1000.0, damage_radius: 2.0, falloff: ExplosionFalloff::Linear, offset: Vec3::ZERO, is_active: true },
+    );
+    world.add_component(blast, Transform::new(Vec3::ZERO));
+    physics_explosion_system(&world, DT);
+    world.apply_commands();
+    assert!(!world.is_alive(crate_), "the crate broke");
+    assert!(world.query::<&RigidBody>().get(lid).is_some(), "its lid is a body of its own");
+    let at = world.query::<&Transform>().get(lid).map(|t| t.position);
+    assert_eq!(at, Some(Vec3::new(1.0, 0.4, 0.0)), "where the crate held it");
+}

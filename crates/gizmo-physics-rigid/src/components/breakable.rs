@@ -128,7 +128,9 @@ pub struct Debris {
     /// this (the break despawns it), so it is a label — which pieces belong together — and not
     /// something to look up.
     pub source: u32,
-    /// Vertex positions, metres, in the piece's own frame.
+    /// Vertex positions, metres, in the piece's own frame. Empty for a part of the body's compound
+    /// that broke loose (a child collider): it is its own shape, and drawn by its own mesh if it has
+    /// one.
     pub vertices: Vec<gizmo_math::Vec3>,
     /// One outward unit normal per vertex, constant across each face.
     pub normals: Vec<gizmo_math::Vec3>,

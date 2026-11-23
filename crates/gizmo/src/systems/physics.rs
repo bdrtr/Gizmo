@@ -659,7 +659,8 @@ pub(crate) fn attach_debris_visuals(world: &mut crate::core::World, looks: &[(gi
         let drawn = world.query::<&MeshRenderer>();
         pieces
             .iter()
-            .filter(|(entity, _)| drawn.get(*entity).is_none())
+            // A part that broke loose (no cell of its own) is drawn by its own mesh, or not at all.
+            .filter(|(entity, d)| drawn.get(*entity).is_none() && !d.indices.is_empty())
             .map(|(entity, d)| (entity, debris_mesh(d), d.source))
             .collect()
     };
