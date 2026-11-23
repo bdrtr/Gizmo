@@ -202,18 +202,18 @@ pub fn surface_effects_on(renderer: &Renderer) -> bool {
     renderer.ssr.as_ref().is_some_and(|s| s.enabled) || renderer.ssgi.as_ref().is_some_and(|s| s.enabled)
 }
 
-/// Whether the volumetric light draws this frame.
+/// Whether the volumetric light draws this frame: on, and something in the view scatters.
 pub fn volumetric_on(renderer: &Renderer) -> bool {
-    renderer.volumetric.as_ref().is_some_and(|s| s.enabled)
+    renderer.volumetric.as_ref().is_some_and(|s| s.draws())
 }
 
 /// The volumetric march, between the opaque world and what blends, and the air behind the nearest
 /// surface that blends added there: what blends is drawn over it and shows it as much as it lets through.
 /// The air in front is added over everything by [`record_screen_space_effects`]. The march splits the
-/// air at the depth [`record_veil_depth`](super::forward) drew; with nothing that blends, all of it is
-/// in front, and the frame is what it was when the whole term was added last.
-pub fn record_volumetric_march(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) {
-    let Some(vol) = renderer.volumetric.as_ref().filter(|s| s.enabled) else {
+/// air at the depth [`record_veil_depth`](super::forward) drew; with nothing that blends (`blends`
+/// false), all of it is in front, the term behind is nothing, and its full-screen pass is not drawn.
+pub fn record_volumetric_march(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer, blends: bool) {
+    let Some(vol) = renderer.volumetric.as_ref().filter(|s| s.draws()) else {
         return;
     };
     // The shaping numbers go up every frame, so `vol.params.steps = 8.0` is the whole gesture — no
@@ -242,12 +242,14 @@ pub fn record_volumetric_march(encoder: &mut wgpu::CommandEncoder, renderer: &Re
         pass.set_bind_group(2, &vol.volumetric_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
-    apply_volumetric(encoder, renderer, &vol.behind_apply_bind_group, "Volumetric Apply Pass (behind)");
+    if blends {
+        apply_volumetric(encoder, renderer, &vol.behind_apply_bind_group, "Volumetric Apply Pass (behind)");
+    }
 }
 
 /// The air in front of the nearest surface that blends, added over the whole frame, after what blends.
 pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) {
-    if let Some(vol) = renderer.volumetric.as_ref().filter(|s| s.enabled) {
+    if let Some(vol) = renderer.volumetric.as_ref().filter(|s| s.draws()) {
         apply_volumetric(encoder, renderer, &vol.apply_bind_group, "Volumetric Apply Pass");
     }
 }

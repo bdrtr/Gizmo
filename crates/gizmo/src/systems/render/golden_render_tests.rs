@@ -5492,6 +5492,7 @@ async fn render_sunbeam_full(
 ) -> Vec<u8> {
     const W: u32 = 128;
     let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+    air_on(&mut renderer);
     if let Some(vol) = renderer.volumetric.as_mut() {
         tweak(&mut vol.params);
     }
@@ -5863,6 +5864,18 @@ fn air_in(air: &[f32], side: usize, xs: std::ops::Range<usize>, ys: std::ops::Ra
     ys.flat_map(|y| xs.clone().map(move |x| (x, y))).map(|(x, y)| air[y * side + x]).sum()
 }
 
+/// Turns the volumetric light on, at the desktop's half-size march, on either path: the forward-only
+/// path builds it off and marches a quarter each way (`volumetric::ENABLED_BY_DEFAULT`,
+/// `DEFAULT_MARCH_DIVISOR`), and the air tests were measured at a half.
+fn air_on(renderer: &mut Renderer) {
+    renderer.enable_volumetric();
+    let Renderer { volumetric, device, depth_texture_view, .. } = renderer;
+    if let Some(air) = volumetric.as_mut() {
+        air.enabled = true;
+        air.set_march_divisor(device, depth_texture_view, 2);
+    }
+}
+
 /// A renderer for the air tests: the path's own, with its volumetric march and nothing that reads the
 /// frame back over time.
 async fn air_renderer() -> Renderer {
@@ -5870,7 +5883,7 @@ async fn air_renderer() -> Renderer {
     renderer.taa = None;
     renderer.ssgi = None;
     renderer.ssr = None;
-    renderer.enable_volumetric();
+    air_on(&mut renderer);
     // These tests ask where the air is — in a cone, short of a wall's shadow, behind a pane — not how
     // thick: they see it at 0.04, eighty times the engine's thin default, so that what they measure
     // stands well clear of the frame's own.
@@ -5878,6 +5891,64 @@ async fn air_renderer() -> Renderer {
         air.params.bulb_scatter = 0.04;
     }
     renderer
+}
+
+/// **The air after a pane has gone is the air of a frame that never had one.** The veil's pass is
+/// skipped while nothing blends and its target is clear (`VolumetricState::veil_stale`). After a frame
+/// with a pane, the next one without it has to clear what the pane left: skipped, the march goes on
+/// splitting the air where the pane stood, and what is behind it — added ahead of what blends, of which
+/// there is nothing now — is lost from the frame. A lamp a metre behind where the pane stands.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn the_air_after_a_pane_has_gone_is_the_air_of_a_frame_without_one() {
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    fn scene(renderer: &Renderer, pane: bool) -> World {
+        let mut world = World::new();
+        if pane {
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 2.0)).with_scale(Vec3::new(7.0, 7.0, 0.02)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(tex).with_pbr(Vec4::new(0.3, 0.3, 0.35, 0.98), 0.0, 0.9).with_transparent(true));
+            world.add_component(e, MeshRenderer::new());
+        }
+        let lamp = world.spawn();
+        world.add_component(lamp, Transform::new(Vec3::new(0.0, 1.0, 3.0)));
+        world.add_component(lamp, GlobalTransform::default());
+        world.add_component(lamp, PointLight::new(Vec3::ONE, 40.0, 9.0));
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 1.0, -4.0),
+            yaw: std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        });
+        world
+    }
+    pollster::block_on(async {
+        let mut fresh = air_renderer().await;
+        let mut world = scene(&fresh, false);
+        let (never, side) = volumetric_air(&mut fresh, &mut world).await;
+        let mut used = air_renderer().await;
+        let mut world = scene(&used, true);
+        let (split, _) = volumetric_air(&mut used, &mut world).await;
+        let mut world = scene(&used, false);
+        let (after, _) = volumetric_air(&mut used, &mut world).await;
+        let total = |air: &[f32]| air_in(air, side, 0..side, 0..side);
+        let (never_t, split_t, after_t) = (total(&never), total(&split), total(&after));
+        eprintln!("air in front: {never_t:.3} never a pane, {split_t:.3} with one, {after_t:.3} after it");
+        assert!(split_t < 0.8 * never_t, "the setup: the pane takes the air behind it out of the front ({split_t:.3} of {never_t:.3})");
+        let worst = never.iter().zip(&after).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
+        assert!(worst <= 1e-3, "the air after the pane differs from a frame that never had one by {worst} in a texel ({after_t:.3} against {never_t:.3})");
+    });
 }
 
 /// A box of half extents `half` at `at` (the cube mesh spans −1…1), white and matte, casting and
@@ -6858,6 +6929,7 @@ fn a_pane_shows_the_air_behind_it_as_much_as_it_lets_through() {
         renderer.smaa = None;
         renderer.cas = None;
         renderer.bloom_intensity = 0.0;
+        air_on(&mut renderer);
         if !volumetric {
             renderer.volumetric = None;
         }

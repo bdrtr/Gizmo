@@ -59,11 +59,24 @@ impl Default for VolumetricParams {
     }
 }
 
+/// Whether a renderer's volumetric light is on as it is built ([`VolumetricState::enabled`]): on the
+/// desktop, and **off on the forward-only path** — a browser's, a phone's — where a game turns it on.
+/// Measured on an Adreno 618 (Nişancı, portrait, twenty readings each, one sitting, 2026-11-23): 119.6 fps
+/// without it, 30.1 with the desktop's march (half the frame's size a side), 54.3 with a sixteenth of the
+/// pixels — 61.7 since the passes it does not need are skipped (`set_frame_scatters`, `veil_stale`),
+/// against 114.1 and 121.9 off. The owner's choice: built there, off until asked for.
+pub const ENABLED_BY_DEFAULT: bool = !cfg!(gizmo_forward_only);
+
+/// The march's divisor as a state is built ([`VolumetricState::march_divisor`]): 2 on the desktop, 4 on
+/// the forward-only path, where what the march costs a phone is its pixels (see [`ENABLED_BY_DEFAULT`]).
+pub const DEFAULT_MARCH_DIVISOR: u32 = if cfg!(gizmo_forward_only) { 4 } else { 2 };
+
 /// Volumetric lighting — the shafts of light ("god rays") raymarched through the sun's cascades and
 /// the local lights' shadow layers.
 ///
-/// Marched at reduced resolution — half by default, [`set_march_divisor`](Self::set_march_divisor) for
-/// less — and applied over the HDR target through a depth-aware upsample: each pixel takes the march's
+/// Marched at reduced resolution — half each way by default on the desktop, a quarter on the
+/// forward-only path ([`DEFAULT_MARCH_DIVISOR`]), [`set_march_divisor`](Self::set_march_divisor) for
+/// another — and applied over the HDR target through a depth-aware upsample: each pixel takes the march's
 /// four nearest texels weighted by how near their surfaces stand to its own, so the air marched past a
 /// lamp post does not spill onto the post. The effect is low-frequency; the cost is the march's pixels.
 ///
@@ -125,13 +138,22 @@ pub struct VolumetricState {
     /// because every texture this state owns is read only by this state's own apply pass, which is
     /// skipped with it, and the apply pass composites into the HDR target with `LoadOp::Load` —
     /// so a skipped effect leaves the frame exactly as it found it. Resizing still happens while
-    /// off, so switching back on costs no rebuild.
+    /// off, so switching back on costs no rebuild. [`ENABLED_BY_DEFAULT`] as built: off on the
+    /// forward-only path.
     pub enabled: bool,
+    /// Whether anything in the view drawn now scatters into the air: a sun with
+    /// [`sun_scatter`](VolumetricParams::sun_scatter), or a light with either coefficient. Set for each
+    /// view by the frame ([`set_frame_scatters`](Self::set_frame_scatters)); without anything to scatter
+    /// the pass is skipped as if off, and the frame is what it would be with no air at all.
+    scatters: bool,
+    /// Whether the veil's target holds anything but the clear depth: something was drawn into it, or it
+    /// is new. A frame with nothing that blends skips the veil's pass while it is clear.
+    veil_stale: bool,
 
     /// The six shaping numbers. Write to them directly; they reach the GPU on the next frame.
     pub params: VolumetricParams,
-    /// The frame's size over the march's, each way: 2 (the default) marches a quarter of its pixels, 4 a
-    /// sixteenth. Set through [`set_march_divisor`](Self::set_march_divisor), which rebuilds the targets.
+    /// The frame's size over the march's, each way: 2 (the desktop's default) marches a quarter of its
+    /// pixels, 4 (the forward-only path's) a sixteenth. Set through [`set_march_divisor`](Self::set_march_divisor), which rebuilds the targets.
     march_divisor: u32,
     /// Their uniform buffer.
     pub params_buffer: wgpu::Buffer,
@@ -155,7 +177,7 @@ impl VolumetricState {
             ..Default::default()
         });
 
-        let march_divisor = 2;
+        let march_divisor = DEFAULT_MARCH_DIVISOR;
         let (march_w, march_h) = ((width / march_divisor).max(1), (height / march_divisor).max(1));
         let (volumetric_texture, volumetric_view) = Self::mk_tex(device, march_w, march_h);
         let (behind_texture, behind_view) = Self::mk_tex(device, march_w, march_h);
@@ -202,7 +224,9 @@ impl VolumetricState {
         let apply_pipeline = Self::mk_apply_pipeline(device, &apply_bgl, scene);
 
         Self {
-            enabled: true,
+            enabled: ENABLED_BY_DEFAULT,
+            scatters: true,
+            veil_stale: true,
             params,
             params_buffer,
             volumetric_texture,
@@ -233,7 +257,33 @@ impl VolumetricState {
         self.march_divisor
     }
 
-    /// Marches one pixel of `divisor` × `divisor` of the frame's (1 – 8; 2 is the default), rebuilding the
+    /// Whether the pass draws in the view drawn now: [`enabled`](Self::enabled), and something there
+    /// scatters ([`set_frame_scatters`](Self::set_frame_scatters)).
+    #[must_use]
+    pub fn draws(&self) -> bool {
+        self.enabled && self.scatters
+    }
+
+    /// Says whether anything in the view about to be drawn scatters into the air, with these params:
+    /// a sun (`sun`), or any light (`lights`). True until a frame says otherwise.
+    pub fn set_frame_scatters(&mut self, sun: bool, lights: bool) {
+        let p = &self.params;
+        self.scatters = (sun && p.sun_scatter > 0.0) || (lights && (p.bulb_scatter > 0.0 || p.sun_scatter > 0.0));
+    }
+
+    /// Whether the veil's target has to be drawn this frame although nothing blends: to clear what an
+    /// earlier frame drew into it, or a new target's contents.
+    #[must_use]
+    pub fn veil_stale(&self) -> bool {
+        self.veil_stale
+    }
+
+    /// Records the veil's pass: `drew`, whether anything was drawn into it after its clear.
+    pub fn veil_drawn(&mut self, drew: bool) {
+        self.veil_stale = drew;
+    }
+
+    /// Marches one pixel of `divisor` × `divisor` of the frame's (1 – 8; [`DEFAULT_MARCH_DIVISOR`] as built), rebuilding the
     /// targets when it changes. The march's cost is its pixels: 4 is a quarter of 2's. `nfsu2-gizmo`'s
     /// lamp-lit streets took 4.3 ms of haze at 2 (1080p, AMD 780M).
     pub fn set_march_divisor(&mut self, device: &wgpu::Device, depth_view: &wgpu::TextureView, divisor: u32) {
@@ -272,6 +322,7 @@ impl VolumetricState {
         let (t, v) = Self::mk_veil_depth(device, width, height);
         self.veil_depth_texture = t;
         self.veil_depth_view = v;
+        self.veil_stale = true;
 
         self.volumetric_bind_group = Self::mk_volumetric_bg(
             device,
@@ -595,6 +646,7 @@ crate::view_targets::screen_targets! {
         behind_view: wgpu::TextureView,
         veil_depth_texture: wgpu::Texture,
         veil_depth_view: wgpu::TextureView,
+        veil_stale: bool,
         volumetric_bind_group: wgpu::BindGroup,
         volumetric_texture: wgpu::Texture,
         volumetric_view: wgpu::TextureView,

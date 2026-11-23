@@ -175,7 +175,7 @@ fn quiet(renderer: &mut Renderer) {
     // draw before drew (`ShadowSettings::fit_to_scene`, on by default on the forward-only path;
     // `csm::SceneExtent`, one frame behind), so the first draw, or one after another world, is fitted
     // otherwise than the next: the surfaces hardly show it, the air shafts' edges do (8 – 93 pixels,
-    // 2026-11-23, when the volumetric light came to that path).
+    // 2026-11-23, with the volumetric light on there; it is off there by default since the same day).
     renderer.shadow_settings = renderer.shadow_settings.with_fit_to_scene(false);
 }
 

@@ -96,9 +96,17 @@ pub fn record_forward_and_fluid(
         // draw marks after this, held them all — the air's march, the glass, the motion, the particles,
         // the rain — and a drive's 7 ms of it could not be told apart.
         if volumetric {
-            record_veil_depth(encoder, renderer, &draw_items[world_end..], uploaded_instances, simulations);
+            // The veil's pass only while something blends, or to clear what an earlier frame left in it.
+            let blended = &draw_items[world_end..];
+            let blends = blended.iter().any(|item| veils(item, uploaded_instances)) || particles_veil(renderer, simulations);
+            if blends || renderer.volumetric.as_ref().is_some_and(|v| v.veil_stale()) {
+                record_veil_depth(encoder, renderer, blended, uploaded_instances, simulations);
+                if let Some(vol) = renderer.volumetric.as_mut() {
+                    vol.veil_drawn(blends);
+                }
+            }
             renderer.gpu_mark(encoder, "gpu.veil");
-            super::screen_space::record_volumetric_march(encoder, renderer);
+            super::screen_space::record_volumetric_march(encoder, renderer, blends);
             renderer.gpu_mark(encoder, "gpu.haze");
         }
         if let Some(behind) = renderer.behind.as_ref().filter(|_| has_glass) {
@@ -236,7 +244,7 @@ fn record_veil_depth(
     let particles = renderer
         .gpu_particles
         .as_ref()
-        .filter(|p| simulations && p.active_particles > 0)
+        .filter(|_| particles_veil(renderer, simulations))
         .map(|p| (p, p.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view, renderer.scene.view_cluster_buffers(), &renderer.scene.cookies)));
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Volumetric Veil Depth"),
@@ -257,13 +265,10 @@ fn record_veil_depth(
     let mut plan = super::plan::PassPlan::default();
     let mut solid = None;
     for item in blended {
-        if !item.visible_in_camera || item.blend_mode == crate::renderer::components::BlendMode::Additive {
+        if !veils(item, uploaded_instances) {
             continue;
         }
         let instances = item.camera_instance_range(uploaded_instances);
-        if instances.is_empty() {
-            continue;
-        }
         let Some(pipeline) = super::shadow::caster_pipeline(renderer, item, false) else { continue };
         super::shadow::bind_caster(&mut plan, renderer, item, pipeline, &mut solid);
         item.plan_draw(&mut plan, instances);
@@ -272,6 +277,20 @@ fn record_veil_depth(
     if let Some((particles, depth)) = particles.as_ref() {
         particles.record_veil(&mut pass, renderer.scene.view_bind_group(), depth, particles.active_particles);
     }
+}
+
+/// Whether `item`, drawn after the opaque world, is drawn into the volumetric veil: seen, some of it in
+/// view, and not additive (see [`record_veil_depth`]).
+fn veils(item: &DrawItem, uploaded_instances: u32) -> bool {
+    item.visible_in_camera
+        && item.blend_mode != crate::renderer::components::BlendMode::Additive
+        && !item.camera_instance_range(uploaded_instances).is_empty()
+}
+
+/// Whether the GPU particles are drawn into the volumetric veil: this view draws the simulations, and
+/// some are alive.
+fn particles_veil(renderer: &Renderer, simulations: bool) -> bool {
+    simulations && renderer.gpu_particles.as_ref().is_some_and(|p| p.active_particles > 0)
 }
 
 /// The main pass over the HDR target and the depth buffer, with what every draw in it shares bound.

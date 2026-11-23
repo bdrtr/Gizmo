@@ -590,10 +590,14 @@ fn upload_scene(renderer: &mut Renderer, setup: &SceneSetup, has_rain_map: bool,
             )),
         );
     }
-    // The volumetric veil's pass draws through the shadow pipelines, from the camera, as the frame is
-    // rasterised (`VolumetricState::veil_pass`).
-    if let Some(vol) = renderer.volumetric.as_ref().filter(|v| v.enabled) {
-        vol.write_veil_pass(&renderer.queue, setup.frame.camera.view_proj, cam_pos, elapsed_time);
+    // Whether this view's air has anything to scatter: without, the volumetric passes are skipped. Its
+    // veil's pass draws through the shadow pipelines, from the camera, as the frame is rasterised
+    // (`VolumetricState::veil_pass`).
+    if let Some(vol) = renderer.volumetric.as_mut() {
+        vol.set_frame_scatters(setup.frame.sun.present, setup.frame.num_lights > 0);
+        if vol.draws() {
+            vol.write_veil_pass(&renderer.queue, setup.frame.camera.view_proj, cam_pos, elapsed_time);
+        }
     }
 }
 

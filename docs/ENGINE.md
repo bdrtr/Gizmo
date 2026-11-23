@@ -263,10 +263,16 @@ the first write (Unity's material instance — a hidden un-sharing).
 >      frame that draws none. That path's one cascade reaches 40 m and is fitted to the scene's
 >      depth, where the march goes 100 m: the air beyond a pinball table's 4 m was dark although
 >      nothing can shadow it. It takes all of the sun there now, as a surface there is lit
->      (`sun_reach` in `volumetric.wgsl`). Its tests, un-gated, run on both paths. Not measured on
->      a phone: what the march costs a frame there — the desktop's half resolution and sixteen
->      steps, on by default as on the desktop (`VolumetricState::enabled`,
->      `set_march_divisor`).
+>      (`sun_reach` in `volumetric.wgsl`). Its tests, un-gated, run on both paths. **Measured on
+>      the phone the same day** (Adreno 618, Nişancı portrait, twenty readings each, one sitting):
+>      119.6 fps without it, 30.1 with the desktop's march, 54.3 marching a sixteenth of the
+>      pixels. So, the owner's choice: **built there, off by default** (`volumetric::
+>      ENABLED_BY_DEFAULT`), a game turns it on (`enabled`), and it marches a quarter each way there
+>      (`DEFAULT_MARCH_DIVISOR`). On both paths it costs nothing where nothing scatters (no sun, no
+>      light: `set_frame_scatters`), and with nothing that blends neither the veil's pass (once its
+>      target is clear, `veil_stale`) nor the term behind's full-screen pass is drawn — what made the
+>      sixteenth of the pixels cost 10 ms where a quarter cost 25 was these full-screen passes. With
+>      them cut, turned on there, it read 61.7 fps against 114.1 and 121.9 off (D/E/D, one sitting).
 > 7. ~~**A body under a parent was simulated at its own `Transform` as a world pose, and drawn at
 >    its parent's pose composed with it.**~~ **Closed 2026-11-23, option (a), the owner's choice:**
 >    a rigid body is a root of the propagation. Its `Transform` is its world pose whatever its

@@ -555,6 +555,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   through the shadow pipelines from the camera (`VolumetricState::veil_pass`, `write_veil_pass`),
   where it was drawn through the G-buffer's prepass. `Renderer::keep_gbuffer_readers` keeps it.
   docs/ENGINE.md §3 item 6, now closed. Its nine GPU tests run on both paths.
+  - **Off by default there** (`volumetric::ENABLED_BY_DEFAULT`; a game sets `enabled`), and a
+    quarter of the frame's size each way when on (`DEFAULT_MARCH_DIVISOR`): on an Adreno 618 it
+    took Nişancı from 119.6 fps to 30.1, 54.3 at a sixteenth of the pixels, and 61.7 with the
+    cuts below (114.1 / 121.9 off, in the same sitting).
+  - It is skipped where nothing scatters (`VolumetricState::set_frame_scatters`, `draws`), and with
+    nothing that blends neither the veil's pass nor the full-screen pass of the air behind it is
+    drawn (`veil_stale`, `veil_drawn`), on both paths.
+    `the_air_after_a_pane_has_gone_is_the_air_of_a_frame_without_one`.
   - **Fixed:** the air the sun's cascades do not reach had no sun in it — past their distance,
     outside their map, and in a frame that draws none. It takes all of it now, as a surface there
     is lit. The forward-only path's one cascade is fitted to the scene's depth, so there every ray
