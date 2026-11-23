@@ -160,13 +160,20 @@ impl ConstraintSolver {
         // depth when the block solver is on, else `self.iterations`).
         n_iterations: usize,
         dt: f32,
+        // The island's joints, swept before each contact sweep (`super::BetweenSweeps`).
+        mut between: super::BetweenSweeps<'_>,
     ) {
         let inv_dt = if dt > 0.0 { 1.0 / dt } else { 0.0 };
 
         let coeffs = self.soft_coefficients(dt, inv_dt);
         let (vn0_off, vn0) = Self::approach_speeds(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
         self.warm_start_tgs(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
-        let real_bodies = Self::real_contact_bodies(manifolds, entity_index_map);
+        let mut real_bodies = Self::real_contact_bodies(manifolds, entity_index_map);
+        // A joint's bodies take the position integration too: its correction is made in the biased
+        // sweeps and kept in the position, not in the velocity (`super::IslandJoints::bodies`).
+        if let Some(joints) = &between {
+            real_bodies.extend(joints.bodies.iter().copied());
+        }
 
         let h = if n_iterations > 0 {
             dt / n_iterations as f32
@@ -217,6 +224,12 @@ impl ConstraintSolver {
             // (SI'nin yapamadığı; uzun/çarpan yığınları ayakta tutan temel mekanizma).
             let _sweep = crate::profile::Scope::new(&crate::profile::PHASES.sweep);
             for iter in 0..n_iterations {
+                // The joints first and the contacts after, in every sweep (as Box2D v3 orders them):
+                // the last word goes to the contacts, which have no correction for a small overlap
+                // (`slop`) — a joint's error is corrected by its own bias on the next substep.
+                if let Some(between) = between.as_mut() {
+                    (between.sweep)(velocities, false);
+                }
                 self.sweep(&mut prepared, &block_groups, direct, velocities, dp.as_slice(), iter % 2 == 1, Some(coeffs), inv_dt);
                 for &i in island_bodies {
                     if real_bodies.contains(&i) && rigid_bodies[i].is_dynamic() {
@@ -230,6 +243,9 @@ impl ConstraintSolver {
             drop(_sweep);
             let _relax = crate::profile::Scope::new(&crate::profile::PHASES.relax);
             for iter in 0..self.relax_iterations {
+                if let Some(between) = between.as_mut() {
+                    (between.sweep)(velocities, true);
+                }
                 self.sweep(&mut prepared, &block_groups, direct, velocities, dp.as_slice(), iter % 2 == 1, None, inv_dt);
             }
 

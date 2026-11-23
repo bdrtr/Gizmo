@@ -25,6 +25,11 @@ pub struct JointScratch {
     /// rather than in the coefficients for an entirely practical reason: the scratch was already
     /// threaded through all 25 `apply_*` call sites, and the solver mode was not.
     warm_factor: f32,
+    /// A relax sweep of the island this joint is solved in (`JointSolver::sweep_island`): its rigid
+    /// rows hold velocity alone, with no position bias, so the bias is not left in the velocity
+    /// the step ends with — the island's position integration carries the correction instead.
+    /// In the scratch for the reason `warm_factor` is.
+    relaxing: bool,
     /// The pass's NET linear impulse, `Σ λᵢ·nᵢ` (world space). `break_force` is derived from
     /// it: the magnitude of the real reaction force being carried is `‖Σ λᵢ·nᵢ‖ / dt`.
     pub(crate) impulse_lin: Vec3,
@@ -80,6 +85,17 @@ impl JointScratch {
         self.warm_factor = factor;
     }
 
+    /// Whether this is a relax sweep (`relaxing`).
+    #[inline]
+    pub(crate) fn relaxing(&self) -> bool {
+        self.relaxing
+    }
+
+    #[inline]
+    pub(crate) fn set_relaxing(&mut self, relaxing: bool) {
+        self.relaxing = relaxing;
+    }
+
     /// Begin a solver pass that WILL run: this pass's λ and net impulses go to zero, and the
     /// λ the previous pass converged to is retained for the warm start.
     #[inline]
@@ -104,6 +120,7 @@ impl JointScratch {
     pub(crate) fn clear_pass(&mut self) {
         self.rows = [0.0; Self::LEN];
         self.warm_factor = 0.0;
+        self.relaxing = false;
         self.impulse_lin = Vec3::ZERO;
         self.impulse_ang = Vec3::ZERO;
     }

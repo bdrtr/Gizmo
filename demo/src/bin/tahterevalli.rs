@@ -10,16 +10,17 @@
 //!   darbenin ve bir savrulmanın boyunca açılmamalı, tahta düzleminden çıkmamalı.
 //! - **Eklemli bir bileşik gövde**: topu tutan kenar, tahtanın çocuğu olan bir çarpıştırıcıdır.
 //! - **Eklem, temas ve uyku birlikte**: dinlenirken tahta bir ucuyla yere, ortasıyla eklemine
-//!   dayanır ve uyumalıdır (uyumuyor: aşağıda); düşen kutu onu uyandırır.
+//!   dayanır ve uyur; düşen kutu onu uyandırır.
 //! - **Cisimleri yerine koymak**: tur sonunda tahta ve top `Transform` ve `Velocity`
 //!   yazılarak ışınlanır, kutu silinir ve yenisi bırakılır; ikinci tur birincinin aynısı olmalı.
 //!
-//! Bu oyun yazılırken bulunan: dinlenen tahtanın üstündeki top saniyede 5–6 cm titriyor ve ikisi de
-//! hiç uyumuyor. Adım temasları sonuna kadar, eklemleri ondan sonra, birbirini görmeden çözüyor
-//! (docs/ENGINE.md §3 madde 8, `joints_with_contacts.rs`). Test uyuyanları yazar, şart koşmaz.
+//! Bu oyun yazılırken bulunan: dinlenen tahtanın üstündeki top saniyede 5–6 cm titriyordu ve ikisi
+//! de hiç uyumuyordu. Adım temasları sonuna kadar, eklemleri ondan sonra, birbirini görmeden
+//! çözüyordu. Eklemler artık temas adalarının kenarı ve adanın taramalarında temaslardan önce
+//! çözülüyor (`joints_with_contacts.rs`); tahta ve top dinlenirken uyuyor.
 //!
 //! `tahterevalli --test`: pencere açmadan iki tur oynar. Her tur dinlenişin geometrisini (tahta
-//! ucuyla yerde, top köşesinde), atışı (top yükselir, ama düşen kutunun bıraktığı
+//! ucuyla yerde, top köşesinde, ikisi de uyur), atışı (top yükselir, ama düşen kutunun bıraktığı
 //! enerjiden fazla değil) ve menteşeyi (açılmaz, düzlemden çıkmaz) ölçer; iki turun atışı aynı
 //! yüksekliğe çıkmalı.
 use gizmo::core::hierarchy::HierarchyExt;
@@ -269,12 +270,10 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, _input: &In
 
 /// Bir turun kaydını sınar; neyin tuttuğunu ve tutmadığını yazar.
 fn check(n: usize, log: &RoundLog) -> bool {
-    // Dinlenirken: tahtanın sol ucu yerde; top, kenarla üst yüzün köşesinde. Uyumaları gerekirdi ama
-    // uyumuyorlar — eklemle temas ayrı geçişlerde çözülüyor, top tahtanın üstünde titriyor
-    // (docs/ENGINE.md §3 madde 8). Sayıları yazılır, şart koşulmaz; o madde kapanınca koşulur.
+    // Dinlenirken: tahtanın sol ucu yerde; top, kenarla üst yüzün köşesinde; ikisi de uyur.
     let tilt_ok = (log.rest_tilt - rest_tilt()).abs() < 0.5f32.to_radians();
     let ball_off = (log.rest_ball - ball_on_plank()).length();
-    let rest_ok = tilt_ok && ball_off < 0.02;
+    let rest_ok = tilt_ok && ball_off < 0.02 && log.asleep == 2;
     // Atış: top bir metreden fazla yükselir, ama kutunun bıraktığı potansiyel enerjiden fazla değil.
     // Tahtanın kendi enerjisi tur başında ve kutu dinlendiğinde aynıdır (simetrik, ucu yerde).
     let ball_rest_y = PIVOT.y + Quat::from_rotation_z(rest_tilt()).mul_vec3(ball_on_plank() + Vec3::Y * PLANK_HALF.y).y;
@@ -283,7 +282,7 @@ fn check(n: usize, log: &RoundLog) -> bool {
     let launch_ok = log.ball_peak - ball_rest_y > 1.0 && gained <= given;
     let hinge_ok = log.hinge_gap < 0.01 && log.off_plane < 1e-3;
     println!(
-        "  tur {n}: tahta {:.2}° (geometri {:.2}°), top köşesinden {:.3} m, {}/2 uyuyor (ENGINE §3 madde 8); top {:.2} m yükseldi \
+        "  tur {n}: tahta {:.2}° (geometri {:.2}°), top köşesinden {:.3} m, {}/2 uyuyor; top {:.2} m yükseldi \
          ({gained:.1} ≤ {given:.1} kg·m); menteşe en çok {:.4} m açıldı, düzlemden {:.1e} saptı",
         log.rest_tilt.to_degrees(),
         rest_tilt().to_degrees(),

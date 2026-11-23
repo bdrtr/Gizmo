@@ -43,15 +43,44 @@ impl IslandManager {
         manifolds: &[ContactManifold],
         entity_is_dynamic: &impl Fn(BodyHandle) -> bool,
     ) -> Vec<Island> {
+        Self::build_islands_with_joints(manifolds, &[], entity_is_dynamic).0
+    }
+
+    /// [`build_islands`](Self::build_islands), with the joints as edges too: two manifolds share an
+    /// island when a path of contacts **and joints** through dynamic bodies joins them. Returns the
+    /// islands and, for each entry of `joints`, the island it belongs to — `None` for a joint none of
+    /// whose dynamic bodies reaches a contact (a chain hanging free, a pendulum), and for a `None`
+    /// entry (a broken joint, or one whose bodies are gone).
+    ///
+    /// Joints are edges because the solver solves an island's joints in the same sweeps as its
+    /// contacts: a body held by a joint and touched by a contact needs both in one solve, or each
+    /// undoes the other (`pipeline.rs`, `solve_island_contacts`). With no joints the islands are
+    /// exactly `build_islands`', in the same order.
+    pub(crate) fn build_islands_with_joints(
+        manifolds: &[ContactManifold],
+        joints: &[Option<(BodyHandle, BodyHandle)>],
+        entity_is_dynamic: &impl Fn(BodyHandle) -> bool,
+    ) -> (Vec<Island>, Vec<Option<usize>>) {
         if manifolds.is_empty() {
-            return Vec::new();
+            return (Vec::new(), vec![None; joints.len()]);
         }
 
-        let n = manifolds.len();
-
-        // ── Union-Find veri yapısı ────────────────────────────────────────────
-        let mut parent: Vec<usize> = (0..n).collect();
-        let mut rank: Vec<u8> = vec![0; n];
+        // ── Union-find over the dynamic bodies ────────────────────────────────
+        // A static or kinematic body joins nothing: it can be touched by any number of islands,
+        // which never exchange an impulse through it.
+        let mut node: HashMap<u32, usize> = HashMap::new();
+        let mut parent: Vec<usize> = Vec::new();
+        let mut rank: Vec<u8> = Vec::new();
+        let mut node_of = |body: BodyHandle, parent: &mut Vec<usize>, rank: &mut Vec<u8>| -> Option<usize> {
+            if !entity_is_dynamic(body) {
+                return None;
+            }
+            Some(*node.entry(body.id()).or_insert_with(|| {
+                parent.push(parent.len());
+                rank.push(0);
+                parent.len() - 1
+            }))
+        };
 
         fn find(parent: &mut [usize], mut i: usize) -> usize {
             while parent[i] != i {
@@ -78,35 +107,39 @@ impl IslandManager {
             }
         }
 
-        // Her dinamik entity için hangi manifoldlara ait olduğunu bul
-        let mut entity_to_manifolds: HashMap<u32, Vec<usize>> = HashMap::new();
-        for (i, m) in manifolds.iter().enumerate() {
-            if entity_is_dynamic(m.entity_a) {
-                entity_to_manifolds
-                    .entry(m.entity_a.id())
-                    .or_default()
-                    .push(i);
+        // Each manifold's dynamic node (either body's: they are joined), or none.
+        let mut manifold_node: Vec<Option<usize>> = Vec::with_capacity(manifolds.len());
+        for m in manifolds {
+            let a = node_of(m.entity_a, &mut parent, &mut rank);
+            let b = node_of(m.entity_b, &mut parent, &mut rank);
+            if let (Some(a), Some(b)) = (a, b) {
+                union(&mut parent, &mut rank, a, b);
             }
-            if entity_is_dynamic(m.entity_b) {
-                entity_to_manifolds
-                    .entry(m.entity_b.id())
-                    .or_default()
-                    .push(i);
-            }
+            manifold_node.push(a.or(b));
         }
+        let joint_node: Vec<Option<usize>> = joints
+            .iter()
+            .map(|pair| {
+                let (a, b) = (*pair)?;
+                let a = node_of(a, &mut parent, &mut rank);
+                let b = node_of(b, &mut parent, &mut rank);
+                if let (Some(a), Some(b)) = (a, b) {
+                    union(&mut parent, &mut rank, a, b);
+                }
+                a.or(b)
+            })
+            .collect();
 
-        // Aynı dinamik cisme ait manifoldları birleştir
-        for manifold_list in entity_to_manifolds.values() {
-            for w in manifold_list.windows(2) {
-                union(&mut parent, &mut rank, w[0], w[1]);
-            }
-        }
-
-        // Kökü aynı manifoldları grupla
+        // ── Group the manifolds by root ───────────────────────────────────────
+        // A manifold with no dynamic body (two kinematic bodies, say) is an island of its own.
+        let n = manifolds.len();
         let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
-        for i in 0..n {
-            let root = find(&mut parent, i);
-            groups.entry(root).or_default().push(i);
+        let mut alone: Vec<Vec<usize>> = Vec::new();
+        for (i, node) in manifold_node.iter().enumerate() {
+            match node {
+                Some(k) => groups.entry(find(&mut parent, *k)).or_default().push(i),
+                None => alone.push(vec![i]),
+            }
         }
 
         // DETERMINIZM: `groups` bir HashMap; `into_values()` sırası süreçten sürece
@@ -114,18 +147,31 @@ impl IslandManager {
         // diye her island'ın indislerini sırala + island'ları en küçük indise göre sırala.
         // (Island'lar AYRIK olduğundan fizik sonucu sıradan bağımsız; bu, süreçler-arası
         // tutarlı sıra/warm-start eşlemesi ve tekrarlanabilir hata ayıklama içindir.)
-        let mut islands: Vec<Island> = groups
-            .into_values()
-            .map(|mut indices| {
-                indices.sort_unstable();
+        let mut rooted: Vec<(Option<usize>, Vec<usize>)> =
+            groups.into_iter().map(|(root, indices)| (Some(root), indices)).chain(alone.into_iter().map(|i| (None, i))).collect();
+        for (_, indices) in &mut rooted {
+            indices.sort_unstable();
+        }
+        rooted.sort_unstable_by_key(|(_, indices)| indices.first().copied().unwrap_or(usize::MAX));
+
+        let mut island_of_root: HashMap<usize, usize> = HashMap::new();
+        let islands: Vec<Island> = rooted
+            .into_iter()
+            .enumerate()
+            .map(|(i, (root, indices))| {
+                if let Some(root) = root {
+                    island_of_root.insert(root, i);
+                }
                 Island {
                     manifold_indices: indices,
                     sleeping: false,
                 }
             })
             .collect();
-        islands
-            .sort_unstable_by_key(|isl| isl.manifold_indices.first().copied().unwrap_or(usize::MAX));
+        let joint_island = joint_node
+            .into_iter()
+            .map(|k| k.and_then(|k| island_of_root.get(&find(&mut parent, k)).copied()))
+            .collect();
         // Hot path (per substep) → trace. Shows how the contact set partitioned into
         // independently-solvable islands (drives the parallel solve + sleep decisions).
         tracing::trace!(
@@ -133,7 +179,7 @@ impl IslandManager {
             island_count = islands.len(),
             "contact islands built"
         );
-        islands
+        (islands, joint_island)
     }
 
     /// Split manifolds by island group — each island gets its own manifold Vec
@@ -342,6 +388,39 @@ mod tests {
         let is_dyn = |e: BodyHandle| e.id() != 0;
         let islands = IslandManager::build_islands(&manifolds, &is_dyn);
         assert_eq!(islands.len(), 2, "A-B and C-D should form two islands");
+    }
+
+    fn pair(a: u32, b: u32) -> Option<(BodyHandle, BodyHandle)> {
+        Some((BodyHandle::from_id(a), BodyHandle::from_id(b)))
+    }
+
+    /// A joint is an island edge: two contacts joined only through a chain of joints — whose middle
+    /// link touches nothing — are one island, and each joint is in it.
+    #[test]
+    fn joints_join_the_contacts_they_reach_into_one_island() {
+        // 1 rests on the ground (0), 3 on it too; 1–2 and 2–3 are joints, 2 touches nothing.
+        let manifolds = vec![make_manifold(0, 1), make_manifold(0, 3)];
+        let is_dyn = |e: BodyHandle| e.id() != 0;
+        assert_eq!(IslandManager::build_islands(&manifolds, &is_dyn).len(), 2, "without the joints, two islands");
+        let (islands, of_joint) = IslandManager::build_islands_with_joints(&manifolds, &[pair(1, 2), pair(2, 3)], &is_dyn);
+        assert_eq!(islands.len(), 1, "the chain joins them");
+        assert_eq!(islands[0].manifold_indices, vec![0, 1]);
+        assert_eq!(of_joint, vec![Some(0), Some(0)]);
+    }
+
+    /// A joint no contact reaches — a pendulum swinging free, a broken one (`None`) — is in no
+    /// island, and the contacts' islands are exactly `build_islands`'.
+    #[test]
+    fn a_joint_no_contact_reaches_is_in_no_island() {
+        let manifolds = vec![make_manifold(0, 1), make_manifold(2, 3), make_manifold(0, 3)];
+        let is_dyn = |e: BodyHandle| e.id() != 0;
+        // 5 hangs from the static 0 on a joint, and 6–7 swing together; neither touches anything.
+        let (islands, of_joint) = IslandManager::build_islands_with_joints(&manifolds, &[pair(0, 5), None, pair(6, 7)], &is_dyn);
+        assert_eq!(islands, IslandManager::build_islands(&manifolds, &is_dyn));
+        assert_eq!(of_joint, vec![None, None, None]);
+        // A joint to a static body is its dynamic body's.
+        let (_, of_joint) = IslandManager::build_islands_with_joints(&manifolds, &[pair(0, 1)], &is_dyn);
+        assert_eq!(of_joint, vec![Some(0)]);
     }
 
     #[test]

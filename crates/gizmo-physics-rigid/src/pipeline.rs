@@ -13,6 +13,7 @@ use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactManifold, ContactPoints, TriggerEvent};
 use gizmo_physics_core::narrowphase::NarrowPhase;
 use gizmo_physics_core::BodyHandle;
+use crate::joints::Joint;
 use gizmo_math::Vec3;
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
@@ -780,22 +781,33 @@ impl PhysicsWorld {
         // to sleep.
         let mut in_island: FxHashSet<u32> = FxHashSet::default();
 
+        // The joints' pass opens before the contacts: a joint whose body is in a contact island is
+        // solved there, in the island's own sweeps (`solve_island_contacts`); `coupled` marks those.
+        let joints_open = !self.joints.is_empty() && self.joint_solver.begin(&mut self.joints, dt);
+
         // ── Collision constraints ─────────────────────────────────────────
-        if !manifolds.is_empty() {
-            self.solve_islands(manifolds, dt, &mut in_island, &mut bounces);
-        }
+        let coupled = if manifolds.is_empty() {
+            Vec::new()
+        } else {
+            self.solve_islands(manifolds, dt, &mut in_island, &mut bounces, joints_open)
+        };
 
         // ── Joints ────────────────────────────────────────────────────────
+        // The rest of them — a chain hanging free, a pendulum: no contact island reaches them —
+        // and then every joint's springs and break check.
         if !self.joints.is_empty() {
             self.wake_joint_components();
-            self.joint_solver.solve_joints(
-                &mut self.joints,
-                &self.entity_index_map,
-                &self.rigid_bodies,
-                &self.transforms,
-                &mut self.velocities,
-                dt,
-            );
+            if joints_open {
+                self.joint_solver.finish(
+                    &mut self.joints,
+                    &self.entity_index_map,
+                    &self.rigid_bodies,
+                    &self.transforms,
+                    &mut self.velocities,
+                    dt,
+                    &coupled,
+                );
+            }
 
             // A joint that snapped this substep (exceeded its break force/torque) is a
             // structural change to the scene — surface how many are now broken so a
@@ -837,13 +849,17 @@ impl PhysicsWorld {
     /// The contacts of the substep, island by island, and the sequential write-back of what each
     /// island's solve found (`write_back_island`). `in_island` collects the dynamic bodies the
     /// island sleep rule decided about; `bounces`, the speculative contacts' bounces.
+    /// The contact islands' solves, and their write-back. `with_joints`: the joints' pass is open
+    /// (`JointSolver::begin`), and a joint reaching an island is solved in it. Returns, per joint,
+    /// whether an island took it — the free-joint pass leaves those alone.
     fn solve_islands(
         &mut self,
         manifolds: Vec<ContactManifold>,
         dt: f32,
         in_island: &mut FxHashSet<u32>,
         bounces: &mut Vec<(BodyHandle, Vec3, Vec3)>,
-    ) {
+        with_joints: bool,
+    ) -> Vec<bool> {
         let entity_map = &self.entity_index_map;
         let is_dynamic = |entity: BodyHandle| -> bool {
             entity_map
@@ -851,19 +867,44 @@ impl PhysicsWorld {
                 .is_some_and(|&idx| self.rigid_bodies[idx].is_dynamic())
         };
 
-        let islands = crate::island::IslandManager::build_islands(&manifolds, &is_dynamic);
+        // Joints are island edges: a body a joint holds and a contact touches is solved against
+        // both in one set of sweeps. Solved one after the other, each undid the other every
+        // substep — a box resting on a hinged seesaw shook at 6 cm/s and never slept (2026-11-23).
+        let joint_pairs: Vec<Option<(BodyHandle, BodyHandle)>> = self
+            .joints
+            .iter()
+            .map(|j| {
+                let present = entity_map.get(&j.entity_a.id()).is_some() && entity_map.get(&j.entity_b.id()).is_some();
+                (with_joints && !j.is_broken && present).then_some((j.entity_a, j.entity_b))
+            })
+            .collect();
+        let (islands, joint_island) =
+            crate::island::IslandManager::build_islands_with_joints(&manifolds, &joint_pairs, &is_dynamic);
         let island_count = islands.len();
         let island_groups = crate::island::IslandManager::split_manifolds(manifolds, &islands);
 
-        let solve_island = |island_manifolds: Vec<ContactManifold>| self.solve_island(island_manifolds, dt);
+        // Each island's joints, by mutable reference, so islands solved in parallel each own theirs.
+        let mut joints = std::mem::take(&mut self.joints);
+        let coupled: Vec<bool> = joint_island.iter().map(Option::is_some).collect();
+        let mut buckets: Vec<Vec<&mut Joint>> = (0..island_count).map(|_| Vec::new()).collect();
+        for (joint, island) in joints.iter_mut().zip(&joint_island) {
+            if let Some(i) = *island {
+                buckets[i].push(joint);
+            }
+        }
+
+        let solve_island = |(island_manifolds, island_joints): (Vec<ContactManifold>, Vec<&mut Joint>)| {
+            self.solve_island(island_manifolds, island_joints, dt)
+        };
         // On the calling thread when there are few islands (`worth_parallel_jobs`); order is kept.
         let results: Vec<IslandResult> = if island_groups.len() > 1
             && worth_parallel_jobs(island_groups.iter().map(Vec::len).sum(), PARALLEL_MIN_MANIFOLDS)
         {
-            island_groups.into_par_iter().map(solve_island).collect()
+            island_groups.into_par_iter().zip(buckets).map(solve_island).collect()
         } else {
-            island_groups.into_iter().map(solve_island).collect()
+            island_groups.into_iter().zip(buckets).map(solve_island).collect()
         };
+        self.joints = joints;
 
         // Write-back: velocities, wake-ups, fractures, warm-start data.
         // Build a lookup from entity pair → event index for O(1) updates.
@@ -892,12 +933,13 @@ impl PhysicsWorld {
             fractures = total_fractures,
             "islands solved"
         );
+        coupled
     }
 
     /// One island's solve, on whichever worker drew it: whether it is solved at all and whether it
     /// wakes its sleepers, the contact solve itself (`solve_island_contacts`), the fractures it
     /// caused, and whether the island as a whole may sleep.
-    fn solve_island(&self, mut island_manifolds: Vec<ContactManifold>, dt: f32) -> IslandResult {
+    fn solve_island(&self, mut island_manifolds: Vec<ContactManifold>, mut joints: Vec<&mut Joint>, dt: f32) -> IslandResult {
         let entity_map = &self.entity_index_map;
         let rigid_bodies = &self.rigid_bodies;
         let velocities = &self.velocities;
@@ -919,12 +961,16 @@ impl PhysicsWorld {
                 && (velocities[i].linear.length_squared() > 1e-8
                     || velocities[i].angular.length_squared() > 1e-8)
         };
-        let island_active = island_manifolds.iter().any(|m| {
-            [m.entity_a, m.entity_b].iter().any(|&e| {
-                entity_map.get(&e.id()).is_some_and(|&i| {
-                    (rigid_bodies[i].is_dynamic() && !rigid_bodies[i].is_sleeping)
-                        || kinematic_moving(i)
-                })
+        // The island's bodies: those of its contacts, then those of its joints.
+        let members: Vec<BodyHandle> = island_manifolds
+            .iter()
+            .flat_map(|m| [m.entity_a, m.entity_b])
+            .chain(joints.iter().flat_map(|j| [j.entity_a, j.entity_b]))
+            .collect();
+        let island_active = members.iter().any(|&e| {
+            entity_map.get(&e.id()).is_some_and(|&i| {
+                (rigid_bodies[i].is_dynamic() && !rigid_bodies[i].is_sleeping)
+                    || kinematic_moving(i)
             })
         });
 
@@ -933,15 +979,13 @@ impl PhysicsWorld {
         }
 
         // Gerçek hareketli: eşik üstü hızlı uyanık dinamik VEYA hareketli kinematik.
-        let island_has_mover = island_manifolds.iter().any(|m| {
-            [m.entity_a, m.entity_b].iter().any(|&e| {
-                entity_map.get(&e.id()).is_some_and(|&i| {
-                    let rb = &rigid_bodies[i];
-                    (rb.is_dynamic()
-                        && !rb.is_sleeping
-                        && !rb.can_sleep(&velocities[i]))
-                        || kinematic_moving(i)
-                })
+        let island_has_mover = members.iter().any(|&e| {
+            entity_map.get(&e.id()).is_some_and(|&i| {
+                let rb = &rigid_bodies[i];
+                (rb.is_dynamic()
+                    && !rb.is_sleeping
+                    && !rb.can_sleep(&velocities[i]))
+                    || kinematic_moving(i)
             })
         });
 
@@ -949,18 +993,16 @@ impl PhysicsWorld {
         let mut island_indices: FxHashSet<usize> = FxHashSet::default();
         let mut wake_updates = Vec::new();
 
-        for m in &island_manifolds {
-            for &e in &[m.entity_a, m.entity_b] {
-                if let Some(&idx) = entity_map.get(&e.id()) {
-                    island_indices.insert(idx);
-                    // Uyuyanı YALNIZ gerçek bir hareketli varsa uyandır (yerleşen
-                    // komşu uyuyanı geri uyandırmasın → ada topluca uyuyabilsin).
-                    if island_has_mover
-                        && rigid_bodies[idx].is_dynamic()
-                        && rigid_bodies[idx].is_sleeping
-                    {
-                        wake_updates.push(e);
-                    }
+        for &e in &members {
+            if let Some(&idx) = entity_map.get(&e.id()) {
+                island_indices.insert(idx);
+                // Uyuyanı YALNIZ gerçek bir hareketli varsa uyandır (yerleşen
+                // komşu uyuyanı geri uyandırmasın → ada topluca uyuyabilsin).
+                if island_has_mover
+                    && rigid_bodies[idx].is_dynamic()
+                    && rigid_bodies[idx].is_sleeping
+                {
+                    wake_updates.push(e);
                 }
             }
         }
@@ -970,7 +1012,7 @@ impl PhysicsWorld {
             position_corrections: Vec::with_capacity(island_indices.len()),
             ..IslandResult::default()
         };
-        let stats = self.solve_island_contacts(&mut island_manifolds, &island_indices, &mut result, dt);
+        let stats = self.solve_island_contacts(&mut island_manifolds, &mut joints, &island_indices, &mut result, dt);
         result.stats = stats;
 
         // Fracture detection. Its own function: it is a question about the solved
@@ -1016,6 +1058,7 @@ impl PhysicsWorld {
     fn solve_island_contacts(
         &self,
         island_manifolds: &mut [ContactManifold],
+        joints: &mut [&mut Joint],
         island_indices: &FxHashSet<usize>,
         out: &mut IslandResult,
         dt: f32,
@@ -1068,7 +1111,28 @@ impl PhysicsWorld {
                 let island_body_vec: Vec<usize> =
                     island_indices.iter().copied().collect();
 
-                let stats = solver.solve_contacts(
+                // The island's joints are swept before each of its contact sweeps, so the two converge
+                // together (`IslandManager::build_islands_with_joints`). A warm start's injection
+                // sweep comes first, as it does in the free joints' pass.
+                let joint_solver = &self.joint_solver;
+                if !joints.is_empty() && joint_solver.warm_starts() {
+                    joint_solver.sweep_island(joints, entity_map, rigid_bodies, transforms, &mut buf, dt, true, false);
+                }
+                let has_joints = !joints.is_empty();
+                // The dynamic bodies the joints hold, for the TGS position integration.
+                let mut held: Vec<usize> = joints
+                    .iter()
+                    .flat_map(|j| [j.entity_a, j.entity_b])
+                    .filter_map(|e| entity_map.get(&e.id()).copied())
+                    .filter(|&i| rigid_bodies[i].is_dynamic())
+                    .collect();
+                held.sort_unstable();
+                held.dedup();
+                let mut sweep_joints = |v: &mut [Velocity], relax: bool| {
+                    joint_solver.sweep_island(joints, entity_map, rigid_bodies, transforms, v, dt, false, relax);
+                };
+                let between: crate::solver::BetweenSweeps<'_> = has_joints.then_some(crate::solver::IslandJoints { bodies: &held, sweep: &mut sweep_joints });
+                let stats = solver.solve_contacts_with(
                     island_manifolds,
                     rigid_bodies,
                     transforms,
@@ -1078,6 +1142,7 @@ impl PhysicsWorld {
                     entity_map,
                     &island_body_vec,
                     dt,
+                    between,
                 );
 
                 // Collect results.

@@ -40,9 +40,6 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   separate 2D solver (§C9); one-way platforms with `Collider::one_way`. A side-on character is the
   kinematic `CharacterController` with `target_velocity.x` — it jumps up through one-way platforms,
   lands on them and drops off them (`drop_through_timer`), and stays in its plane.
-- **Physics:** joints and contacts are solved in separate passes, so what rests on a jointed body —
-  a box on a hinged seesaw — shakes at 5–6 cm/s and never sleeps (ENGINE §3 item 8: joints solved
-  with the contacts, as TGS joints).
 - **Rendering:** planar mirrors and reflecting water are `PlanarReflection`, one extra scene draw each per
   view that sees them (split screen and texture cameras included) and sharp apart from the waves (§A7d); reflection probes — up to four, box parallax, blended, transparent surfaces
   included on native (§A5) — no MSAA — by decision, TAA +

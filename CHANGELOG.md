@@ -69,9 +69,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - a hinge that opens at most 1.4 mm through the impact and stays in its plane;
   - the two rounds' throws equal within 2 cm (1.5 mm apart).
 
-  It found the plank and the ball never sleep at rest. They shake at 5–6 cm/s because joints and
-  contacts are solved in separate passes (docs/ENGINE.md §3 item 8,
-  `joints_with_contacts.rs`, `#[ignore]`d there). The test reports it and does not require it.
+  It found that the plank and the ball never slept at rest, shaking at 5–6 cm/s: joints and
+  contacts were solved in separate passes (fixed above). They sleep now, and the test requires it.
 - **`domino`, thirty stones along a path that bends.** A straight, a quarter circle and a
   straight; stones 10 cm thick and 1 m tall, 0.5 m apart, standing asleep until a thrown ball
   tips the first. `--test` checks:
@@ -855,6 +854,24 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A body a joint holds and contacts touch is solved against both at once.** A substep solved
+  every contact island to the end and then every joint, each blind to the other. A box or a ball
+  resting on a hinged seesaw shook at 5–6 cm/s, whatever the masses, and neither ever slept. Now:
+  - joints are edges of the contact islands (`IslandManager::build_islands_with_joints`);
+  - an island's joints are swept inside its contact solve, before each contact sweep;
+  - in the relax sweeps their rigid rows drop their bias as the contacts do, with the joints'
+    bodies in the solve's position integration.
+
+  The seesaw comes to rest and sleeps (`joints_with_contacts.rs`, red on the code before), and
+  `test_car_simulation`'s hinged wheels run straight with the relax sweeps (1.5 m off course
+  without them). A joint no contact reaches keeps the free pass, and the contact-only stress hash
+  is unchanged.
+
+  `kopru`, measured again on it:
+  - its cliffs' tops are flush with the deck's face. They sat a beam's thickness below it, and the
+    ball met that 12 cm step at 6 m/s and tore an anchor;
+  - its break force is 45 kN, 1.5 × the heaviest static load. That load is the flat deck's 30.4 kN
+    with the ball at rest in its middle, against the old 30 kN that the loose joints had allowed.
 - **A joint's anchor is held as one point, and a pendulum swings at its period.** The point
   constraint that hinges, ball sockets and fixed joints share was three rows along x, y and z,
   each solved alone. Through the rotation an anchor's lever gives a body they are coupled, by

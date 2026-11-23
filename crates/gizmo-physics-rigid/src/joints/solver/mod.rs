@@ -366,6 +366,15 @@ impl JointSolver {
         // sıfırlanmış olan `rows`'tan yeniden yazar, yani warm start bir geçiş SOĞUK başlar.
         // Bilinçli bir kabul; ayrıntı `JointScratch::clear_pass`'ta. `rows`/`impulse_*` her
         // iki yolda da sıfırlanıyor, yani faktör 0'da ayrım gözlemlenemez.
+        if self.begin(joints, dt) {
+            self.finish(joints, entity_index_map, rigid_bodies, transforms, velocities, dt, &[]);
+        }
+    }
+
+    /// Opens a solver pass over `joints`: each one's accumulated impulses are reset (or carried, for
+    /// a warm start), and whether `dt` is a step at all is answered. `false` means nothing is to be
+    /// solved — see below.
+    pub(crate) fn begin(&self, joints: &mut [Joint], dt: f32) -> bool {
         let steppable = dt > 0.0 && dt.is_finite();
         for joint in joints.iter_mut() {
             if steppable {
@@ -401,17 +410,104 @@ impl JointSolver {
         //
         // (`dt <= 0.0` is false for NaN, hence the second half; an infinite dt is rejected on
         // the same grounds — a motor budget of `max_force·∞` is not a step either.)
-        if !steppable {
-            return;
-        }
+        steppable
+    }
 
-        self.solve_velocity_passes(joints, entity_index_map, rigid_bodies, transforms, velocities, dt);
+    /// Closes the pass `begin` opened: the velocity sweeps of every joint not already solved with an
+    /// island's contacts (`coupled[i]`, missing entries false), then the force joints and the
+    /// break check of all of them.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn finish(
+        &self,
+        joints: &mut [Joint],
+        entity_index_map: &crate::world::EntityIndexMap,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        dt: f32,
+        coupled: &[bool],
+    ) {
+        self.solve_velocity_passes(joints, entity_index_map, rigid_bodies, transforms, velocities, dt, coupled);
         self.solve_force_joints(joints, entity_index_map, rigid_bodies, transforms, velocities, dt);
         check_breaks(joints, entity_index_map, rigid_bodies, velocities, dt);
     }
 
+    /// One sweep over an island's joints, inside the island's contact solve: called before each of
+    /// its contact sweeps, so the two kinds of constraint converge together instead of each undoing
+    /// the other, and the contacts have the last word. `velocities` is the island's buffer (global
+    /// indices; the joints' bodies are in it). `injecting` is the warm start's injection sweep, once
+    /// before the contacts' first.
+    ///
+    /// `relax`: one of the contact solve's relax sweeps. The contacts drop their position bias
+    /// there and so do the joints' rigid rows (`JointScratch::relaxing`): the correction the biased
+    /// sweeps made is in the island's integrated positions — the joints' bodies are among them
+    /// (`IslandJoints::bodies`) — and the velocity the step ends with holds none of it. Without it a
+    /// four-wheeled car on hinged sphere wheels yawed on launch (`test_car_simulation`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn sweep_island(
+        &self,
+        joints: &mut [&mut Joint],
+        entity_index_map: &crate::world::EntityIndexMap,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        dt: f32,
+        injecting: bool,
+        relax: bool,
+    ) {
+        for joint in joints.iter_mut() {
+            joint.scratch.set_relaxing(relax);
+            self.sweep_one(joint, entity_index_map, rigid_bodies, transforms, velocities, dt, injecting);
+            joint.scratch.set_relaxing(false);
+        }
+    }
+
+    /// One joint's share of a sweep: nothing for a broken one, one whose body is gone, or one whose
+    /// bodies are both still.
+    #[allow(clippy::too_many_arguments)]
+    fn sweep_one(
+        &self,
+        joint: &mut Joint,
+        entity_index_map: &crate::world::EntityIndexMap,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        dt: f32,
+        injecting: bool,
+    ) {
+        if joint.is_broken {
+            return;
+        }
+        let Some((idx_a, idx_b)) = joint_bodies(joint, entity_index_map) else {
+            return;
+        };
+        // Both ends immobile → nothing to solve. `PhysicsWorld` runs its joint-graph
+        // wake pass immediately BEFORE the free joints' sweeps and wakes every dynamic body in a
+        // component containing a mover, and an island wakes its sleepers when it has a mover,
+        // so this gate is a strictly weaker test evaluated after both and cannot swallow a
+        // component that was just woken. Nothing in the type system holds that ordering —
+        // `waking_travels_the_whole_chain_in_one_step` is what would break.
+        if joint_is_inert(rigid_bodies, velocities, idx_a, idx_b) {
+            return;
+        }
+        if injecting {
+            joint.scratch.set_warm_injection(self.warm_start_factor);
+        }
+        self.solve_constraint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt);
+        if injecting {
+            joint.scratch.set_warm_injection(0.0);
+        }
+    }
+
+    /// Whether a warm start is on: then the sweeps of a pass are preceded by an injection sweep.
+    pub(crate) fn warm_starts(&self) -> bool {
+        self.warm_start_factor > 0.0
+    }
+
     /// The velocity passes: the warm start's injection sweep when there is one, then `iterations`
-    /// sweeps over every joint that is whole, has both its bodies, and is not inert.
+    /// sweeps over every joint that is whole, has both its bodies, is not inert, and was not solved
+    /// with an island's contacts (`coupled`).
+    #[allow(clippy::too_many_arguments)]
     fn solve_velocity_passes(
         &self,
         joints: &mut [Joint],
@@ -420,40 +516,22 @@ impl JointSolver {
         transforms: &[Transform],
         velocities: &mut [Velocity],
         dt: f32,
+        coupled: &[bool],
     ) {
         // Warm start AÇIKSA iterasyonların önüne fazladan bir süpürme konur ve o süpürmede
         // her satır λ hesaplamak yerine `factor · λ_prev` enjekte eder. Ayrı süpürme olması
         // ŞART: satırın kendi yerinde enjeksiyon cebirsel bir no-op (bkz.
         // [`Self::warm_start_factor`]). Faktör 0'da `passes == iterations`, `warm_factor`
         // hiç yazılmıyor ve yol bit-aynı.
-        let warm = self.warm_start_factor > 0.0;
+        let warm = self.warm_starts();
         let passes = self.iterations + usize::from(warm);
         for pass in 0..passes {
             let injecting = warm && pass == 0;
-            for joint in joints.iter_mut() {
-                if joint.is_broken {
+            for (i, joint) in joints.iter_mut().enumerate() {
+                if coupled.get(i).copied().unwrap_or(false) {
                     continue;
                 }
-                let Some((idx_a, idx_b)) = joint_bodies(joint, entity_index_map) else {
-                    continue;
-                };
-                // Both ends immobile → nothing to solve. `PhysicsWorld` runs its joint-graph
-                // wake pass immediately BEFORE this call and wakes every dynamic body in a
-                // component containing a mover, so this gate is a strictly weaker test
-                // evaluated after it and cannot swallow a component that was just woken.
-                // Nothing in the type system holds that ordering —
-                // `waking_travels_the_whole_chain_in_one_step` is what would break.
-                if joint_is_inert(rigid_bodies, velocities, idx_a, idx_b) {
-                    continue;
-                }
-
-                if injecting {
-                    joint.scratch.set_warm_injection(self.warm_start_factor);
-                }
-                self.solve_constraint(joint, rigid_bodies, transforms, velocities, idx_a, idx_b, dt);
-                if injecting {
-                    joint.scratch.set_warm_injection(0.0);
-                }
+                self.sweep_one(joint, entity_index_map, rigid_bodies, transforms, velocities, dt, injecting);
             }
         }
     }
@@ -907,6 +985,9 @@ impl JointSolver {
         let (bias, mass_scale, impulse_scale) = if compliance > 0.0 {
             let (bias_rate, m, i) = self.soft_coefficients(compliance, k, dt);
             (bias_rate * error, m, i)
+        } else if scratch.relaxing() {
+            // A relax sweep inside an island's contact solve: velocity alone (`sweep_island`).
+            (0.0, 1.0, 0.0)
         } else if self.rigid_hertz > 0.0 && error != 0.0 {
             let (bias_rate, m, i) = self.rigid_coefficients(dt);
             (bias_rate * error, m, i)
@@ -1028,6 +1109,9 @@ impl JointSolver {
         let (bias, mass_scale, impulse_scale) = if compliance > 0.0 {
             let (bias_rate, m, i) = self.soft_coefficients(compliance, k, dt);
             (bias_rate * error, m, i)
+        } else if scratch.relaxing() {
+            // A relax sweep inside an island's contact solve: velocity alone (`sweep_island`).
+            (0.0, 1.0, 0.0)
         } else if self.rigid_hertz > 0.0 {
             let (bias_rate, m, i) = self.rigid_coefficients(dt);
             (bias_rate * error, m, i)

@@ -25,11 +25,17 @@
 //!   yeniden kurmak tam bunu yapıyor. **Düzeltildi:** eklemler cisimleriyle gidiyor.
 //!
 //! *Açık, ölçülmüş:* kafesin eklem kuvvetleri elle hesabın üstünde. Kendi ağırlığı altında
-//! ~5 kN (üst kuşak için kabaca 2,6 kN beklenir), 1,2 kN'luk top ortaya gelince ~16 kN. Eklem
-//! iterasyonu (10 → 40) ve sönüm değiştirmiyor. Ayrıldı: statik olarak belirli iki çubuklu bir
-//! konsol, statiğin verdiği kuvvetlerin %3–6 içinde ölçülüyor (bkz. `joint_load.rs`), yani
-//! ölçüm de belirli bir yapının çözümü de doğru; fazlalık bu kafesin dört sabit düğümünden
-//! (aşırı belirli yapı). Oyun eşiği buna göre ayarlı (30 kN).
+//! 5,9 kN (üst kuşak için kabaca 2,6 kN beklenir), 1,2 kN'luk top ortada dururken 12,6 kN (eklemin
+//! ankrajı tek blok olmadan önce ~16 kN). Ayrıldı: statik olarak belirli iki çubuklu bir konsol,
+//! statiğin verdiği kuvvetlerin %3–6 içinde ölçülüyor (bkz. `joint_load.rs`), yani ölçüm de
+//! belirli bir yapının çözümü de doğru; fazlalık bu kafesin dört sabit düğümünden (aşırı belirli
+//! yapı). Düz döşeme gergin bir zincir: sehimi eklemlerinin esnemesi kadar, gerilimi onun
+//! söylediği — ortasında top dururken 30,4 kN, ~2,2°'lik bir eğim. Eşik buna göre ayarlı (45 kN).
+//!
+//! *Sonradan bulundu (2026-11-23):* eklemler temaslarla birlikte çözülünce top, köprünün
+//! girişindeki 12 cm'lik basamağa saniyede 6 m ile çarpıp uçurumun çapasını tek adımda koparıyordu.
+//! Uçurumların üstü düğümlerin hizasındaydı, döşemenin yüzü bir kiriş kalınlığı yukarıda. Uçurumlar
+//! artık döşemenin yüzüyle bir hizada.
 //!
 //! *Sonradan bulundu (2026-11-04, `golf`'tan sonra):* kirişlerin yük altında kızarması hiç
 //! görünmüyordu. Renk `MaterialDesc` ile değişiyordu ve motor her kare açıklamayı malzemeden
@@ -57,7 +63,11 @@ const MAX_BEAM: f32 = 3.0;
 const BUDGET: u32 = 24;
 const BEAM_MASS: f32 = 20.0;
 const BEAM_HALF_THICK: f32 = 0.12;
-const BREAK_FORCE: f32 = 30000.0;
+/// Bir eklemin koptuğu kuvvet. Ölçülen en ağır statik yük, ortasında top duran düz döşemenin
+/// çapalarındaki 30,4 kN; eşik onun 1,5 katı. 2026-11-23'e kadar 30 kN'du: eklemler temaslardan ayrı
+/// ve ankrajları yakınsamayan üç satırla çözülürken döşeme gevşek, sehimi büyük, gerilimi düşük
+/// ölçülüyordu — o eşikte doğru çözülen düz döşeme topu durağan hâlde bile taşıyamıyor.
+const BREAK_FORCE: f32 = 45000.0;
 const BALL_R: f32 = 0.5;
 const BALL_MASS: f32 = 120.0;
 /// Kirişler birbiriyle çarpışmaz (bir düğümde buluşanlar üst üste biner); top ve uçurumla çarpışır.
@@ -122,10 +132,13 @@ fn setup(world: &mut World, font: FontId) -> Game {
         primary: true,
         ..Default::default()
     });
-    // Uçurumlar: üstü y = 0, köprü boşluğu x −6…6.
+    // Uçurumlar: köprü boşluğu x −6…6, üstleri döşemenin yüzüyle bir hizada. Düğümler y = 0'da ve
+    // bir kiriş onların ortasına oturuyor, yüzü `BEAM_HALF_THICK` yukarıda. Uçurumların üstü y = 0
+    // iken top, köprünün girişindeki 12 cm'lik basamağa saniyede 6 m ile çarpıyordu; eklemler
+    // temaslarla birlikte çözülünce (2026-11-23) o darbe uçurumun çapasını tek adımda koparıyordu.
     for x in [-11.0f32, 11.0] {
         let half = Vec3::new(5.0, 6.0, 2.0);
-        let at = Vec3::new(x, -6.0, 0.0);
+        let at = Vec3::new(x, -6.0 + BEAM_HALF_THICK, 0.0);
         world.spawn_bundle((
                 Transform::new(at).with_scale(half),
                 GlobalTransform::default(),
@@ -220,7 +233,7 @@ fn try_bridge(beams: Vec<Beam>) -> (Option<bool>, usize, f32, f32) {
 }
 
 /// `--test`: pencere açmadan üç köprü. Hazır kafes topu taşımalı; menteşeli kirişlerden tek sıra
-/// bir döşeme de taşır (sarkan bir zincir gibi: eğim birkaç derece, gerilme eşiğin çok altında);
+/// bir döşeme de taşır (sarkan bir zincir gibi: eğim ~2°, gerilme eşiğin üçte ikisi);
 /// ortasından bir kirişi eksik döşemede top düşmeli.
 fn self_test() -> bool {
     let (truss_result, truss_broken, truss_load, truss_time) = try_bridge(truss());
@@ -437,7 +450,7 @@ fn start_test(world: &mut World, game: &mut Game) {
     ball.lock_translation_z = true;
     game.ball = world
         .spawn_bundle((
-            Transform::new(Vec3::new(-10.0, BALL_R + 0.05, 0.0)).with_scale(Vec3::splat(BALL_R)),
+            Transform::new(Vec3::new(-10.0, BEAM_HALF_THICK + BALL_R + 0.05, 0.0)).with_scale(Vec3::splat(BALL_R)),
             GlobalTransform::default(),
             MeshSource("sphere".into()),
             MaterialDesc::new().with_pbr(Vec4::new(0.25, 0.3, 0.4, 1.0), 0.3, 0.8),

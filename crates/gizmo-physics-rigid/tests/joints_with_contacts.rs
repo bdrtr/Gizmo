@@ -1,9 +1,11 @@
-//! A body held by a joint and touched by contacts comes to rest — not yet: docs/ENGINE.md §3 item 8.
+//! A body held by a joint and touched by contacts is solved against both in one solve.
 //!
-//! A substep solves every contact island to the end and then every joint, each blind to the other.
-//! A box resting on a hinged seesaw shakes at 6 cm/s, and neither it nor the seesaw ever sleeps:
-//! each substep the contacts stop the box, and the joint, solved after, moves the plank under it.
-//! The fix — joints solved with the contacts, as TGS joints — is that item; this is its test.
+//! Until 2026-11-23 a substep solved every contact island to the end and then every joint, each
+//! blind to the other. A box resting on a hinged seesaw shook at 6 cm/s, and neither it nor the
+//! seesaw ever slept: each substep the contacts stopped the box, and the joint, solved after, moved
+//! the plank under it. Joints are now edges of the contact islands
+//! (`IslandManager::build_islands_with_joints`), and an island's joints are swept before each of its
+//! contact sweeps (`pipeline.rs`, `solve_island_contacts`).
 
 use gizmo_core::world::World;
 use gizmo_math::{Quat, Vec3};
@@ -70,7 +72,6 @@ fn settles(joint: fn(BodyHandle, BodyHandle, Vec3, Vec3) -> Joint, name: &str) {
 
 /// The seesaw at rest with a box on it comes to rest and sleeps, on a hinge and on a ball socket.
 #[test]
-#[ignore = "joints and contacts are solved in separate passes: docs/ENGINE.md §3 item 8"]
 fn a_box_on_a_hinged_seesaw_comes_to_rest_and_sleeps() {
     settles(hinge, "hinge");
     settles(Joint::ball_socket, "ball socket");

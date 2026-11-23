@@ -252,34 +252,30 @@ the first write (Unity's material instance — a hidden un-sharing).
 >
 >    Its own design. Its compound half — the parent's shape took the child body in — was closed
 >    the same day.
-> 8. **(2026-11-23) A substep solves every contact island to the end, then every joint, each blind
->    to the other.** So a body a joint holds and a contact touches is pulled two ways: the
->    contacts stop what rests on it, then the joint moves it under them. Measured: a box (or a
->    ball) resting on a hinged seesaw shakes at 5–6 cm/s, whatever its mass or the plank's (0.5 to
->    5 kg on 4 to 40 kg, hinge or ball socket), and neither ever sleeps; the plank alone, with no
->    load, sleeps. `tests/joints_with_contacts.rs` is that case, `#[ignore]`d pointing here, and
->    `tahterevalli`'s rest is the same scene in a game. Tried on 2026-11-23, and what it taught:
->    - joints as island edges (union-find over the dynamic bodies, the island's joints swept inside
->      its contact iterations) fixes the seesaw outright — 0.0000 m/s, asleep — **only with the
->      joints swept before the contacts in every iteration** (Box2D v3's order). Swept after, the
->      joint's correction lifted the plank's end 0.4 µm clear every other substep, the lost
->      contact's wake reset its sleep count, and a box on it sank 0.6 mm/s into it;
->    - but it broke two things the separate passes hold. `kopru`'s Warren truss lost 4–5 joints to
->      load spikes from 30 to over 100 % of its 30 kN threshold between frames (the passes keep it
->      under 64 %), and its flat deck snapped. `world::tests::test_car_simulation`'s four hinged
->      sphere wheels yawed the chassis 6° at launch and it ended 1.6–4.8 m sideways, the sign
->      following the joints' sweep order: four rigid supports under a rigid chassis are statically
->      indeterminate, the separate passes solved each wheel's contact alone (and sagged the 1000 kg
->      chassis 3 cm on its hinges), and the coupled Gauss-Seidel picks a diagonal load split by
->      order. More iterations (20 → 120) changed nothing;
->    - relax sweeps for the joints (no position bias, as the contacts' relax) with the joints'
->      bodies in TGS's position integration fixed neither.
->
->    What it needs is joints that are TGS's as the contacts are: their anchors and errors read
->    through the island's position deltas (`dp`) every iteration, not from the substep's start, so
->    a joint and a contact see the same bodies where they are. Then `kopru`'s thresholds and the
->    car test's expectation of a straight run, both measured on the separate passes, are measured
->    again. Its own design, across the 25 joint rows.
+> 8. ~~**A substep solved every contact island to the end, then every joint, each blind to the
+>    other.**~~ **Closed 2026-11-23, the same night it was opened.** Joints are edges of the contact
+>    islands now (`IslandManager::build_islands_with_joints`, union-find over the dynamic bodies),
+>    and an island's joints are swept inside its contact solve, **before** each contact sweep (Box2D
+>    v3's order: the contacts, which correct no overlap under `slop`, have the last word). In the
+>    relax sweeps the joints' rigid rows drop their bias as the contacts do, and the joints' bodies
+>    take TGS's position integration, so a joint's correction lands in the position rather than in
+>    the velocity the step ends with. A joint no contact reaches keeps the free pass. *(Was:)* a box
+>    or a ball resting on a hinged seesaw shook at 5–6 cm/s, whatever the masses, and never slept.
+>    What the first attempt taught, in order:
+>    - swept after the contacts, the joints lifted the plank's end 0.4 µm clear every other substep,
+>      the lost contact's wake reset its sleep count, and a box on it sank 0.6 mm/s into it;
+>    - `test_car_simulation`'s hinged sphere wheels yawed the chassis 6° and the coupling was
+>      reverted — and the cause was not the coupling: the joints' point constraint was three rows
+>      that did not converge where a lever is long against a body's inertia (`sarkac` found it the
+>      same night, and the point is one 3×3 block now, `apply_point_constraint`). On that, the car
+>      runs straight with the relax sweeps and veers 1.5 m without them;
+>    - `kopru` measured again, as this item said it would have to be. Its Warren truss lost an anchor
+>      to a real impact: the ball met a 12 cm step at the bridge's entrance at 6 m/s (the cliffs' tops
+>      were at the nodes, the deck's face a beam's thickness above). With the cliffs flush, the
+>      truss holds at 56 % of its threshold. Its flat deck is a taut chain whose sag is what its
+>      joints stretch: 30.4 kN at its anchors with the ball at rest in the middle, against a
+>      30 kN threshold set when the loose joints let it sag further. The threshold is 1.5 × that
+>      load now, 45 kN; the deck crosses at 82 %, and the deck missing a beam still drops the ball.
 > 5. ~~**The facade's tests compile only with its default features.**~~ **Closed 2026-11-23:** each
 >    test module, test and helper is gated on what it uses, three integration files on the
 >    subsystems they drive, and the CI `features` job builds the facade's tests (`--lib --tests

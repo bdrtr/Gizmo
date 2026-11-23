@@ -660,6 +660,25 @@ impl ConstraintSolver {
         island_bodies: &[usize],
         dt: f32,
     ) -> SolveStats {
+        self.solve_contacts_with(manifolds, rigid_bodies, transforms, velocities, pos_corrections, bounces, entity_index_map, island_bodies, dt, None)
+    }
+
+    /// [`solve_contacts`](Self::solve_contacts), running `between` before each of its sweeps: an
+    /// island's joints, solved in the same iterations as its contacts (`pipeline.rs`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn solve_contacts_with(
+        &self,
+        manifolds: &mut [ContactManifold],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        pos_corrections: &mut [(Vec3, Vec3)],
+        bounces: &mut [(Vec3, Vec3)],
+        entity_index_map: &crate::world::EntityIndexMap,
+        island_bodies: &[usize],
+        dt: f32,
+        between: BetweenSweeps<'_>,
+    ) -> SolveStats {
         // Pozisyon düzeltme buffer'ını sıfırla — yalnız bu adanın girdileri (buffer çağıran
         // tarafından adalar arası yeniden kullanılıyor; full-world sıfırlama O(n_islands×n_bodies)'ti).
         for &i in island_bodies {
@@ -703,6 +722,7 @@ impl ConstraintSolver {
                 island_depth,
                 n_iterations,
                 dt,
+                between,
             );
             return SolveStats {
                 island_depth,
@@ -720,6 +740,7 @@ impl ConstraintSolver {
             entity_index_map,
             island_bodies,
             dt,
+            between,
         );
         // The split-impulse path sweeps `self.iterations` (see the loop above) and has never
         // consumed the adaptive count, so reporting `n_iterations` here would be a lie about
@@ -862,13 +883,14 @@ impl ConstraintSolver {
         entity_index_map: &crate::world::EntityIndexMap,
         island_bodies: &[usize],
         dt: f32,
+        between: BetweenSweeps<'_>,
     ) {
         let (spec_off, spec_vn0) = Self::speculative_closing_speeds(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
         self.warm_start_split_impulse(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
 
         // ── İteratif PGS ─────────────────────────────────────────────────────
         let inv_dt = if dt > 0.0 { 1.0 / dt } else { 0.0 };
-        self.pgs_sweeps(manifolds, rigid_bodies, transforms, velocities, entity_index_map, inv_dt);
+        self.pgs_sweeps(manifolds, rigid_bodies, transforms, velocities, entity_index_map, inv_dt, between);
         self.speculative_bounces(
             manifolds,
             (rigid_bodies, transforms, entity_index_map),
@@ -979,6 +1001,7 @@ impl ConstraintSolver {
         velocities: &mut [Velocity],
         entity_index_map: &crate::world::EntityIndexMap,
         inv_dt: f32,
+        mut between: BetweenSweeps<'_>,
     ) {
         let n_manifolds = manifolds.len();
         // Each contact's rolling-resistance impulse over the sweep (`rolling_row`), at
@@ -993,6 +1016,10 @@ impl ConstraintSolver {
         }
         let mut acc_roll = vec![Vec3::ZERO; n_points];
         for iter in 0..self.iterations {
+            // The island's joints first, then its contacts (see the TGS path's sweeps).
+            if let Some(between) = between.as_mut() {
+                (between.sweep)(velocities, false);
+            }
             // Symmetric Gauss-Seidel: alternate the sweep direction every
             // iteration. Plain forward-only PGS applies the manifold's contact
             // points in a fixed order; each point's impulse is off-centre, so the
@@ -1416,6 +1443,22 @@ impl ConstraintSolver {
             pos_corrections[i] = (pseudo_vel[i].0 * dt, pseudo_vel[i].1 * dt);
         }
     }
+}
+
+/// What an island's contact solve runs before each of its sweeps: the island's joints, solved in
+/// the same iterations as its contacts (`pipeline.rs`, `solve_island_contacts`). `None` for a
+/// solve of contacts alone.
+pub(crate) type BetweenSweeps<'a> = Option<IslandJoints<'a>>;
+
+/// An island's joints, as its contact solve sees them.
+pub(crate) struct IslandJoints<'a> {
+    /// The dynamic bodies they hold. The TGS path integrates their positions through its sweeps
+    /// as it does a contact's bodies, so a joint's position correction lands in the position, not
+    /// in the velocity the step ends with.
+    pub bodies: &'a [usize],
+    /// One sweep of them, given the island's velocities; the flag is a relax sweep
+    /// (`JointSolver::sweep_island`).
+    pub sweep: &'a mut dyn FnMut(&mut [Velocity], bool),
 }
 
 /// What the solver decided for one island, reported back so a caller can see the sweep count
