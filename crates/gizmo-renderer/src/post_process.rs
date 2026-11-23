@@ -510,6 +510,48 @@ impl PostProcessState {
     }
 }
 
+/// The post chain's own bind group layouts.
+struct PostLayouts {
+    /// A texture and its sampler: what each bloom level and the HDR image are read as.
+    post: wgpu::BindGroupLayout,
+    /// The composite's inputs — see [`PostLayouts::new`].
+    composite: wgpu::BindGroupLayout,
+    /// The post uniforms (`PostProcessUniforms`).
+    params: wgpu::BindGroupLayout,
+    /// The lens flare's uniforms, and each anamorphic streak pass's.
+    flare: wgpu::BindGroupLayout,
+}
+
+impl PostLayouts {
+    /// The composite reads the HDR image and its sampler (0, 1), the scene depth (2), the colour
+    /// look-up table through binding 1's sampler (3, `crate::color_lut`) and the lens flare (4,
+    /// `BloomChain::flare`). The forward-only path's has no depth or flare: it reads its depth with
+    /// `textureLoad` elsewhere, and has no bloom.
+    fn new(device: &wgpu::Device) -> Self {
+        use crate::descriptors::{buffer_entry, fragment_sampler, fragment_texture};
+        use wgpu::{TextureSampleType as Sample, TextureViewDimension as Dim};
+        let filtered = Sample::Float { filterable: true };
+        let layout = |label: &str, entries: &[wgpu::BindGroupLayoutEntry]| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(label), entries })
+        };
+        let image = [fragment_texture(0, Dim::D2, filtered), fragment_sampler(1, wgpu::SamplerBindingType::Filtering)];
+        #[allow(unused_mut)] // The desktop adds to it.
+        let mut composite = image.to_vec();
+        #[cfg(not(gizmo_forward_only))]
+        composite.push(fragment_texture(2, Dim::D2, Sample::Depth));
+        composite.push(fragment_texture(3, Dim::D3, filtered));
+        #[cfg(not(gizmo_forward_only))]
+        composite.push(fragment_texture(4, Dim::D2, filtered));
+        let uniform = [buffer_entry(0, wgpu::ShaderStages::FRAGMENT, wgpu::BufferBindingType::Uniform)];
+        Self {
+            post: layout("post_bind_group_layout", &image),
+            composite: layout("composite_bloom_bind_group_layout", &composite),
+            params: layout("post_params_bind_group_layout", &uniform),
+            flare: layout("flare_params_bind_group_layout", &uniform),
+        }
+    }
+}
+
 /// Builds the whole post-process chain: shaders, three pipelines, every target and every bind
 /// group.
 ///
@@ -524,121 +566,15 @@ pub fn build_post_process_resources(
 ) -> PostProcessState {
     let post_shader = post_shader_module(device);
 
-    let post_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("post_bind_group_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-    // WASM: depth texture'ı composite layout'tan kaldır (textureLoad kullanılıyor, sampler gerekmez)
-    // Native: depth texture sampler ile kalır
-    #[cfg(not(gizmo_forward_only))]
-    let composite_bloom_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("composite_bloom_bind_group_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Depth,
-                    },
-                    count: None,
-                },
-                // The colour look-up table (`crate::color_lut`), read through binding 1's sampler.
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D3,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                // The lens flare (`BloomChain::flare`).
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-            ],
-        });
-    #[cfg(gizmo_forward_only)]
-    let composite_bloom_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("composite_bloom_bind_group_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                // The colour look-up table (`crate::color_lut`), read through binding 1's sampler.
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D3,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-            ],
-        });
-
+    let PostLayouts { post: post_bind_group_layout, composite: composite_bloom_bind_group_layout, params: post_params_bind_group_layout, flare: flare_params_bind_group_layout } =
+        PostLayouts::new(device);
+    let uniform_group = |label: &str, layout: &wgpu::BindGroupLayout, buffer: &wgpu::Buffer| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+        })
+    };
     let post_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Post Process Params Buffer"),
         // The neutral look lives in `PostProcessUniforms::default()` (frame_uniforms.rs), which is
@@ -646,30 +582,7 @@ pub fn build_post_process_resources(
         contents: bytemuck::cast_slice(&[PostProcessUniforms::default()]),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
-
-    let post_params_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("post_params_bind_group_layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-    let post_params_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: &post_params_bind_group_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: post_params_buffer.as_entire_binding(),
-        }],
-        label: Some("post_params_bind_group"),
-    });
+    let post_params_bind_group = uniform_group("post_params_bind_group", &post_params_bind_group_layout, &post_params_buffer);
 
     #[cfg(not(gizmo_forward_only))]
     let exposure = Some(build_exposure_binding(device));
@@ -684,25 +597,12 @@ pub fn build_post_process_resources(
     #[cfg(gizmo_forward_only)]
     let local: Option<crate::local_exposure::LocalExposureBinding> = None;
 
-    let flare_params_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("flare_params_bind_group_layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
-            count: None,
-        }],
-    });
     let flare_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Lens Flare Params"),
         contents: bytemuck::cast_slice(&LensFlare::default().params()),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
-    let flare_params_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("flare_params_bind_group"),
-        layout: &flare_params_bind_group_layout,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: flare_params_buffer.as_entire_binding() }],
-    });
+    let flare_params_bind_group = uniform_group("flare_params_bind_group", &flare_params_bind_group_layout, &flare_params_buffer);
     let streak_params_buffers: Vec<wgpu::Buffer> = (0..2 * STREAK_PASSES)
         .map(|_| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -715,13 +615,7 @@ pub fn build_post_process_resources(
         .collect();
     let streak_params_bind_groups = streak_params_buffers
         .iter()
-        .map(|buffer| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("anamorphic_streak_pass_bind_group"),
-                layout: &flare_params_bind_group_layout,
-                entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
-            })
-        })
+        .map(|buffer| uniform_group("anamorphic_streak_pass_bind_group", &flare_params_bind_group_layout, buffer))
         .collect();
 
     let composite_variant = CompositeVariant::default();
