@@ -50,6 +50,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`tahterevalli`, a seesaw that throws a ball.** The game:
+  - a plank on a hinge (`Joint::hinge`) at the top of a static block, with a lip that holds the
+    ball, a child collider of the plank;
+  - a box dropped on the raised end throws the ball;
+  - a round ends by teleporting the plank and the ball back (`Transform` and `Velocity` written)
+    and despawning the box.
+
+  `--test` plays two rounds. Each checks:
+  - the rest's geometry: the plank's end on the ground at `asin(pivot / half length)`, 17.46°, and
+    the ball in its corner within a centimetre;
+  - a throw higher than a metre that takes no more energy than the dropped box gave up;
+  - a hinge that opens at most 1.4 mm through the impact and stays in its plane;
+  - the two rounds' throws equal within 2 cm (1.5 mm apart).
+
+  It found the plank and the ball never sleep at rest. They shake at 5–6 cm/s because joints and
+  contacts are solved in separate passes (docs/ENGINE.md §3 item 8,
+  `joints_with_contacts.rs`, `#[ignore]`d there). The test reports it and does not require it.
 - **`domino`, thirty stones along a path that bends.** A straight, a quarter circle and a
   straight; stones 10 cm thick and 1 m tall, 0.5 m apart, standing asleep until a thrown ball
   tips the first. `--test` checks:
