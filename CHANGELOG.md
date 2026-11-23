@@ -810,6 +810,27 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A ball dropped straight onto a floor bounces straight and rests where it fell.** A sphere's
+  contact with a box, a hull, a cylinder or any other convex shape came from GJK/EPA, whose point
+  and normal are estimates. For a ball resting on a box's top the point sat 2.7 mm off the centre
+  and the normal was tilted 4·10⁻⁵ rad; swapping the pair did not even mirror it. Every bounce
+  spun the ball, and a 0.25 m ball dropped from 3 m rolled 0.82 m away diagonally (1.54 m for a
+  0.5 m ball, 0.49 m on a cylinder's face).
+  - `NarrowPhase::sphere_box` is exact: the box's closest point to the centre, or out through the
+    nearest face when the centre is inside.
+  - `NarrowPhase::sphere_convex` answers every other convex shape from the centre's closest point
+    by GJK's distance while the centre is outside, and EPA when it is inside.
+
+  Behavioural for anything round; `headless_stress_test` (boxes) is unchanged. `cam`'s gallery got
+  walls: its pieces now take other paths, and one left the unwalled floor.
+  `gizmo-physics-core/tests/sphere_contacts.rs` and `gizmo-physics-rigid/tests/ball_drop.rs` are
+  red on the code before.
+- **A child with a body of its own is not part of its parent's compound.** The compound walk took
+  every collider under a body, a child's own body included, at its moving pose. Measured: a ball
+  parented under a platform overlapped its own copy in the platform's shape, was flung 17 m
+  sideways, and fell through the platform for good. A child body and everything under it are now
+  left to it. `a_child_with_a_body_of_its_own_is_not_its_parents_part`. Where such a body is drawn
+  is still not where it is simulated under a moved parent: ENGINE.md §3's seventh item.
 - **A broken body lets go of its parts where it held them.** A break despawned the body alone,
   and despawning a parent unparents its children. So a lander's leg, a child collider and part of
   its compound, became static geometry at its local position read as a world one: beside the

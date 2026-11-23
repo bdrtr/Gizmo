@@ -99,3 +99,22 @@ fn a_falling_compound_body_lands_on_its_child() {
     let p = world.query::<&Transform>().get(body).unwrap().position;
     assert!((p.y - 0.6).abs() < 0.03 && (p.x - 10.0).abs() < 0.05, "the body came to rest at {p:?}");
 }
+
+/// A child with a body of its own is not its parent's part. A ball parented under a static platform
+/// falls onto the platform and rests there, as a ball beside it would.
+///
+/// Red on the code before: the platform's compound took the ball's shape in, at the ball's moving
+/// pose. The ball overlapped its own copy, was flung 17 m sideways and fell through the platform
+/// for good — measured at y −42 after four seconds.
+#[test]
+fn a_child_with_a_body_of_its_own_is_not_its_parents_part() {
+    let mut world = world();
+    let platform = spawn(&mut world, Transform::new(Vec3::ZERO), RigidBody::new_static(), Collider::box_collider(Vec3::new(5.0, 0.2, 5.0)));
+    let ball = ball(&mut world, Vec3::new(0.0, 3.0, 0.0));
+    world.add_component(ball, Parent(platform));
+    world.add_component(platform, Children(vec![ball]));
+    run(&mut world, 240);
+    let at = world.query::<&Transform>().get(ball).map(|t| t.position).expect("the ball");
+    assert!((at.y - 0.45).abs() < 0.03, "the ball rests on the platform's top (0.2 + 0.25): y {}", at.y);
+    assert!(at.x.abs() < 0.05 && at.z.abs() < 0.05, "where it fell, not flung: {at}");
+}

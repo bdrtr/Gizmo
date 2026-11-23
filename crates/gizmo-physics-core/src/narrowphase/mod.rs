@@ -153,6 +153,67 @@ impl NarrowPhase {
         Some(mk_contact(point, -plane_n, r - signed_dist))
     }
 
+    /// Sphere–Box: the box's closest point to the sphere's centre, exactly, and out through the
+    /// nearest face when the centre is inside it. Normal points from the sphere (A) toward the box
+    /// (B); the point is on the box's surface, as [`Self::sphere_plane`]'s is on the plane.
+    ///
+    /// Until 2026-11-23 the pair went to GJK/EPA, whose contact point is the polytope's estimate:
+    /// for a ball resting on a box's top it sat 2.7 mm off the centre with the normal tilted
+    /// 4·10⁻⁵ rad (and not even mirrored when the pair was swapped). Every bounce spun the ball, so a
+    /// ball dropped straight onto a floor rolled away diagonally — 0.82 m from a 3 m drop with a
+    /// 0.25 m ball, 1.54 m with a 0.5 m one.
+    pub fn sphere_box(sph_pos: Vec3, r: f32, box_pos: Vec3, box_rot: Quat, half: Vec3) -> Option<ContactPoint> {
+        let local = box_rot.inverse() * (sph_pos - box_pos);
+        let closest = local.clamp(-half, half);
+        let off = local - closest;
+        let d2 = off.length_squared();
+        if d2 >= r * r {
+            return None;
+        }
+        let (point, out, depth) = if d2 > 1e-12 {
+            let dist = d2.sqrt();
+            (closest, off / dist, r - dist)
+        } else {
+            // The centre is inside the box: out through the face it is nearest.
+            let room = half - local.abs();
+            let axis = if room.x <= room.y && room.x <= room.z { 0 } else if room.y <= room.z { 1 } else { 2 };
+            let mut out = Vec3::ZERO;
+            out[axis] = if local[axis] >= 0.0 { 1.0 } else { -1.0 };
+            let mut point = local;
+            point[axis] = half[axis] * out[axis];
+            (point, out, r + room[axis])
+        };
+        // `out` points from the box toward the sphere; the contact's normal runs sphere → box.
+        Some(mk_contact(box_pos + box_rot * point, -(box_rot * out), depth))
+    }
+
+    /// A sphere against a convex `shape`: the contact from its centre's closest point on the shape,
+    /// by GJK's distance — exact on a flat face, and along the true normal — while the centre is
+    /// outside the shape; `None` when it is inside, for EPA to answer. The sphere is A: the normal
+    /// points from the sphere toward the shape, and the point is on the shape's surface.
+    ///
+    /// For the reason [`Self::sphere_box`] gives: EPA's contact point and normal are estimates, off
+    /// a flat face's centre and tilted, so a ball dropped onto a hull floor or a cylinder's face
+    /// spun at every bounce and rolled away (0.82 m and 0.49 m from a 3 m drop, measured
+    /// 2026-11-23). Two GJK runs instead of GJK and EPA.
+    pub fn sphere_convex(centre: Vec3, r: f32, shape: &ColliderShape, pos: Vec3, rot: Quat) -> Option<Vec<ContactPoint>> {
+        let point = ColliderShape::Sphere(crate::components::SphereShape { radius: 0.0 });
+        if Gjk::test_collision(&point, centre, Quat::IDENTITY, shape, pos, rot) {
+            return None;
+        }
+        // `distance` answers for separated shapes, which a point outside the shape is: the gap,
+        // and the direction from the shape to the centre.
+        let (gap, from_shape) = Gjk::distance(|d| centre - Gjk::support_point(shape, pos, rot, -d))?;
+        if gap >= r {
+            return Some(Vec::new());
+        }
+        if gap <= 1e-6 {
+            // Touching the surface with the centre: no direction to trust; EPA's.
+            return None;
+        }
+        Some(vec![mk_contact(centre - from_shape * gap, -from_shape, r - gap)])
+    }
+
     /// Box–Plane contact.  Returns up to **8** corner contacts — one per penetrating
     /// corner, with no reduction step; a box lying flat gives 4, one resting on a
     /// face-diagonal tilt can give more, and a fully submerged box gives all 8.
@@ -882,6 +943,18 @@ impl NarrowPhase {
                 Self::box_box(pos_a, rot_a, ba.half_extents, pos_b, rot_b, bb.half_extents)
             }
 
+            // Sphere – Box, exactly (see `sphere_box`), and its mirror
+            (ColliderShape::Sphere(sp), ColliderShape::Box(b)) => {
+                Self::sphere_box(pos_a, sp.radius, pos_b, rot_b, b.half_extents).into_iter().collect()
+            }
+            (ColliderShape::Box(b), ColliderShape::Sphere(sp)) => Self::sphere_box(pos_b, sp.radius, pos_a, rot_a, b.half_extents)
+                .map(|mut c| {
+                    c.normal = -c.normal;
+                    c
+                })
+                .into_iter()
+                .collect(),
+
 
             // Generic – Plane (A is arbitrary, B is plane)
             (_, ColliderShape::Plane(p)) => {
@@ -938,6 +1011,20 @@ impl NarrowPhase {
                 }
                 cs
             }
+
+            // A sphere against any other convex shape: its centre's closest point, by GJK's distance,
+            // while the centre is outside (see `sphere_convex`); EPA when it is inside.
+            (ColliderShape::Sphere(sp), _) => Self::sphere_convex(pos_a, sp.radius, shape_b, pos_b, rot_b)
+                .unwrap_or_else(|| Gjk::get_contact(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b).into_iter().collect()),
+            (_, ColliderShape::Sphere(sp)) => match Self::sphere_convex(pos_b, sp.radius, shape_a, pos_a, rot_a) {
+                Some(mut cs) => {
+                    for c in &mut cs {
+                        c.normal = -c.normal;
+                    }
+                    cs
+                }
+                None => Gjk::get_contact(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b).into_iter().collect(),
+            },
 
             // Fallback to GJK + EPA for all other shape combinations.
             _ => Gjk::get_contact(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b)

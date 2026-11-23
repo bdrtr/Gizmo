@@ -86,6 +86,25 @@ fn setup(world: &mut World, font: FontId) {
         MeshRenderer::new(),
         Collider::box_collider(Vec3::new(14.0, 0.5, 14.0)),
     ));
+    // Galerinin duvarları, zeminin kenarlarında: ıskalayan toplar parçaları arkaya sürer, ve
+    // duvarsız bir zeminden biri kenardan düşer (2026-11-23, top temasları doğrulanınca yollar
+    // değişti ve bir parça z = 14.3'ten düştü). Ön duvar kameranın arkasında.
+    for (at, half) in [
+        (Vec3::new(0.0, 1.5, 13.75), Vec3::new(14.0, 1.5, 0.25)),
+        (Vec3::new(0.0, 1.5, -13.75), Vec3::new(14.0, 1.5, 0.25)),
+        (Vec3::new(13.75, 1.5, 0.0), Vec3::new(0.25, 1.5, 14.0)),
+        (Vec3::new(-13.75, 1.5, 0.0), Vec3::new(0.25, 1.5, 14.0)),
+    ] {
+        world.spawn_bundle((
+            EntityName::new("duvar"),
+            Transform::new(at).with_scale(half),
+            GlobalTransform::default(),
+            MeshSource("standard_cube".into()),
+            material(0.32, 0.3, 0.28, 1.0),
+            MeshRenderer::new(),
+            Collider::box_collider(half),
+        ));
+    }
     // Cam levhalar: yalnız çarpıştırıcı, gövde yok.
     for i in 0..PANES {
         let x = -6.25 + 2.5 * i as f32;

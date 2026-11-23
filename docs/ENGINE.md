@@ -237,6 +237,21 @@ the first write (Unity's material instance — a hidden un-sharing).
 >
 >    Their tests are `#[cfg(not(gizmo_forward_only))]`, the reason beside each, pointing here. STATUS
 >    lists the three as absent from the browser.
+> 7. **(2026-11-23) A body under a parent is simulated at its own `Transform` as a world pose, and
+>    drawn at its parent's pose composed with it.** The physics reads and writes a body's
+>    `Transform` in world space whatever its `Parent`; the render's propagation composes it with
+>    the parent's, as for any child. The two agree only under a parent at the origin, unturned and
+>    unscaled: a box parented under a moving truck is simulated in one place and drawn in another.
+>    There are two ways to make them one:
+>    - (a) a body is a root of the propagation: its `Transform` is world, and its parent organises
+>      the hierarchy and carries nothing. Small, but an exception to "a child's `Transform` is
+>      local", and moving a group in the editor would not move its bodies.
+>    - (b) the physics composes the parent chain when it reads a parented body, and writes the
+>      pose back in the parent's frame. This keeps the rule everywhere, and the editor's
+>      behaviour, at the cost of the step's sync, its debug checks and `KinematicTarget`.
+>
+>    Its own design. Its compound half — the parent's shape took the child body in — was closed
+>    the same day.
 > 5. ~~**The facade's tests compile only with its default features.**~~ **Closed 2026-11-23:** each
 >    test module, test and helper is gated on what it uses, three integration files on the
 >    subsystems they drive, and the CI `features` job builds the facade's tests (`--lib --tests

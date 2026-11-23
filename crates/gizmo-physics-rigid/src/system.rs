@@ -95,13 +95,20 @@ fn body_collider(
     // like its mesh, in the child's frame, came out the mesh's size divided by the scale above it,
     // so `misket` had to write its tray walls' colliders in metres while their meshes were in tray
     // units.
+    //
+    // **A child with a body of its own is not a part**, and neither is anything under it: it is
+    // simulated as itself, and its own children are its compound. Until 2026-11-23 the walk took
+    // its shape in too, at its moving pose: a ball parented under a platform overlapped its own
+    // copy in the platform's compound, was flung 17 m sideways, and fell through the platform for
+    // good (it did not collide with it — the copy was the platform's).
+    let bodies = world.query::<&RigidBody>();
     let mut visited = std::collections::HashSet::new();
     visited.insert(id);
     let mut stack = vec![(id, Relative { position: gizmo_math::Vec3::ZERO, rotation: gizmo_math::Quat::IDENTITY, scale: transform.scale })];
     while let Some((curr_id, curr)) = stack.pop() {
         if let Some(children) = children_query.get(curr_id) {
             for &child in &children.0 {
-                if !world.is_alive(child) || !visited.insert(child) {
+                if !world.is_alive(child) || !visited.insert(child) || bodies.get(child).is_some() {
                     continue;
                 }
                 let local = trans_query.get(child);
@@ -761,6 +768,7 @@ fn compound_parts(world: &World) -> BodyParts {
     let children_query = world.query::<&gizmo_core::component::Children>();
     let trans_query = world.query::<&Transform>();
     let col_query = world.query::<&Collider>();
+    let bodies = world.query::<&RigidBody>();
     let mut parts = BodyParts::default();
     let roots = world.query_filtered::<(Entity, &gizmo_core::component::Children, &Transform), gizmo_core::query::With<RigidBody>>();
     for (root, children, root_t) in roots.iter() {
@@ -768,7 +776,8 @@ fn compound_parts(world: &World) -> BodyParts {
         let mut stack: Vec<(Entity, Relative)> = children.0.iter().map(|&c| (c, top)).collect();
         let mut seen = std::collections::HashSet::new();
         while let Some((e, above)) = stack.pop() {
-            if e == root || !seen.insert(e.id()) {
+            // A body under a body is its own, with its own parts — see `body_collider`.
+            if e == root || !seen.insert(e.id()) || bodies.get(e).is_some() {
                 continue;
             }
             let local = trans_query.get(e).copied().unwrap_or_default();
