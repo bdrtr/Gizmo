@@ -1,10 +1,6 @@
 //! Creating the render pipelines (core + shadow).
 
 use super::layouts::LayoutRefs;
-#[cfg(not(gizmo_forward_only))]
-use super::shaders::load_shader_composed;
-#[cfg(gizmo_forward_only)]
-use super::shaders::load_shader_composed_web;
 
 /// The fixed-function state of one baked-lit pipeline variant.
 ///
@@ -266,84 +262,243 @@ pub(crate) const OPAQUE: Option<wgpu::BlendState> = None;
 
 /// `probes`: which reflection probes the forward-only path's lit shaders read, which is what a scene has
 /// ([`ProbeShape`](super::ProbeShape), `SceneState::set_forward_reflections`). The desktop's read any,
-/// deciding per pixel.
+/// deciding per pixel. `sun_shadows`, `local_light_maps` and `lights` likewise: see `SceneDefs`.
+///
+/// Three families, each with its own shaders: the lit surfaces (`lit_pipelines`), the unlit and
+/// baked-lit ones (`unlit_pipelines`), and the scene's own surfaces — sky, backdrop, water,
+/// mirrors, grid (`scene_pipelines`).
 pub(super) fn build_core_pipelines(
     device: &wgpu::Device,
     layouts: &LayoutRefs,
-    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] probes: super::ProbeShape,
-    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] sun_shadows: bool,
-    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] local_light_maps: bool,
-    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] lights: super::LightShape,
+    probes: super::ProbeShape,
+    sun_shadows: bool,
+    local_light_maps: bool,
+    lights: super::LightShape,
 ) -> CorePipelines {
-    // WASM: max 4 bind groups (Chrome WebGPU), shadow kaldırıldı
-    // Native: 5 bind groups (shadow dahil)
-    #[cfg(not(gizmo_forward_only))]
-    let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Render Pipeline Layout"),
-        bind_group_layouts: &[
-            Some(layouts.global),   // 0
-            Some(layouts.texture),  // 1
-            Some(layouts.shadow),   // 2
-            Some(layouts.skeleton), // 3
-            Some(layouts.instance), // 4
-        ],
-        immediate_size: 0,
-    });
-    // The lit forward shader's own layout: the same five plus the irradiance volume's group at 5,
-    // for its reflection probes (`shader.wgsl`'s `#ifdef PROBES`). Only pipelines built from that
-    // shader use it; unlit, grid and backdrop keep five. A forward pass binds group 5 once — a
-    // bound group stays bound across pipeline switches.
-    #[cfg(not(gizmo_forward_only))]
-    let lit_pipeline_layout = lit_pipeline_layout(device, layouts);
-    #[cfg(gizmo_forward_only)]
-    let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Render Pipeline Layout"),
-        bind_group_layouts: &[
-            Some(layouts.global),   // 0
-            Some(layouts.texture),  // 1
-            Some(layouts.skeleton), // 2
-            Some(layouts.instance), // 3
-        ],
-        immediate_size: 0,
-    });
+    let layouts = ForwardLayouts::new(device, layouts);
+    let scene = SceneDefs::new(probes, sun_shadows, local_light_maps, lights);
+    let LitPipelines { render, render_double_sided, wireframe, transparent, blend_lit, lobes, render_details, transmissive } =
+        lit_pipelines(device, &layouts, &scene);
+    let UnlitPipelines {
+        unlit,
+        unlit_blended,
+        unlit_keeps,
+        blend_unlit,
+        baked_lit,
+        baked_lit_double_sided,
+        baked_lit_transparent,
+        baked_lit_depth,
+    } = unlit_pipelines(device, &layouts.plain, &scene);
+    let ScenePipelines { sky, backdrop, water, water_double_sided, water_mirror, mirror, grid } =
+        scene_pipelines(device, &layouts.plain);
+    CorePipelines {
+        render,
+        render_double_sided,
+        wireframe,
+        unlit,
+        unlit_blended,
+        baked_lit,
+        baked_lit_double_sided,
+        baked_lit_transparent,
+        baked_lit_depth,
+        sky,
+        backdrop,
+        water,
+        water_double_sided,
+        mirror,
+        water_mirror,
+        transparent,
+        grid,
+        blend_lit,
+        lobes,
+        render_details,
+        unlit_keeps,
+        transmissive,
+        blend_unlit,
+    }
+}
 
+/// The forward pipelines' layouts.
+struct ForwardLayouts {
+    /// Every forward pipeline's groups: global, texture, shadow, skeleton and instance on the
+    /// desktop; the same without the shadow group on the forward-only path — WebGPU allows four.
+    plain: wgpu::PipelineLayout,
+    /// The lit shader's: on the desktop `plain` and the irradiance volume's group at 5, for its
+    /// reflection probes (`shader.wgsl`'s `#ifdef PROBES`), which a forward pass binds once — a bound
+    /// group stays bound across pipeline switches. `plain` on the forward-only path, whose probes are
+    /// on group 0.
+    lit: wgpu::PipelineLayout,
+    /// The wireframe's: on the desktop `plain` and its line colour at 5; `plain` on the
+    /// forward-only path, whose wireframe is the lit shader's fill.
+    wire: wgpu::PipelineLayout,
+}
+
+impl ForwardLayouts {
     #[cfg(not(gizmo_forward_only))]
-    let shader = load_shader_composed(
+    fn new(device: &wgpu::Device, layouts: &LayoutRefs) -> Self {
+        let with = |label: &str, sixth: Option<&wgpu::BindGroupLayout>| {
+            let groups = [
+                Some(layouts.global),
+                Some(layouts.texture),
+                Some(layouts.shadow),
+                Some(layouts.skeleton),
+                Some(layouts.instance),
+                sixth,
+            ];
+            let groups = if sixth.is_some() { &groups[..] } else { &groups[..5] };
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(label),
+                bind_group_layouts: groups,
+                immediate_size: 0,
+            })
+        };
+        Self {
+            plain: with("Render Pipeline Layout", None),
+            lit: lit_pipeline_layout(device, layouts),
+            wire: with("Wireframe Pipeline Layout", Some(layouts.wire_color)),
+        }
+    }
+
+    #[cfg(gizmo_forward_only)]
+    fn new(device: &wgpu::Device, layouts: &LayoutRefs) -> Self {
+        let plain = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[
+                Some(layouts.global),   // 0
+                Some(layouts.texture),  // 1
+                Some(layouts.skeleton), // 2
+                Some(layouts.instance), // 3
+            ],
+            immediate_size: 0,
+        });
+        Self { lit: plain.clone(), wire: plain.clone(), plain }
+    }
+}
+
+/// What the forward-only path builds its lit shaders for: the scene's reflection probes
+/// (`SceneState::set_forward_reflections`), whether they read the sun's shadow
+/// (`forward_sun_shadows`) and the local lights' shadows and cookies (`forward_local_light_maps`),
+/// and the kinds of local light it has (`forward_lights`). A branch a phone does not take still
+/// costs it. The desktop's shaders are built with all of it, deciding per pixel, and take none.
+#[derive(Default)]
+struct SceneDefs {
+    probes: Vec<(&'static str, naga_oil::compose::ShaderDefValue)>,
+    lights: Vec<(&'static str, naga_oil::compose::ShaderDefValue)>,
+}
+
+impl SceneDefs {
+    fn new(probes: super::ProbeShape, sun_shadows: bool, local_light_maps: bool, lights: super::LightShape) -> Self {
+        if !cfg!(gizmo_forward_only) {
+            return Self::default();
+        }
+        let on = naga_oil::compose::ShaderDefValue::Bool;
+        let [local, sized, rect] = lights.defs();
+        Self {
+            probes: probes.defs().to_vec(),
+            lights: vec![("SUN_SHADOWS", on(sun_shadows)), ("LOCAL_LIGHT_MAPS", on(local_light_maps)), local, sized, rect],
+        }
+    }
+
+    /// A lit shader's: the probes and the lights, then `extra`.
+    fn lit(&self, extra: &[&'static str]) -> Vec<(&'static str, naga_oil::compose::ShaderDefValue)> {
+        let extra = extra.iter().map(|name| (*name, naga_oil::compose::ShaderDefValue::Bool(true)));
+        self.probes.iter().chain(&self.lights).copied().chain(extra).collect()
+    }
+}
+
+/// One of the forward pipelines' shaders, for the path this build draws with: on the desktop
+/// composed under its defs, a copy at `demo/assets/shaders/<file>` taking the compiled-in one's
+/// place (hot reload); on the forward-only path under that path's, from the compiled-in copy.
+/// `defs` are set over the path's own.
+#[cfg(not(gizmo_forward_only))]
+fn path_shader(
+    device: &wgpu::Device,
+    file: &str,
+    source: &str,
+    label: &str,
+    defs: &[(&str, naga_oil::compose::ShaderDefValue)],
+) -> wgpu::ShaderModule {
+    super::shaders::load_shader_composed_with(device, &format!("demo/assets/shaders/{file}"), source, label, defs)
+}
+
+#[cfg(gizmo_forward_only)]
+fn path_shader(
+    device: &wgpu::Device,
+    _file: &str,
+    source: &str,
+    label: &str,
+    defs: &[(&str, naga_oil::compose::ShaderDefValue)],
+) -> wgpu::ShaderModule {
+    super::shaders::load_shader_composed_web_with(device, source, label, defs)
+}
+
+/// A filled pipeline drawing `module`'s `fs_main`: what all but two of the forward pipelines are.
+fn filled(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    label: &str,
+    depth_write: bool,
+    cull: Option<wgpu::Face>,
+    blend: Option<wgpu::BlendState>,
+) -> wgpu::RenderPipeline {
+    forward_pipeline(device, layout, module, "fs_main", label, depth_write, cull, blend, wgpu::PolygonMode::Fill)
+}
+
+const LIT_WGSL: &str = include_str!("../shaders/shader.wgsl");
+const UNLIT_WGSL: &str = include_str!("../shaders/unlit.wgsl");
+
+/// The pipelines drawn from `shader.wgsl`.
+struct LitPipelines {
+    render: wgpu::RenderPipeline,
+    render_double_sided: wgpu::RenderPipeline,
+    wireframe: wgpu::RenderPipeline,
+    transparent: wgpu::RenderPipeline,
+    blend_lit: [wgpu::RenderPipeline; 3],
+    lobes: Option<super::LitSet>,
+    render_details: Option<wgpu::RenderPipeline>,
+    transmissive: [wgpu::RenderPipeline; 2],
+}
+
+/// The lit surfaces: opaque, double-sided, blended under each mode, glass, and the wireframe. The
+/// desktop has one lit shader with everything in. The forward-only path builds them in tiers, so a
+/// plain surface does not pay for what another needs: the plain shader, `DETAILS` for a
+/// double-sided, blended or cut-out draw (`render_details`), and `LOBES` for a material's
+/// anisotropy, clear coat and subsurface (`lobes`). See `SceneState::lit_pipeline`.
+fn lit_pipelines(device: &wgpu::Device, layouts: &ForwardLayouts, scene: &SceneDefs) -> LitPipelines {
+    let shader = path_shader(device, "shader.wgsl", LIT_WGSL, "Shader", &scene.lit(&[]));
+    // The middle tier on the forward-only path. On the desktop it is the one shader there is.
+    #[cfg(gizmo_forward_only)]
+    let details_module = path_shader(device, "shader.wgsl", LIT_WGSL, "Lit Shader With Details", &scene.lit(&["DETAILS"]));
+    #[cfg(gizmo_forward_only)]
+    let details = &details_module;
+    #[cfg(not(gizmo_forward_only))]
+    let details = &shader;
+    #[cfg(gizmo_forward_only)]
+    let render_details = Some(filled(device, &layouts.lit, details, "Render Pipeline (details)", true, Some(wgpu::Face::Back), OPAQUE));
+    #[cfg(not(gizmo_forward_only))]
+    let render_details = None;
+    // The forward-only path's second set: the same states as `render`, `render_double_sided`,
+    // `transparent` and `blend_lit` below, from the shader with the lobes in.
+    #[cfg(gizmo_forward_only)]
+    let lobes = Some(lit_set(
         device,
-        "demo/assets/shaders/shader.wgsl",
-        include_str!("../shaders/shader.wgsl"),
-        "Shader",
-    );
-    // The two probe defs every forward-only lit shader below is built with, and whether it reads the
-    // sun's shadow (`SceneState::forward_sun_shadows`).
-    #[cfg(gizmo_forward_only)]
-    let [probe_background, probe_boxes] = probes.defs();
-    #[cfg(gizmo_forward_only)]
-    let sun_shadow = ("SUN_SHADOWS", naga_oil::compose::ShaderDefValue::Bool(sun_shadows));
-    // And whether they read the local lights' shadows and cookies (`SceneState::forward_local_light_maps`).
-    #[cfg(gizmo_forward_only)]
-    let local_maps = ("LOCAL_LIGHT_MAPS", naga_oil::compose::ShaderDefValue::Bool(local_light_maps));
-    // And the kinds of local light it has (`SceneState::forward_lights`).
-    #[cfg(gizmo_forward_only)]
-    let [local_lights, sized_lights, rect_lights] = lights.defs();
-    #[cfg(gizmo_forward_only)]
-    let shader = super::shaders::load_shader_composed_web_with(
-        device,
-        include_str!("../shaders/shader.wgsl"),
-        "Shader",
-        &[probe_background, probe_boxes, sun_shadow, local_maps, local_lights, sized_lights, rect_lights],
-    );
+        &layouts.lit,
+        &path_shader(device, "shader.wgsl", LIT_WGSL, "Lit Shader With Lobes", &scene.lit(&["DETAILS", "LOBES"])),
+        "lobes",
+    ));
+    #[cfg(not(gizmo_forward_only))]
+    let lobes = None;
     // The wireframe draws the same shader with `WIREFRAME` on, which lets a frame's
     // `wireframe_color` replace the lit colour. Native only: the web has no line mode, so its
-    // "wireframe" is a fill and keeps the lit shader.
+    // "wireframe" is a fill and keeps the lit shader. Probes off: their group 5 is this pipeline's
+    // line colour, and a line in the lit colour can spare a reflection.
     #[cfg(not(gizmo_forward_only))]
-    let wire_shader_module = super::shaders::load_shader_composed_with(
+    let wire_module = path_shader(
         device,
-        "demo/assets/shaders/shader.wgsl",
-        include_str!("../shaders/shader.wgsl"),
+        "shader.wgsl",
+        LIT_WGSL,
         "Wireframe Shader",
-        // Probes off: their group 5 is this pipeline's line colour, and a line in the lit colour can
-        // spare a reflection.
         &[
             ("WIREFRAME", naga_oil::compose::ShaderDefValue::Bool(true)),
             ("PROBES", naga_oil::compose::ShaderDefValue::Bool(false)),
@@ -351,463 +506,40 @@ pub(super) fn build_core_pipelines(
         ],
     );
     #[cfg(not(gizmo_forward_only))]
-    let wire_shader = &wire_shader_module;
-
-    #[cfg(not(gizmo_forward_only))]
-    let unlit_shader = load_shader_composed(
-        device,
-        "demo/assets/shaders/unlit.wgsl",
-        include_str!("../shaders/unlit.wgsl"),
-        "Unlit Shader",
-    );
-    #[cfg(not(gizmo_forward_only))]
-    let baked_lit_shader = load_shader_composed(
-        device,
-        "demo/assets/shaders/baked_lit.wgsl",
-        include_str!("../shaders/baked_lit.wgsl"),
-        "Baked-Lit Shader",
-    );
-    #[cfg(gizmo_forward_only)]
-    let unlit_shader = load_shader_composed_web(device, include_str!("../shaders/unlit.wgsl"), "Unlit Shader");
-    #[cfg(gizmo_forward_only)]
-    // With the lit shader's lights (`SceneState::forward_lights`, `forward_local_light_maps`): what the water on
-    // a wet baked-lit surface reflects (`water_glints`).
-    let baked_lit_shader = super::shaders::load_shader_composed_web_with(
-        device,
-        include_str!("../shaders/baked_lit.wgsl"),
-        "Baked-Lit Shader",
-        &[sun_shadow, local_maps, local_lights, sized_lights, rect_lights],
-    );
-
-    #[cfg(not(gizmo_forward_only))]
-    let mirror_shader = load_shader_composed(
-        device,
-        "demo/assets/shaders/planar_mirror.wgsl",
-        include_str!("../shaders/planar_mirror.wgsl"),
-        "Planar Mirror Shader",
-    );
-    #[cfg(gizmo_forward_only)]
-    let mirror_shader =
-        load_shader_composed_web(device, include_str!("../shaders/planar_mirror.wgsl"), "Planar Mirror Shader");
-
-    let planar = [("PLANAR", naga_oil::compose::ShaderDefValue::Bool(true))];
-    #[cfg(not(gizmo_forward_only))]
-    let water_mirror_shader = super::shaders::load_shader_composed_with(
-        device,
-        "demo/assets/shaders/water.wgsl",
-        include_str!("../shaders/water.wgsl"),
-        "Water Mirror Shader",
-        &planar,
-    );
-    #[cfg(gizmo_forward_only)]
-    let water_mirror_shader = super::shaders::load_shader_composed_web_with(
-        device,
-        include_str!("../shaders/water.wgsl"),
-        "Water Mirror Shader",
-        &planar,
-    );
-
-    #[cfg(not(gizmo_forward_only))]
-    let water_shader = load_shader_composed(
-        device,
-        "demo/assets/shaders/water.wgsl",
-        include_str!("../shaders/water.wgsl"),
-        "Water Shader",
-    );
-    #[cfg(gizmo_forward_only)]
-    let water_shader = load_shader_composed_web(device, include_str!("../shaders/water.wgsl"), "Water Shader");
-
-    #[cfg(not(gizmo_forward_only))]
-    let sky_shader = load_shader_composed(
-        device,
-        "demo/assets/shaders/sky.wgsl",
-        include_str!("../shaders/sky.wgsl"),
-        "Sky Shader",
-    );
-    #[cfg(gizmo_forward_only)]
-    let sky_shader = load_shader_composed_web(device, include_str!("../shaders/sky.wgsl"), "Sky Shader");
-
-    #[cfg(not(gizmo_forward_only))]
-    let backdrop_shader = load_shader_composed(
-        device,
-        "demo/assets/shaders/backdrop.wgsl",
-        include_str!("../shaders/backdrop.wgsl"),
-        "Backdrop Shader",
-    );
-    #[cfg(gizmo_forward_only)]
-    let backdrop_shader =
-        load_shader_composed_web(device, include_str!("../shaders/backdrop.wgsl"), "Backdrop Shader");
-
-    #[cfg(not(gizmo_forward_only))]
-    let grid_shader = load_shader_composed(
-        device,
-        "demo/assets/shaders/grid.wgsl",
-        include_str!("../shaders/grid.wgsl"),
-        "Grid Shader",
-    );
-    #[cfg(gizmo_forward_only)]
-    let grid_shader = load_shader_composed_web(device, include_str!("../shaders/grid.wgsl"), "Grid Shader");
-
-    #[cfg(not(gizmo_forward_only))]
-    let lit_layout = &lit_pipeline_layout;
-    #[cfg(gizmo_forward_only)]
-    let lit_layout = &render_pipeline_layout;
-    #[cfg(not(gizmo_forward_only))]
-    let wire_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Wireframe Pipeline Layout"),
-        bind_group_layouts: &[
-            Some(layouts.global),
-            Some(layouts.texture),
-            Some(layouts.shadow),
-            Some(layouts.skeleton),
-            Some(layouts.instance),
-            Some(layouts.wire_color), // 5
-        ],
-        immediate_size: 0,
-    });
-    #[cfg(not(gizmo_forward_only))]
-    let wire_layout = &wire_pipeline_layout;
-    #[cfg(gizmo_forward_only)]
-    let wire_layout = &render_pipeline_layout;
-    let create_at = |entry: &str,
-                     layout: &wgpu::PipelineLayout,
-                     sm: &wgpu::ShaderModule,
-                     label: &str,
-                     depth_write: bool,
-                     cull: Option<wgpu::Face>,
-                     blend: Option<wgpu::BlendState>,
-                     polygon_mode: wgpu::PolygonMode| {
-        forward_pipeline(device, layout, sm, entry, label, depth_write, cull, blend, polygon_mode)
-    };
-    let create_main = |layout: &wgpu::PipelineLayout,
-                       sm: &wgpu::ShaderModule,
-                       label: &str,
-                       depth_write: bool,
-                       cull: Option<wgpu::Face>,
-                       blend: Option<wgpu::BlendState>,
-                       polygon_mode: wgpu::PolygonMode| {
-        create_at("fs_main", layout, sm, label, depth_write, cull, blend, polygon_mode)
-    };
-
-    let opaque_state = baked_lit_state(false);
-    let blended_state = baked_lit_state(true);
-    let backdrop = crate::backdrop::backdrop_state();
-
-    // The forward-only path's second set: the same states as `render`, `render_double_sided`,
-    // `transparent` and `blend_lit` below, from the shader with the lobes in.
-    #[cfg(gizmo_forward_only)]
-    let lobes = {
-        let shader = super::shaders::load_shader_composed_web_with(
-            device,
-            include_str!("../shaders/shader.wgsl"),
-            "Lit Shader With Lobes",
-            &[
-                probe_background,
-                probe_boxes,
-                sun_shadow,
-                local_maps,
-                local_lights,
-                sized_lights,
-                rect_lights,
-                ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
-                ("LOBES", naga_oil::compose::ShaderDefValue::Bool(true)),
-            ],
-        );
-        Some(lit_set(device, lit_layout, &shader, "lobes"))
-    };
-    #[cfg(not(gizmo_forward_only))]
-    let lobes = None;
-
-    // The middle tier on the forward-only path: what a double-sided, blended or cut-out draw needs and a
-    // plain one does not. On the desktop path it is the one shader there is.
-    #[cfg(gizmo_forward_only)]
-    let details_shader_module = super::shaders::load_shader_composed_web_with(
-        device,
-        include_str!("../shaders/shader.wgsl"),
-        "Lit Shader With Details",
-        &[
-            probe_background,
-                probe_boxes,
-                sun_shadow,
-                local_maps,
-                local_lights,
-                sized_lights,
-                rect_lights,
-            ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
-        ],
-    );
-    #[cfg(gizmo_forward_only)]
-    let details_shader = &details_shader_module;
-    #[cfg(not(gizmo_forward_only))]
-    let details_shader = &shader;
+    let wire = &wire_module;
     // It draws every kind of surface, and a debugging view has nothing to save.
     #[cfg(gizmo_forward_only)]
-    let wire_shader = details_shader;
-    #[cfg(gizmo_forward_only)]
-    let render_details = Some(create_main(
-        lit_layout,
-        details_shader,
-        "Render Pipeline (details)",
-        true,
-        Some(wgpu::Face::Back),
-        OPAQUE,
-        wgpu::PolygonMode::Fill,
-    ));
-    #[cfg(not(gizmo_forward_only))]
-    let render_details = None;
-
-    // Unlit that may discard, on the forward-only path. Blended unlit draws take it too: they are small,
-    // and a crossfade reaches them. On the desktop path it is the one unlit shader there is.
-    #[cfg(gizmo_forward_only)]
-    let unlit_keeps_module = super::shaders::load_shader_composed_web_with(
-        device,
-        include_str!("../shaders/unlit.wgsl"),
-        "Unlit Shader That May Discard",
-        &[("KEEPS", naga_oil::compose::ShaderDefValue::Bool(true))],
-    );
-    #[cfg(gizmo_forward_only)]
-    let unlit_keeps_shader = &unlit_keeps_module;
-    #[cfg(not(gizmo_forward_only))]
-    let unlit_keeps_shader = &unlit_shader;
-    #[cfg(gizmo_forward_only)]
-    let unlit_keeps = Some(create_main(
-        &render_pipeline_layout,
-        unlit_keeps_shader,
-        "Unlit Pipeline (may discard)",
-        true,
-        None,
-        OPAQUE,
-        wgpu::PolygonMode::Fill,
-    ));
-    #[cfg(not(gizmo_forward_only))]
-    let unlit_keeps = None;
-
+    let wire = details;
     // Glass: the lit shader reading the frame behind it. The lobes are on, as they are on every
     // desktop lit pipeline: a phone that draws glass has already chosen to pay for a copy of the
-    // frame. No blend, since what shows through is part of what it computes.
-    #[cfg(not(gizmo_forward_only))]
-    let glass_shader = super::shaders::load_shader_composed_with(
-        device,
-        "demo/assets/shaders/shader.wgsl",
-        include_str!("../shaders/shader.wgsl"),
-        "Glass Shader",
-        &[("TRANSMISSION", naga_oil::compose::ShaderDefValue::Bool(true))],
-    );
-    #[cfg(gizmo_forward_only)]
-    let glass_shader = super::shaders::load_shader_composed_web_with(
-        device,
-        include_str!("../shaders/shader.wgsl"),
-        "Glass Shader",
-        &[
-            probe_background,
-                probe_boxes,
-                sun_shadow,
-                local_maps,
-                local_lights,
-                sized_lights,
-                rect_lights,
-            ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
-            ("LOBES", naga_oil::compose::ShaderDefValue::Bool(true)),
-            ("TRANSMISSION", naga_oil::compose::ShaderDefValue::Bool(true)),
-        ],
-    );
-    let transmissive = [
-        create_main(lit_layout, &glass_shader, "Glass Pipeline", true, Some(wgpu::Face::Back), None, wgpu::PolygonMode::Fill),
-        create_main(lit_layout, &glass_shader, "Glass TwoSided Pipeline", true, None, None, wgpu::PolygonMode::Fill),
-    ];
-
-    CorePipelines {
-        lobes,
-        render_details,
-        unlit_keeps,
-        transmissive,
-        render: create_main(
-            lit_layout,
-            &shader,
-            "Render Pipeline",
-            true,
-            Some(wgpu::Face::Back),
-            // See `OPAQUE`: on every path, as in the G-buffer.
-            OPAQUE,
-            wgpu::PolygonMode::Fill,
-        ),
-        render_double_sided: create_main(
-            lit_layout,
-            details_shader,
-            "Render TwoSided Pipeline",
-            true,
-            None,
-            OPAQUE,
-            wgpu::PolygonMode::Fill,
-        ),
-        wireframe: create_main(
-            wire_layout,
-            wire_shader,
+    // frame. No blend, since what shows through is part of what it computes. (`DETAILS` and `LOBES`
+    // are the desktop's anyway.)
+    let glass = path_shader(device, "shader.wgsl", LIT_WGSL, "Glass Shader", &scene.lit(&["DETAILS", "LOBES", "TRANSMISSION"]));
+    let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
+    LitPipelines {
+        // See `OPAQUE`: on every path, as in the G-buffer.
+        render: filled(device, &layouts.lit, &shader, "Render Pipeline", true, Some(wgpu::Face::Back), OPAQUE),
+        render_double_sided: filled(device, &layouts.lit, details, "Render TwoSided Pipeline", true, None, OPAQUE),
+        wireframe: forward_pipeline(
+            device,
+            &layouts.wire,
+            wire,
+            "fs_main",
             "Wireframe Pipeline",
             true,
             None,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
+            alpha,
             // WebGPU/WebGL2 PolygonMode::Line desteklemiyor
-            if cfg!(gizmo_forward_only) {
-                wgpu::PolygonMode::Fill
-            } else {
-                wgpu::PolygonMode::Line
-            },
+            if cfg!(gizmo_forward_only) { wgpu::PolygonMode::Fill } else { wgpu::PolygonMode::Line },
         ),
-        transparent: create_main(
-            lit_layout,
-            details_shader,
-            "Transparent Pipeline",
-            false,
-            None,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-            wgpu::PolygonMode::Fill,
-        ),
-        unlit: create_main(
-            &render_pipeline_layout,
-            &unlit_shader,
-            "Unlit Pipeline",
-            true,
-            None,
-            OPAQUE,
-            wgpu::PolygonMode::Fill,
-        ),
-        // A transparent unlit draw blending by alpha, which the opaque `unlit` drew until 2026-11-11
-        // (see `OPAQUE`). It may discard, and it writes depth, as that pipeline did for it.
-        unlit_blended: create_main(
-            &render_pipeline_layout,
-            unlit_keeps_shader,
-            "Unlit Pipeline (blended)",
-            true,
-            None,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-            wgpu::PolygonMode::Fill,
-        ),
-        // Backface-culled and opaque, unlike `unlit`. Baked-lit geometry is a solid world rather
-        // than a decal or a billboard, so both halves of that are free wins: no blend, and no
-        // second pass over every triangle facing away.
-        baked_lit: create_main(
-            &render_pipeline_layout,
-            &baked_lit_shader,
-            "Baked-Lit Pipeline",
-            opaque_state.depth_write,
-            opaque_state.cull,
-            opaque_state.blend,
-            wgpu::PolygonMode::Fill,
-        ),
-        // A double-sided baked-lit material's: the same, culling nothing.
-        baked_lit_double_sided: create_main(
-            &render_pipeline_layout,
-            &baked_lit_shader,
-            "Baked-Lit TwoSided Pipeline",
-            opaque_state.depth_write,
-            None,
-            opaque_state.blend,
-            wgpu::PolygonMode::Fill,
-        ),
-        // …but "a solid world" is not all of it. A decal, a skid mark or a glass pane is
-        // baked-lit too, and every other stage already treated those as transparent: the
-        // batcher sorts them back-to-front, the z-prepass and the shadow pass skip them. Only
-        // the pipeline disagreed — `blend: None` and `depth_write: true` meant the fragment
-        // alpha the shader had computed all along was discarded, and the layer painted over
-        // the road as opaque geometry. Same shader, transparent state, chosen by
-        // `Material::is_transparent` (see `baked_lit_state`).
-        baked_lit_transparent: create_main(
-            &render_pipeline_layout,
-            &baked_lit_shader,
-            "Baked-Lit Transparent Pipeline",
-            blended_state.depth_write,
-            blended_state.cull,
-            blended_state.blend,
-            wgpu::PolygonMode::Fill,
-        ),
-        baked_lit_depth: [
-            depth_only_pipeline(device, &render_pipeline_layout, &baked_lit_shader, "Baked-Lit Depth Pipeline", opaque_state.cull),
-            depth_only_pipeline(device, &render_pipeline_layout, &baked_lit_shader, "Baked-Lit Depth TwoSided Pipeline", None),
-        ],
-        sky: create_main(
-            &render_pipeline_layout,
-            &sky_shader,
-            "Sky Pipeline",
-            false,
-            None,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-            wgpu::PolygonMode::Fill,
-        ),
-        // The scene's own painted backdrop. Everything that makes it a backdrop rather than
-        // ordinary unlit geometry is in this one state plus the shader: no depth write (so it
-        // cannot occlude the world), no culling (a panel or an inside-out dome), and alpha
-        // blending (so a cut-out skyline edge survives). The remaining property — drawn first
-        // — belongs to the batcher, which is the only place that knows the frame's draw order.
-        backdrop: create_main(
-            &render_pipeline_layout,
-            &backdrop_shader,
-            "Backdrop Pipeline",
-            backdrop.depth_write,
-            backdrop.cull,
-            backdrop.blend,
-            wgpu::PolygonMode::Fill,
-        ),
-        // Alpha-blended AND depth-writing, which the transparent pipeline is not. Water is a
-        // surface rather than a pane: what is under it should be occluded by it, and two water
-        // batches at different depths should resolve against each other rather than against the
-        // order the batcher happened to drain them in.
-        water: create_main(
-            &render_pipeline_layout,
-            &water_shader,
-            "Water Pipeline",
-            true,
-            Some(wgpu::Face::Back),
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-            wgpu::PolygonMode::Fill,
-        ),
-        // `Material::with_double_sided` on water is not the no-op it is on the transparent
-        // pipeline (which is built `cull_mode: None` already): the water pipeline culls back
-        // faces, so a swimmer looking up at the surface sees nothing without this variant.
-        water_double_sided: create_main(
-            &render_pipeline_layout,
-            &water_shader,
-            "Water Double-Sided Pipeline",
-            true,
-            None,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-            wgpu::PolygonMode::Fill,
-        ),
-        // Double-sided whatever the material says: there is a capture only from above, and a wave's
-        // far side is hidden by its near one in the depth test.
-        water_mirror: create_main(
-            &render_pipeline_layout,
-            &water_mirror_shader,
-            "Water Mirror Pipeline",
-            true,
-            None,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-            wgpu::PolygonMode::Fill,
-        ),
-        mirror: create_main(
-            &render_pipeline_layout,
-            &mirror_shader,
-            "Planar Mirror Pipeline",
-            true,
-            Some(wgpu::Face::Back),
-            None,
-            wgpu::PolygonMode::Fill,
-        ),
-        grid: create_main(
-            &render_pipeline_layout,
-            &grid_shader,
-            "Grid Pipeline",
-            false,
-            None,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-            wgpu::PolygonMode::Fill,
-        ),
+        transparent: filled(device, &layouts.lit, details, "Transparent Pipeline", false, None, alpha),
         // Same state as `transparent` (no depth write, no culling), each mode's blend.
         blend_lit: crate::components::BlendMode::VARIANTS.map(|mode| {
-            create_at(
+            forward_pipeline(
+                device,
+                &layouts.lit,
+                details,
                 lit_fragment_entry(mode),
-                lit_layout,
-                details_shader,
                 &format!("Transparent Pipeline ({mode:?})"),
                 false,
                 None,
@@ -815,17 +547,142 @@ pub(super) fn build_core_pipelines(
                 wgpu::PolygonMode::Fill,
             )
         }),
-        blend_unlit: crate::components::BlendMode::VARIANTS.map(|mode| {
-            create_main(
-                &render_pipeline_layout,
-                unlit_keeps_shader,
-                &format!("Unlit Pipeline ({mode:?})"),
-                false,
-                None,
-                Some(mode.state()),
-                wgpu::PolygonMode::Fill,
-            )
-        }),
+        lobes,
+        render_details,
+        transmissive: [
+            filled(device, &layouts.lit, &glass, "Glass Pipeline", true, Some(wgpu::Face::Back), None),
+            filled(device, &layouts.lit, &glass, "Glass TwoSided Pipeline", true, None, None),
+        ],
+    }
+}
+
+/// The pipelines drawn from `unlit.wgsl` and `baked_lit.wgsl`.
+struct UnlitPipelines {
+    unlit: wgpu::RenderPipeline,
+    unlit_blended: wgpu::RenderPipeline,
+    unlit_keeps: Option<wgpu::RenderPipeline>,
+    blend_unlit: [wgpu::RenderPipeline; 3],
+    baked_lit: wgpu::RenderPipeline,
+    baked_lit_double_sided: wgpu::RenderPipeline,
+    baked_lit_transparent: wgpu::RenderPipeline,
+    baked_lit_depth: [wgpu::RenderPipeline; 2],
+}
+
+/// The unlit and baked-lit surfaces, on `layout` (no probe group).
+fn unlit_pipelines(device: &wgpu::Device, layout: &wgpu::PipelineLayout, scene: &SceneDefs) -> UnlitPipelines {
+    let unlit = path_shader(device, "unlit.wgsl", UNLIT_WGSL, "Unlit Shader", &[]);
+    // Unlit that may discard, on the forward-only path. Blended unlit draws take it too: they are small,
+    // and a crossfade reaches them. On the desktop path it is the one unlit shader there is.
+    #[cfg(gizmo_forward_only)]
+    let keeps_module = path_shader(
+        device,
+        "unlit.wgsl",
+        UNLIT_WGSL,
+        "Unlit Shader That May Discard",
+        &[("KEEPS", naga_oil::compose::ShaderDefValue::Bool(true))],
+    );
+    #[cfg(gizmo_forward_only)]
+    let keeps = &keeps_module;
+    #[cfg(not(gizmo_forward_only))]
+    let keeps = &unlit;
+    #[cfg(gizmo_forward_only)]
+    let unlit_keeps = Some(filled(device, layout, keeps, "Unlit Pipeline (may discard)", true, None, OPAQUE));
+    #[cfg(not(gizmo_forward_only))]
+    let unlit_keeps = None;
+    // With the lit shader's lights on the forward-only path (`SceneState::forward_lights`,
+    // `forward_local_light_maps`): what the water on a wet baked-lit surface reflects (`water_glints`).
+    let baked = path_shader(device, "baked_lit.wgsl", include_str!("../shaders/baked_lit.wgsl"), "Baked-Lit Shader", &scene.lights);
+    let opaque_state = baked_lit_state(false);
+    let blended_state = baked_lit_state(true);
+    let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
+    UnlitPipelines {
+        unlit: filled(device, layout, &unlit, "Unlit Pipeline", true, None, OPAQUE),
+        // A transparent unlit draw blending by alpha, which the opaque `unlit` drew until 2026-11-11
+        // (see `OPAQUE`). It may discard, and it writes depth, as that pipeline did for it.
+        unlit_blended: filled(device, layout, keeps, "Unlit Pipeline (blended)", true, None, alpha),
+        unlit_keeps,
+        blend_unlit: crate::components::BlendMode::VARIANTS
+            .map(|mode| filled(device, layout, keeps, &format!("Unlit Pipeline ({mode:?})"), false, None, Some(mode.state()))),
+        // Backface-culled and opaque, unlike `unlit`. Baked-lit geometry is a solid world rather
+        // than a decal or a billboard, so both halves of that are free wins: no blend, and no
+        // second pass over every triangle facing away.
+        baked_lit: filled(device, layout, &baked, "Baked-Lit Pipeline", opaque_state.depth_write, opaque_state.cull, opaque_state.blend),
+        // A double-sided baked-lit material's: the same, culling nothing.
+        baked_lit_double_sided: filled(device, layout, &baked, "Baked-Lit TwoSided Pipeline", opaque_state.depth_write, None, opaque_state.blend),
+        // …but "a solid world" is not all of it. A decal, a skid mark or a glass pane is
+        // baked-lit too, and every other stage already treated those as transparent: the
+        // batcher sorts them back-to-front, the z-prepass and the shadow pass skip them. Only
+        // the pipeline disagreed — `blend: None` and `depth_write: true` meant the fragment
+        // alpha the shader had computed all along was discarded, and the layer painted over
+        // the road as opaque geometry. Same shader, transparent state, chosen by
+        // `Material::is_transparent` (see `baked_lit_state`).
+        baked_lit_transparent: filled(
+            device,
+            layout,
+            &baked,
+            "Baked-Lit Transparent Pipeline",
+            blended_state.depth_write,
+            blended_state.cull,
+            blended_state.blend,
+        ),
+        baked_lit_depth: [
+            depth_only_pipeline(device, layout, &baked, "Baked-Lit Depth Pipeline", opaque_state.cull),
+            depth_only_pipeline(device, layout, &baked, "Baked-Lit Depth TwoSided Pipeline", None),
+        ],
+    }
+}
+
+/// The scene's own surfaces.
+struct ScenePipelines {
+    sky: wgpu::RenderPipeline,
+    backdrop: wgpu::RenderPipeline,
+    water: wgpu::RenderPipeline,
+    water_double_sided: wgpu::RenderPipeline,
+    water_mirror: wgpu::RenderPipeline,
+    mirror: wgpu::RenderPipeline,
+    grid: wgpu::RenderPipeline,
+}
+
+/// The sky, the scene's painted backdrop, water, planar mirrors and the editor's grid, on
+/// `layout` (no probe group).
+fn scene_pipelines(device: &wgpu::Device, layout: &wgpu::PipelineLayout) -> ScenePipelines {
+    const WATER_WGSL: &str = include_str!("../shaders/water.wgsl");
+    let water = path_shader(device, "water.wgsl", WATER_WGSL, "Water Shader", &[]);
+    let water_mirror = path_shader(
+        device,
+        "water.wgsl",
+        WATER_WGSL,
+        "Water Mirror Shader",
+        &[("PLANAR", naga_oil::compose::ShaderDefValue::Bool(true))],
+    );
+    let mirror = path_shader(device, "planar_mirror.wgsl", include_str!("../shaders/planar_mirror.wgsl"), "Planar Mirror Shader", &[]);
+    let sky = path_shader(device, "sky.wgsl", include_str!("../shaders/sky.wgsl"), "Sky Shader", &[]);
+    let backdrop_shader = path_shader(device, "backdrop.wgsl", include_str!("../shaders/backdrop.wgsl"), "Backdrop Shader", &[]);
+    let grid = path_shader(device, "grid.wgsl", include_str!("../shaders/grid.wgsl"), "Grid Shader", &[]);
+    let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
+    let backdrop = crate::backdrop::backdrop_state();
+    ScenePipelines {
+        sky: filled(device, layout, &sky, "Sky Pipeline", false, None, alpha),
+        // The scene's own painted backdrop. Everything that makes it a backdrop rather than
+        // ordinary unlit geometry is in this one state plus the shader: no depth write (so it
+        // cannot occlude the world), no culling (a panel or an inside-out dome), and alpha
+        // blending (so a cut-out skyline edge survives). The remaining property — drawn first
+        // — belongs to the batcher, which is the only place that knows the frame's draw order.
+        backdrop: filled(device, layout, &backdrop_shader, "Backdrop Pipeline", backdrop.depth_write, backdrop.cull, backdrop.blend),
+        // Alpha-blended AND depth-writing, which the transparent pipeline is not. Water is a
+        // surface rather than a pane: what is under it should be occluded by it, and two water
+        // batches at different depths should resolve against each other rather than against the
+        // order the batcher happened to drain them in.
+        water: filled(device, layout, &water, "Water Pipeline", true, Some(wgpu::Face::Back), alpha),
+        // `Material::with_double_sided` on water is not the no-op it is on the transparent
+        // pipeline (which is built `cull_mode: None` already): the water pipeline culls back
+        // faces, so a swimmer looking up at the surface sees nothing without this variant.
+        water_double_sided: filled(device, layout, &water, "Water Double-Sided Pipeline", true, None, alpha),
+        // Double-sided whatever the material says: there is a capture only from above, and a wave's
+        // far side is hidden by its near one in the depth test.
+        water_mirror: filled(device, layout, &water_mirror, "Water Mirror Pipeline", true, None, alpha),
+        mirror: filled(device, layout, &mirror, "Planar Mirror Pipeline", true, Some(wgpu::Face::Back), None),
+        grid: filled(device, layout, &grid, "Grid Pipeline", false, None, alpha),
     }
 }
 
@@ -857,22 +714,8 @@ pub(super) struct ShadowPipelines {
 pub(super) fn build_shadow_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> ShadowPipelines {
     use naga_oil::compose::ShaderDefValue::Bool;
     let source = include_str!("../shaders/shadow.wgsl");
-    #[cfg(not(gizmo_forward_only))]
-    let (plain, cut) = (
-        load_shader_composed(device, "demo/assets/shaders/shadow.wgsl", source, "Shadow Shader"),
-        super::shaders::load_shader_composed_with(
-            device,
-            "demo/assets/shaders/shadow.wgsl",
-            source,
-            "Shadow Cut-Out Shader",
-            &[("CUT_OUT", Bool(true))],
-        ),
-    );
-    #[cfg(gizmo_forward_only)]
-    let (plain, cut) = (
-        load_shader_composed_web(device, source, "Shadow Shader"),
-        super::shaders::load_shader_composed_web_with(device, source, "Shadow Cut-Out Shader", &[("CUT_OUT", Bool(true))]),
-    );
+    let plain = path_shader(device, "shadow.wgsl", source, "Shadow Shader", &[]);
+    let cut = path_shader(device, "shadow.wgsl", source, "Shadow Cut-Out Shader", &[("CUT_OUT", Bool(true))]);
     let groups = [layouts.shadow_pass, layouts.texture, layouts.skeleton, layouts.instance];
     let front = Some(wgpu::Face::Back);
     ShadowPipelines {

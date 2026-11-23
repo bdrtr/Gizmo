@@ -606,7 +606,6 @@ impl ProbeShape {
     }
 
     /// The shader defs that build a lit shader for it.
-    #[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
     pub(crate) fn defs(self) -> [(&'static str, naga_oil::compose::ShaderDefValue); 2] {
         [
             ("PROBE_BACKGROUND", naga_oil::compose::ShaderDefValue::Bool(self.background)),
@@ -645,7 +644,6 @@ impl LightShape {
     }
 
     /// The shader defs that build a lit shader for it.
-    #[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
     pub(crate) fn defs(self) -> [(&'static str, naga_oil::compose::ShaderDefValue); 3] {
         [
             ("LOCAL_LIGHTS", naga_oil::compose::ShaderDefValue::Bool(self.local)),
