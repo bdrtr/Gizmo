@@ -1,29 +1,21 @@
-//! Decals for a pipeline that has no G-buffer — and the world-reading half both pipelines share.
+//! The world-reading half of the decal pass: where each decal is and what it paints.
 //!
-//! # Why this file exists
+//! A decal is a projector box, drawn against the G-buffer's world positions by the deferred pass
+//! (`passes::geometry`'s `decal_pass`); the editor's viewport draws through that same pass. It is
+//! here, in the facade, because it needs both halves and they live in different crates:
+//! `DecalState` is in `gizmo-renderer`, and `Transform` — which is where a decal *is* — is in
+//! `gizmo-physics-core`, which the renderer does not depend on.
 //!
-//! A decal is a projector: it paints the surface that is already there, so it needs that
-//! surface's position. The engine's deferred pass reads it out of the G-buffer, which works for a
-//! game and not at all for the editor — `gizmo-studio` draws forward and never fills a G-buffer,
-//! so a decal placed in the editor was invisible until the game ran. The test that recorded that
-//! (`gizmo-studio/tests/render_parity.rs`) called it "real and unfixed". This is the fix.
-//!
-//! [`record_forward_decals`] reconstructs the same position from the **depth** buffer, which the
-//! forward pass does write, and alpha-blends into the lit HDR image. The projection maths, the
-//! volume test and the fade are the deferred shader's, deliberately — see `decal_forward.wgsl`.
-//!
-//! # Why it is in the facade
-//!
-//! Same reason as [`super::particles::step_particle_emitters`]: it needs both halves and they live
-//! in different crates. `DecalState` is in `gizmo-renderer`, and `Transform` — which is where a
-//! decal *is* — is in `gizmo-physics-core`, which the renderer does not depend on. This is the
-//! lowest crate that can see both, and being `pub` is the point: the studio calls it rather than
-//! keeping a second copy, so the two paths cannot drift apart about where a decal sits.
+//! Until 2026-11-23 this file also held `record_forward_decals`, a forward variant that read the
+//! surface from the depth buffer and blended the decal, unlit, into the HDR image, for an editor
+//! that drew forward. The editor draws through the engine's deferred path now, and nothing called
+//! it; it went with its pipeline and `decal_forward.wgsl`. The forward-only path (the browser's, a
+//! phone's) draws no decals — an unlit decal would glow in the dark, which is not what it needs
+//! (`docs/ENGINE.md` §3).
 
 use gizmo_core::Entity;
 use crate::core::World;
-use crate::renderer::decal::{DecalUniforms, CUBE_VERTICES, DECAL_STRIDE, MAX_DECALS};
-use crate::renderer::Renderer;
+use crate::renderer::decal::{DecalUniforms, MAX_DECALS};
 use gizmo_math::{Mat4, Vec3};
 use std::sync::Arc;
 
@@ -63,63 +55,4 @@ pub fn collect_decals(
         }
     }
     (uniforms, bind_groups)
-}
-
-/// Draw every decal in `world` onto the lit HDR image, reading the depth buffer for the surface.
-///
-/// For a forward pipeline: it needs the depth buffer to be **already written** by the frame's
-/// geometry pass, and it must run before post-processing reads the HDR texture. Nothing is
-/// recorded when the scene has no decals — an empty pass would still cost an encoder section.
-pub fn record_forward_decals(
-    encoder: &mut wgpu::CommandEncoder,
-    renderer: &Renderer,
-    world: &World,
-    cam_pos: Vec3,
-) {
-    let Some(decal_state) = renderer.decal.as_ref().filter(|d| d.enabled) else {
-        return;
-    };
-    let (uniforms, bind_groups) = collect_decals(world, cam_pos);
-    if uniforms.is_empty() {
-        return;
-    }
-
-    renderer.queue.write_buffer(
-        &decal_state.uniform_buffer,
-        0,
-        bytemuck::cast_slice(&uniforms),
-    );
-
-    // The depth view is a new object after every resize, so this is built per frame — the same
-    // reason the particle pass builds its own.
-    let depth_bg =
-        decal_state.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view);
-
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("Forward Decal Pass"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: &renderer.post.hdr_texture_view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Load,
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        // No depth attachment on purpose: the depth texture is *sampled* here, and wgpu will not
-        // let one texture be both in a single pass.
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
-    pass.set_pipeline(&decal_state.forward_pipeline);
-    pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
-    pass.set_bind_group(1, &depth_bg, &[]);
-    pass.set_vertex_buffer(0, decal_state.vertex_buffer.slice(..));
-    for (i, bind_group) in bind_groups.iter().enumerate() {
-        pass.set_bind_group(2, bind_group.as_ref(), &[]);
-        pass.set_bind_group(3, &decal_state.decal_uniform_bg, &[(i as wgpu::BufferAddress * DECAL_STRIDE) as u32]);
-        pass.draw(0..CUBE_VERTICES, 0..1);
-    }
 }

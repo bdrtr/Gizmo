@@ -11,7 +11,7 @@
 //! | çıkartma bileşeni | var — [`Decal`], `bind_group` + `color` tinti |
 //! | projektör hacmi | var — varlığın `Transform`'u kutuyu tanımlıyor |
 //! | ertelenmiş yolda | var — G-tamponuna karşı çiziliyor |
-//! | ileri yolda | **kısmen** — ayrı bir kayıt yolu (`record_forward_decals`) |
+//! | ileri yolda (tarayıcı, telefon) | **yok** — G-tamponu yok; ışıksız bir ileri çıkartma karanlıkta parlardı |
 //! | kümelenmiş (clustered) çıkartma | **yok** — görünüm kümesi başına liste yok |
 //! | çıkartma atlası / alt-dikdörtgen | **yok** — çıkartma başına tam doku |
 //! | hangi G-tamponu kanalına yazacağını seçmek | **yok** |

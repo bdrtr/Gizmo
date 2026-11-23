@@ -4518,10 +4518,12 @@ enum Effect {
 /// screen-space gather has something to find: a smooth surface to reflect in, and a bright
 /// neighbour on screen to bounce from. `disabled` switches one pass off so a caller can
 /// compare like with like.
+#[cfg(not(gizmo_forward_only))] // Its tests are the desktop's: SSR and SSGI.
 async fn render_mirror_scene(disabled: Effect) -> Vec<u8> {
     render_mirror_floor(disabled, |m| m.with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 1.0, 0.05)).await
 }
 
+#[cfg(not(gizmo_forward_only))] // Its tests are the desktop's: SSR and SSGI.
 async fn render_mirror_floor(disabled: Effect, floor_material: fn(Material) -> Material) -> Vec<u8> {
     const W: u32 = 128;
     const H: u32 = 128;
@@ -4636,6 +4638,7 @@ async fn render_mirror_floor(disabled: Effect, floor_material: fn(Material) -> M
 /// The floors are far below what the fix measured (SSGI 2005, SSR 426 of 16384 pixels):
 /// this guards *that the pass contributes at all*, not any tuning of it.
 #[test]
+#[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR or SSGI (STATUS: no AO/GI).
 fn screen_space_reflections_and_gi_reach_the_frame() {
     let _gpu = crate::test_gpu::gpu_lock();
     if !pollster::block_on(Renderer::headless_adapter_available()) {
@@ -5564,6 +5567,7 @@ async fn render_sunbeam_full(
 /// So this guards volumetric on the only ground where the question is meaningful, and it is
 /// the standing counter-example to reading one scene's zero as a dead pass.
 #[test]
+#[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light (ENGINE.md §3).
 fn volumetric_god_rays_reach_the_frame() {
     let _gpu = crate::test_gpu::gpu_lock();
     if !pollster::block_on(Renderer::headless_adapter_available())
@@ -17107,6 +17111,7 @@ async fn render_normal_mapped_quad_with(mapped: bool, graph: Option<&gizmo_rende
 
 /// Same scene, but with a `ParticleEmitter` on the cube, rendered over several frames from
 /// ONE renderer — particles need time to be spawned and to move.
+#[cfg(not(gizmo_forward_only))] // Its test is the desktop's: the forward-only path has no GPU particles.
 async fn render_emitter_scene(with_emitter: bool, frames: u32) -> Vec<u8> {
     const W: u32 = 128;
     let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
@@ -17174,6 +17179,7 @@ async fn render_emitter_scene(with_emitter: bool, frames: u32) -> Vec<u8> {
 /// ten frames and 355 after sixty, growing as the spawn accumulates. The floor here is set
 /// far below that: this asks whether particles reach the frame at all.
 #[test]
+#[cfg(not(gizmo_forward_only))] // The forward-only path has no GPU particles (ENGINE.md §3).
 fn particles_from_an_emitter_reach_the_frame() {
     let _gpu = crate::test_gpu::gpu_lock();
     if !pollster::block_on(Renderer::headless_adapter_available())
@@ -17375,6 +17381,7 @@ fn the_particle_system_goes_idle_when_the_last_particle_dies() {
 }
 
 /// A matte floor with — optionally — a decal projector volume straddling its surface.
+#[cfg(not(gizmo_forward_only))] // Its test is the desktop's: the forward-only path draws no decals.
 async fn render_decal_scene(with_decal: bool) -> Vec<u8> {
     const W: u32 = 128;
     let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
@@ -17634,6 +17641,7 @@ fn the_last_light_slot_reaches_the_frame() {
 /// which is exactly why it needs a measurement standing behind it rather than an argument:
 /// a red projector over a white floor moves 1133 of 16384 pixels, max delta 75.
 #[test]
+#[cfg(not(gizmo_forward_only))] // The forward-only path draws no decals (ENGINE.md §3).
 fn decals_reach_the_frame() {
     let _gpu = crate::test_gpu::gpu_lock();
     if !pollster::block_on(Renderer::headless_adapter_available())

@@ -10,16 +10,6 @@ use wgpu::util::DeviceExt;
 pub struct DecalState {
     /// The projection pass.
     pub pipeline: wgpu::RenderPipeline,
-    /// The same decal, drawn for a pipeline that has no G-buffer.
-    ///
-    /// The editor draws forward, so `world_pos_bg` (deferred RT2) is empty there and a decal
-    /// placed in the editor was invisible until the game ran. This variant reconstructs the
-    /// surface position from the depth buffer and blends into the lit HDR image instead. Same
-    /// uniforms, same cube, same shader logic — see `decal_forward.wgsl`.
-    pub forward_pipeline: wgpu::RenderPipeline,
-    /// Layout for the depth texture the forward variant samples (built per frame, like the
-    /// particle pass's, because the depth view is recreated on every resize).
-    pub depth_bgl: wgpu::BindGroupLayout,
     /// Layout of the per-decal uniform group, which is bound with a dynamic offset — hence the
     /// 256-byte stride on [`DecalUniforms`] ([`DECAL_STRIDE`]).
     pub decal_uniform_bgl: wgpu::BindGroupLayout,
@@ -124,9 +114,9 @@ const CUBE: [[f32; 3]; 36] = [
 /// The vertices the cube's draw takes.
 pub const CUBE_VERTICES: u32 = CUBE.len() as u32;
 
-/// A decal pipeline: the cube drawn from `shader` over `groups` — the scene's global group, the
-/// surface it reads (the G-buffer's world positions, or the depth), the decal's texture and its
-/// uniforms — blended by alpha into `target`.
+/// The decal pipeline: the cube drawn from `shader` over `groups` — the scene's global group, the
+/// G-buffer's world positions, the decal's texture and its uniforms — blended by alpha into
+/// `target`.
 ///
 /// Front faces are culled, so the box is drawn by its back faces: it is drawn while the camera is
 /// inside it too, and, with no depth attachment, a covered pixel is not blended twice.
@@ -201,7 +191,6 @@ impl DecalState {
             "Decal WorldPos BGL",
             fragment_texture(0, wgpu::TextureViewDimension::D2, wgpu::TextureSampleType::Float { filterable: false }),
         );
-        let depth_bgl = layout_of("Decal Depth BGL", fragment_texture(0, wgpu::TextureViewDimension::D2, wgpu::TextureSampleType::Depth));
         let world_pos_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Decal WorldPos BG"),
             layout: &world_pos_bgl,
@@ -232,26 +221,6 @@ impl DecalState {
                 write_mask: wgpu::ColorWrites::COLOR,
             },
         );
-        let forward_pipeline = decal_pipeline(
-            device,
-            "Decal Forward Pipeline",
-            &load_shader_composed(
-                device,
-                "demo/assets/shaders/decal_forward.wgsl",
-                include_str!("shaders/decal_forward.wgsl"),
-                "decal_forward",
-            ),
-            // Group 1 is the depth, not the G-buffer.
-            [global, &depth_bgl, texture, &decal_uniform_bgl],
-            // The lit HDR image, not the albedo G-buffer — hence `ColorWrites::ALL` here where the
-            // deferred variant must preserve RT0's metallic channel.
-            wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba16Float,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            },
-        );
-
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Decal Cube VB"),
             contents: bytemuck::cast_slice(&CUBE),
@@ -279,8 +248,6 @@ impl DecalState {
         Self {
             enabled: true,
             pipeline,
-            forward_pipeline,
-            depth_bgl,
             decal_uniform_bgl,
             decal_uniform_bg,
             world_pos_bgl,
@@ -288,24 +255,6 @@ impl DecalState {
             vertex_buffer,
             uniform_buffer,
         }
-    }
-
-    /// Bind group for the forward variant's depth input. Built per frame like the particle
-    /// pass's: the depth view is a new object after every resize, so caching it would hand the
-    /// GPU a view of a texture that no longer exists.
-    pub fn create_depth_bind_group(
-        &self,
-        device: &wgpu::Device,
-        depth_view: &wgpu::TextureView,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Decal Depth BG"),
-            layout: &self.depth_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(depth_view),
-            }],
-        })
     }
 
     /// Rebinds the world-position group after the G-buffer has been rebuilt.

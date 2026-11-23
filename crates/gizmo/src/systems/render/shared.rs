@@ -926,14 +926,18 @@ mod tests {
         let lit = collect_scene_setup(&world, &inputs);
         assert!(lit.draws_cascades());
         let maps = lit.shadow_view_projs();
-        assert_eq!(maps[..4], lit.cascade_view_projs, "the cascades first, in pass order");
-        assert_eq!(maps[4..], [lit.local_shadows.layers()[0].view_proj], "then the spot's layer");
+        // As many cascades as this path draws: four on the desktop, one on the forward-only path
+        // (`csm::CASCADES_DRAWN`). This said 4, and panicked on the forward-only path, where no one
+        // ran it until 2026-11-23.
+        let drawn = crate::renderer::csm::CASCADES_DRAWN;
+        assert_eq!(maps[..drawn], lit.cascade_view_projs[..drawn], "the cascades first, in pass order");
+        assert_eq!(maps[drawn..], [lit.local_shadows.layers()[0].view_proj], "then the spot's layer");
 
         // The forward-only path — the browser's, a phone's — draws the sun's cascades and no local
         // light's layer: it plans none, and keeps no off-screen object for them.
         let phone = collect_scene_setup(&world, &SceneSetupInputs { local_shadow_maps: false, light_cookies: Default::default(), ..inputs });
         assert!(phone.draws_cascades() && phone.local_shadows.layers().is_empty());
-        assert_eq!(phone.shadow_view_projs(), phone.cascade_view_projs.to_vec(), "the cascades alone");
+        assert_eq!(phone.shadow_view_projs(), phone.cascade_view_projs[..drawn].to_vec(), "the cascades alone");
         // A path that draws neither plans neither, sun or not.
         let none = collect_scene_setup(&world, &SceneSetupInputs { sun_shadow_maps: false, local_shadow_maps: false, ..inputs });
         assert!(!none.draws_cascades() && none.shadow_view_projs().is_empty());

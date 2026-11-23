@@ -374,6 +374,33 @@ jobs:
             -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
 
 
+  # The forward-only render path — every browser's and phone's frame — built for Linux with
+  # `--cfg gizmo_forward_only`, its TEST targets included. The wasm and Android lints see its library
+  # code and none of its tests, and the GPU tests that draw it are run by hand (CLAUDE.md). That left
+  # its plain tests unrun and unlinted until 2026-11-23: a CPU test that took four cascades for
+  # granted panicked there, four effect tests failed on effects the path does not have, and test
+  # helpers that only the desktop's tests used were dead code. The GPU tests skip here, saying so.
+  forward-only:
+    name: Forward-only render path (lint and tests, Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUSTFLAGS: --cfg gizmo_forward_only
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libwayland-dev libxkbcommon-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy, test targets included
+        run: |
+          cargo clippy --locked -p gizmo-renderer -p gizmo-engine --all-targets \
+            -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
+      - name: The renderer's and the facade's library tests
+        run: cargo test --locked -p gizmo-renderer -p gizmo-engine --lib
+
   # The APK (`demo-android`): built here so a change that breaks Android is seen on the push that
   # made it, and uploaded so a phone can take it from the run's page. The runner image carries the
   # Android SDK, an NDK and a JDK 17; `scripts/android-apk.sh` finds them from `ANDROID_HOME` and

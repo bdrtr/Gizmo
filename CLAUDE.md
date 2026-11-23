@@ -151,6 +151,22 @@ cargo hack clippy -p gizmo-engine --feature-powerset --depth 2 --no-dev-deps \
 > whose manifest plainly has it). Run the powerset gate alone, and if a build fails with a
 > missing dev-dependency, check whether a powerset run is in flight before believing it.
 
+### The forward-only render path (every browser's and phone's frame), on the desktop GPU
+
+```bash
+# `--cfg gizmo_forward_only` turns the browser's and the phone's path on for a Linux build; its own
+# target dir, or the desktop's artifacts thrash. Run BOTH halves after a renderer change: the plain
+# tests (CI's `forward-only` job runs them too, GPU tests skipping) and the ignored GPU golden ones.
+# Until 2026-11-23 only the second was run, and five plain tests had been red there unseen.
+env RUSTFLAGS="--cfg gizmo_forward_only" CARGO_TARGET_DIR=target/forward-only \
+  cargo test -p gizmo-renderer -p gizmo-engine --lib
+env RUSTFLAGS="--cfg gizmo_forward_only" CARGO_TARGET_DIR=target/forward-only \
+  cargo test -p gizmo-engine --lib -- --ignored golden_render_tests frame_split_tests
+env RUSTFLAGS="--cfg gizmo_forward_only" CARGO_TARGET_DIR=target/forward-only \
+  cargo clippy -p gizmo-renderer -p gizmo-engine --all-targets -- -D warnings \
+  -A clippy::too_many_arguments -A clippy::type_complexity
+```
+
 ### WASM (browser) build
 
 ```bash
@@ -222,7 +238,7 @@ gizmo-window: standalone, no in-workspace dependencies.
 - **`gizmo-math`** — vector/quat math (re-exports `glam`; also has an experimental Q16.16 `Fp32` the sim does *not* use).
 - **`gizmo-core`** — archetype-based ECS: `World`, `Query`/`query_mut`, `With`/`Without`/`Changed`/`Added` filters, `Commands` (deferred structural changes), `Res`/`ResMut`, Table + SparseSet storage, scheduling, events, hierarchy, input. Component access is borrow-checked — aliasing `&mut` views can't be built in safe code.
 - **`gizmo-physics-{core,rigid,dynamics,soft}`** — render-agnostic, embeddable physics. BVH/SAP broadphase (Rayon), GJK/EPA narrowphase, TGS-Soft sequential-impulse solver, soft-body FEM/cloth/rope, fracture, joints, vehicle/character dynamics, CCD.
-- **`gizmo-renderer`** — WGPU deferred PBR: CSM shadows, SSAO/SSGI, bloom, volumetric, TAA. Reduced forward-only pipeline on WASM (no shadows, 4 bind groups).
+- **`gizmo-renderer`** — WGPU deferred PBR: CSM shadows, SSAO/SSGI, bloom, volumetric, TAA. Reduced forward-only pipeline on WASM and Android (`gizmo_forward_only`: 4 bind groups, one sun cascade, no G-buffer — so no AO/GI/TAA, decals, GPU particles or volumetric light; STATUS has the list).
 - **`gizmo-app`** — plugin-driven app loop + phase executor. Windowed loop uses winit 0.30 `ApplicationHandler` (`crates/gizmo-app/src/windowed/`).
 - **`gizmo`** (facade, crate `gizmo-engine`) — `gizmo::prelude::*`, the high-level `SimpleApp`/`App<S>` API. Feature flags gate every subsystem (`render`, `audio`, `physics`, `physics-soft`, `editor`, `scene`, `scripting`, `network`, `egui`, `analysis`, …); `headless` = physics + net, no window/render. Networking and Lua scripting are **native-only** (not on WASM). **Audio is not** — this line said it was until 2026-08-20: `gizmo-audio` carries a `cfg(target_arch = "wasm32")` dependency block and wasm-specific `Send`/`Sync` impls, `demo-web` enables the `audio` feature, and its left-click beep plays through the engine's own `AudioManager` (CI's `wasm` job names audio in the web feature subset it builds).
 

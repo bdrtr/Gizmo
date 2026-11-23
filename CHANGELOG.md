@@ -739,6 +739,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **`gizmo::systems::render::record_forward_decals`, `DecalState::{forward_pipeline, depth_bgl,
+  create_depth_bind_group}` and `decal_forward.wgsl`.** The forward decal pass was the editor's,
+  for an editor that drew forward; since 2026-11-22 the editor draws through the engine's deferred
+  path, and nothing called it. It blended a decal unlit into the lit image, which is not what the
+  forward-only path needs either (ENGINE.md §3).
+
 - **Breaking: `EditorState::fight_hud` and `FightHudState`**, the editor's own copy of the fight's
   state, and the Game panel's egui HUD they fed: the HUD is the game's now (see Added).
 - **Breaking: `gizmo_ai::navmesh` (`NavMesh`, `NavMeshConfig`, `NavMeshStats`, `NavPoly`).** A
@@ -798,6 +804,20 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **The forward-only render path's plain tests are run and linted, in CI too.** The recipe in use
+  ran only the `#[ignore]`d GPU tests, and the wasm and
+  Android lints see no test target. Run for the first time on 2026-11-23, the path's
+  `gizmo-engine --lib` had five red tests:
+  - a CPU test that took the desktop's four sun cascades for granted panicked; the path draws one
+    (`csm::CASCADES_DRAWN`), and the test now asks it;
+  - four effect tests failed on effects the path does not have: SSR/SSGI, which STATUS already
+    listed, and decals, GPU particles and volumetric light, which it did not. They are
+    `#[cfg(not(gizmo_forward_only))]`, with the reason, and STATUS says so. The missing three are
+    ENGINE.md §3's sixth open item.
+
+  Linting the path's test targets found test helpers only the desktop's tests use, dead there, and
+  `test_gpu::headless_native_device` likewise. A new CI job, `forward-only`, lints the renderer and
+  the facade with their test targets under `--cfg gizmo_forward_only` and runs their library tests.
 - **Every shader's disk override is where hot reload looks.** Eight shaders looked for theirs at
   `crates/gizmo-renderer/src/shaders/<file>` instead of `demo/assets/shaders/<file>`: decal ×2,
   fluid ×2, particles, GPU physics ×2 and smoke.

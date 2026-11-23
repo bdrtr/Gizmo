@@ -27,10 +27,10 @@ pub struct WireframeConfig {
 /// simulated ([`GpuFluidSystem::active_particles`](crate::renderer::gpu_fluid::GpuFluidSystem::active_particles),
 /// written by [`draw_ahead_of_views`]), nothing when it simulated none.
 ///
-/// It runs where the decals do: after the geometry pass has written depth (it reads it) and before
-/// post-processing reads the HDR texture. It is a function here rather than a line in each pipeline
-/// for the reason `record_forward_decals` is: the editor drew no fluid at all until 2026-08-19, and
-/// a second implementation is how that comes back.
+/// It runs after the geometry pass has written depth (it reads it) and before post-processing reads
+/// the HDR texture. It is a function here rather than a line in each pipeline
+/// because the editor drew no fluid at all until 2026-08-19, and a second implementation is how that
+/// comes back.
 #[cfg(feature = "render")]
 pub fn record_fluid_surface(encoder: &mut wgpu::CommandEncoder, renderer: &crate::renderer::Renderer) {
     let Some(fluid) = &renderer.gpu_fluid else {
@@ -1612,7 +1612,7 @@ mod render_world;
 pub use render_world::{render_extractor, RenderWorld};
 
 mod decals;
-pub use decals::{collect_decals, record_forward_decals};
+pub use decals::collect_decals;
 
 mod particles;
 pub use particles::{emit, step_particle_emitters, ParticleSpawns};

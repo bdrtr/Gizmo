@@ -1660,9 +1660,9 @@ fn the_wire_mode_leaves_the_middle_of_a_face_empty() {
 /// It was not. A decal blends into the deferred G-buffer's albedo target, and the editor draws
 /// forward and fills no G-buffer, so the decal pass had nothing to read and nothing to write into:
 /// the author saw an empty floor and the shipped game showed the splatter. `render_parity.rs`
-/// recorded that as "real and unfixed". The fix is a forward decal pass that reconstructs the
-/// surface from the depth buffer (`gizmo::systems::render::record_forward_decals`), and this is
-/// the measurement that says it arrived.
+/// recorded that as "real and unfixed". It was fixed with a forward decal pass; since 2026-11-22 the
+/// editor's viewport draws through the engine's own deferred path, decals included, and this is the
+/// measurement that says they arrive.
 #[test]
 fn a_decal_is_visible_in_the_editor_viewport() {
     let _gpu = gpu_lock();

@@ -189,13 +189,15 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    the 80-byte layout `tests/wgsl_layout.rs` pins) and damping per node in the shader; poll on
 >    the calling thread; clear the force buffers with `clear_buffer` instead of uploading zeros.
 >    It needs a GPU test: the only tests today parse the shader.
-> 2. **The renderer's construction functions are still god functions.** `build_core_pipelines`
->    (561 lines), `gpu_physics::system::new` (356), `build_layouts` (349), `gpu_smoke::new` (273),
->    `finish_construction` (264), `build_post_process_resources` (263), `decal::new` (261),
->    `create_particle_pipelines` (257), `build_scene_pipelines` (230), and the bench
->    `create_resource_world` (504). Mostly descriptors, but full of per-target `#[cfg]` arms, so
->    each split needs the golden render tests, the forward-only GPU tests, the wasm lint and the
->    feature powerset.
+> 2. **The renderer's construction functions are still god functions.** *Under way 2026-11-23:*
+>    `build_core_pipelines` (561 lines → three families of 90, 62 and 40, one shader loader per
+>    path), `build_layouts` (349 → one function per group), `gpu_physics::system::new` (356 → 73,
+>    finding a collider overlay that could be turned on half-built), `gpu_smoke::new` (273 → 82)
+>    and `decal::new` (261 → 113) are split. Left: `finish_construction` (264),
+>    `build_post_process_resources` (263), `create_particle_pipelines` (257),
+>    `build_scene_pipelines` (230), and the bench `create_resource_world` (504). Mostly
+>    descriptors, but full of per-target `#[cfg]` arms, so each split needs the golden render tests
+>    on both paths, the forward-only plain tests, the wasm lint and the feature powerset.
 > 3. ~~**The fight HUD exists only in the editor.**~~ **Closed 2026-11-23:** it is the engine's,
 >    `gizmo::systems::fight_hud` — the bars, names, round, clock and K.O. as UI nodes, built and
 >    kept by `fight_hud_system` when player 1 and player 2 are in the world, run by `PlayLoop` in
@@ -218,6 +220,20 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    follows the parent's scale (`Relative::then`). `misket` divides its tray walls' half sizes by
 >    the tray's scale by hand. A decision to make: scale shapes by the world scale, as Unity does,
 >    or keep scale visual-only and say so where a scaled parent is given a child collider.
+> 6. **(2026-11-23) The forward-only path — every browser's and phone's frame — draws no decals,
+>    GPU particles, fluid or volumetric light.** Found running that path's plain (not `#[ignore]`d)
+>    tests for the first time: the recipe in use ran only the ignored GPU tests. Each is its own
+>    design and needs a phone's measurement:
+>    - decals: the deferred pass paints the G-buffer's albedo, which this path does not have. The
+>      forward variant the editor once used blended a decal unlit into the lit image, and would glow
+>      in the dark; a decal here has to be lit, in the lit shader (clustered, as the lights are) or
+>      by a pass that has the light. That variant, dead since the editor draws deferred, is gone.
+>    - GPU particles and the fluid: not built on this path (`renderer/construction.rs`) — compute
+>      passes and 100 000-particle buffers a phone pays for.
+>    - volumetric light: built over the G-buffer and the desktop's cascades.
+>
+>    Their tests are `#[cfg(not(gizmo_forward_only))]`, the reason beside each, pointing here. STATUS
+>    lists the three as absent from the browser.
 > 5. ~~**The facade's tests compile only with its default features.**~~ **Closed 2026-11-23:** each
 >    test module, test and helper is gated on what it uses, three integration files on the
 >    subsystems they drive, and the CI `features` job builds the facade's tests (`--lib --tests
