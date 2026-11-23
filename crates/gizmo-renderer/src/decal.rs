@@ -21,7 +21,7 @@ pub struct DecalState {
     /// particle pass's, because the depth view is recreated on every resize).
     pub depth_bgl: wgpu::BindGroupLayout,
     /// Layout of the per-decal uniform group, which is bound with a dynamic offset — hence the
-    /// 256-byte stride on [`DecalUniforms`].
+    /// 256-byte stride on [`DecalUniforms`] ([`DECAL_STRIDE`]).
     pub decal_uniform_bgl: wgpu::BindGroupLayout,
     /// That group.
     pub decal_uniform_bg: wgpu::BindGroup,
@@ -33,7 +33,7 @@ pub struct DecalState {
     // Cube mesh for volume rendering
     /// The unit cube every decal is drawn as.
     pub vertex_buffer: wgpu::Buffer,
-    /// One [`DecalUniforms`] per decal, at 256-byte stride.
+    /// One [`DecalUniforms`] per decal, at [`DECAL_STRIDE`], [`MAX_DECALS`] of them.
     pub uniform_buffer: wgpu::Buffer,
     /// Whether the pass runs this frame.
     ///
@@ -66,44 +66,142 @@ pub struct DecalUniforms {
     pub _pad: [f32; 28],
 }
 
+/// How many decals a frame draws: the uniform arena's slots. A decal past them has nowhere to be
+/// written, and the draws stop there.
+pub const MAX_DECALS: usize = 1024;
+
+/// One decal's slot in the uniform arena, in bytes: [`DecalUniforms`]' size, which is the 256-byte
+/// minimum a dynamically-offset uniform binding may step by. A draw binds decal `i` at `i ×` this.
+pub const DECAL_STRIDE: wgpu::BufferAddress = std::mem::size_of::<DecalUniforms>() as wgpu::BufferAddress;
+const _: () = assert!(DECAL_STRIDE == 256, "a dynamic uniform offset steps by 256 bytes");
+
+/// The unit cube from -0.5 to 0.5 every decal is drawn as, one triangle list.
+const CUBE: [[f32; 3]; 36] = [
+    // Front
+    [-0.5, -0.5, 0.5],
+    [0.5, -0.5, 0.5],
+    [0.5, 0.5, 0.5],
+    [-0.5, -0.5, 0.5],
+    [0.5, 0.5, 0.5],
+    [-0.5, 0.5, 0.5],
+    // Back
+    [-0.5, -0.5, -0.5],
+    [-0.5, 0.5, -0.5],
+    [0.5, 0.5, -0.5],
+    [-0.5, -0.5, -0.5],
+    [0.5, 0.5, -0.5],
+    [0.5, -0.5, -0.5],
+    // Top
+    [-0.5, 0.5, -0.5],
+    [-0.5, 0.5, 0.5],
+    [0.5, 0.5, 0.5],
+    [-0.5, 0.5, -0.5],
+    [0.5, 0.5, 0.5],
+    [0.5, 0.5, -0.5],
+    // Bottom
+    [-0.5, -0.5, -0.5],
+    [0.5, -0.5, -0.5],
+    [0.5, -0.5, 0.5],
+    [-0.5, -0.5, -0.5],
+    [0.5, -0.5, 0.5],
+    [-0.5, -0.5, 0.5],
+    // Right
+    [0.5, -0.5, -0.5],
+    [0.5, 0.5, -0.5],
+    [0.5, 0.5, 0.5],
+    [0.5, -0.5, -0.5],
+    [0.5, 0.5, 0.5],
+    [0.5, -0.5, 0.5],
+    // Left
+    [-0.5, -0.5, -0.5],
+    [-0.5, -0.5, 0.5],
+    [-0.5, 0.5, 0.5],
+    [-0.5, -0.5, -0.5],
+    [-0.5, 0.5, 0.5],
+    [-0.5, 0.5, -0.5],
+];
+
+/// The vertices the cube's draw takes.
+pub const CUBE_VERTICES: u32 = CUBE.len() as u32;
+
+/// A decal pipeline: the cube drawn from `shader` over `groups` — the scene's global group, the
+/// surface it reads (the G-buffer's world positions, or the depth), the decal's texture and its
+/// uniforms — blended by alpha into `target`.
+///
+/// Front faces are culled, so the box is drawn by its back faces: it is drawn while the camera is
+/// inside it too, and, with no depth attachment, a covered pixel is not blended twice.
+fn decal_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    shader: &wgpu::ShaderModule,
+    groups: [&wgpu::BindGroupLayout; 4],
+    target: wgpu::ColorTargetState,
+) -> wgpu::RenderPipeline {
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(&format!("{label} Layout")),
+        bind_group_layouts: &groups.map(Some),
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+            })],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(target)],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Front),
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 impl DecalState {
     /// Builds the decal pipeline, the unit cube and the uniform buffer.
     pub fn new(device: &wgpu::Device, scene: &SceneState, deferred: &DeferredState) -> Self {
-        let shader = load_shader_composed(
-            device,
-            "demo/assets/shaders/decal.wgsl",
-            include_str!("shaders/decal.wgsl"),
-            "decal",
-        );
-
-        let decal_uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Decal Uniform BGL"),
-            entries: &[wgpu::BindGroupLayoutEntry {
+        use crate::descriptors::fragment_texture;
+        let layout_of = |label: &str, entry: wgpu::BindGroupLayoutEntry| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(label), entries: &[entry] })
+        };
+        let decal_uniform_bgl = layout_of(
+            "Decal Uniform BGL",
+            wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
-                    min_binding_size: wgpu::BufferSize::new(256),
+                    min_binding_size: wgpu::BufferSize::new(DECAL_STRIDE),
                 },
                 count: None,
-            }],
-        });
-
-        let world_pos_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Decal WorldPos BGL"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
-
+            },
+        );
+        let world_pos_bgl = layout_of(
+            "Decal WorldPos BGL",
+            fragment_texture(0, wgpu::TextureViewDimension::D2, wgpu::TextureSampleType::Float { filterable: false }),
+        );
+        let depth_bgl = layout_of("Decal Depth BGL", fragment_texture(0, wgpu::TextureViewDimension::D2, wgpu::TextureSampleType::Depth));
         let world_pos_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Decal WorldPos BG"),
             layout: &world_pos_bgl,
@@ -113,196 +211,58 @@ impl DecalState {
             }],
         });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Decal Pipeline Layout"),
-            bind_group_layouts: &[
-                Some(&scene.global_bind_group_layout),  // 0
-                Some(&world_pos_bgl),                   // 1
-                Some(&scene.texture_bind_group_layout), // 2
-                Some(&decal_uniform_bgl),               // 3
-            ],
-            immediate_size: 0,
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Decal Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                })],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[
-                    // Decals alpha-blend into the albedo G-buffer (deferred RT0), so this
-                    // MUST match that texture's format. Bound to the shared constant so it
-                    // can never drift back to the `Rgba16Float` that used to make wgpu abort
-                    // with a validation error the moment any decal was drawn.
-                    Some(wgpu::ColorTargetState {
-                        format: crate::deferred::GBUFFER_ALBEDO_METALLIC_FORMAT,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        // RGB only: RT0.a is the METALLIC channel, not alpha. Writing the
-                        // decal's coverage/fade into .a (ColorWrites::ALL) alpha-blends it
-                        // into metallic, so a decal on a dielectric surface turned the patch
-                        // dark and metallic. Preserve the underlying metallic.
-                        write_mask: wgpu::ColorWrites::COLOR,
-                    }),
-                ],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Front), // Cull front faces so we render when inside the decal box
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let depth_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Decal Depth BGL"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
-
-        let forward_shader = load_shader_composed(
+        let global = &scene.global_bind_group_layout;
+        let texture = &scene.texture_bind_group_layout;
+        let pipeline = decal_pipeline(
             device,
-            "demo/assets/shaders/decal_forward.wgsl",
-            include_str!("shaders/decal_forward.wgsl"),
-            "decal_forward",
+            "Decal Pipeline",
+            &load_shader_composed(device, "demo/assets/shaders/decal.wgsl", include_str!("shaders/decal.wgsl"), "decal"),
+            [global, &world_pos_bgl, texture, &decal_uniform_bgl],
+            // Decals alpha-blend into the albedo G-buffer (deferred RT0), so this MUST match that
+            // texture's format. Bound to the shared constant so it can never drift back to the
+            // `Rgba16Float` that used to make wgpu abort with a validation error the moment any
+            // decal was drawn.
+            wgpu::ColorTargetState {
+                format: crate::deferred::GBUFFER_ALBEDO_METALLIC_FORMAT,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                // RGB only: RT0.a is the METALLIC channel, not alpha. Writing the decal's
+                // coverage/fade into .a (ColorWrites::ALL) alpha-blends it into metallic, so a
+                // decal on a dielectric surface turned the patch dark and metallic. Preserve the
+                // underlying metallic.
+                write_mask: wgpu::ColorWrites::COLOR,
+            },
         );
-        let forward_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Decal Forward Pipeline Layout"),
-            bind_group_layouts: &[
-                Some(&scene.global_bind_group_layout),  // 0
-                Some(&depth_bgl),                       // 1 — depth, not the G-buffer
-                Some(&scene.texture_bind_group_layout), // 2
-                Some(&decal_uniform_bgl),               // 3
-            ],
-            immediate_size: 0,
-        });
-        let forward_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Decal Forward Pipeline"),
-            layout: Some(&forward_layout),
-            vertex: wgpu::VertexState {
-                module: &forward_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                })],
+        let forward_pipeline = decal_pipeline(
+            device,
+            "Decal Forward Pipeline",
+            &load_shader_composed(
+                device,
+                "demo/assets/shaders/decal_forward.wgsl",
+                include_str!("shaders/decal_forward.wgsl"),
+                "decal_forward",
+            ),
+            // Group 1 is the depth, not the G-buffer.
+            [global, &depth_bgl, texture, &decal_uniform_bgl],
+            // The lit HDR image, not the albedo G-buffer — hence `ColorWrites::ALL` here where the
+            // deferred variant must preserve RT0's metallic channel.
+            wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba16Float,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &forward_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    // The lit HDR image, not the albedo G-buffer — hence `ColorWrites::ALL`
-                    // here where the deferred variant must preserve RT0's metallic channel.
-                    format: wgpu::TextureFormat::Rgba16Float,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                // Back faces only: with no depth attachment both faces of the volume would
-                // rasterise and every covered pixel would be blended twice.
-                cull_mode: Some(wgpu::Face::Front),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        // Unit cube from -0.5 to 0.5
-        let cube_vertices: &[[f32; 3]] = &[
-            // Front
-            [-0.5, -0.5, 0.5],
-            [0.5, -0.5, 0.5],
-            [0.5, 0.5, 0.5],
-            [-0.5, -0.5, 0.5],
-            [0.5, 0.5, 0.5],
-            [-0.5, 0.5, 0.5],
-            // Back
-            [-0.5, -0.5, -0.5],
-            [-0.5, 0.5, -0.5],
-            [0.5, 0.5, -0.5],
-            [-0.5, -0.5, -0.5],
-            [0.5, 0.5, -0.5],
-            [0.5, -0.5, -0.5],
-            // Top
-            [-0.5, 0.5, -0.5],
-            [-0.5, 0.5, 0.5],
-            [0.5, 0.5, 0.5],
-            [-0.5, 0.5, -0.5],
-            [0.5, 0.5, 0.5],
-            [0.5, 0.5, -0.5],
-            // Bottom
-            [-0.5, -0.5, -0.5],
-            [0.5, -0.5, -0.5],
-            [0.5, -0.5, 0.5],
-            [-0.5, -0.5, -0.5],
-            [0.5, -0.5, 0.5],
-            [-0.5, -0.5, 0.5],
-            // Right
-            [0.5, -0.5, -0.5],
-            [0.5, 0.5, -0.5],
-            [0.5, 0.5, 0.5],
-            [0.5, -0.5, -0.5],
-            [0.5, 0.5, 0.5],
-            [0.5, -0.5, 0.5],
-            // Left
-            [-0.5, -0.5, -0.5],
-            [-0.5, -0.5, 0.5],
-            [-0.5, 0.5, 0.5],
-            [-0.5, -0.5, -0.5],
-            [-0.5, 0.5, 0.5],
-            [-0.5, 0.5, -0.5],
-        ];
+        );
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Decal Cube VB"),
-            contents: bytemuck::cast_slice(cube_vertices),
+            contents: bytemuck::cast_slice(&CUBE),
             usage: wgpu::BufferUsages::VERTEX,
         });
-
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Decal Uniform Buffer"),
-            size: 256 * 1024, // 1024 decals max
+            size: DECAL_STRIDE * MAX_DECALS as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
         let decal_uniform_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Decal Uniform BG"),
             layout: &decal_uniform_bgl,
@@ -311,7 +271,7 @@ impl DecalState {
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &uniform_buffer,
                     offset: 0,
-                    size: Some(wgpu::BufferSize::new(256).unwrap()),
+                    size: wgpu::BufferSize::new(DECAL_STRIDE),
                 }),
             }],
         });

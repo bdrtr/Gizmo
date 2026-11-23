@@ -22,13 +22,10 @@
 
 use gizmo_core::Entity;
 use crate::core::World;
-use crate::renderer::decal::DecalUniforms;
+use crate::renderer::decal::{DecalUniforms, CUBE_VERTICES, DECAL_STRIDE, MAX_DECALS};
 use crate::renderer::Renderer;
 use gizmo_math::{Mat4, Vec3};
 use std::sync::Arc;
-
-/// The uniform arena is 1024 slots of 256 bytes; beyond that a decal has nowhere to be written.
-const MAX_DECALS: usize = 1024;
 
 /// Collect what a decal pass needs from the world: one uniform block and one texture bind group
 /// per decal, in draw order.
@@ -122,7 +119,7 @@ pub fn record_forward_decals(
     pass.set_vertex_buffer(0, decal_state.vertex_buffer.slice(..));
     for (i, bind_group) in bind_groups.iter().enumerate() {
         pass.set_bind_group(2, bind_group.as_ref(), &[]);
-        pass.set_bind_group(3, &decal_state.decal_uniform_bg, &[(i * 256) as u32]);
-        pass.draw(0..36, 0..1);
+        pass.set_bind_group(3, &decal_state.decal_uniform_bg, &[(i as wgpu::BufferAddress * DECAL_STRIDE) as u32]);
+        pass.draw(0..CUBE_VERTICES, 0..1);
     }
 }

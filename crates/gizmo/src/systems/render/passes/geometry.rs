@@ -322,10 +322,10 @@ fn decal_pass(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer, world: &W
             decal_pass.set_vertex_buffer(0, decal_state.vertex_buffer.slice(..));
 
             for (i, bind_group) in decal_draws.iter().enumerate() {
-                let offset = (i * 256) as u32;
+                let offset = (i as wgpu::BufferAddress * gizmo_renderer::decal::DECAL_STRIDE) as u32;
                 decal_pass.set_bind_group(2, bind_group.as_ref(), &[]);
                 decal_pass.set_bind_group(3, &decal_state.decal_uniform_bg, &[offset]);
-                decal_pass.draw(0..36, 0..1);
+                decal_pass.draw(0..gizmo_renderer::decal::CUBE_VERTICES, 0..1);
             }
         }
     }
