@@ -1060,7 +1060,7 @@ impl SceneState {
 #[tracing::instrument(skip_all)]
 /// Builds every scene pipeline, bind-group layout, shadow target and shared buffer — the whole of
 /// [`SceneState`].
-pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
+pub fn build_scene_pipelines(device: &wgpu::Device, queue: &wgpu::Queue) -> SceneState {
     let global_uniform_buffer = build_global_uniforms(device);
     // A texel a cascade until a frame draws them (`ensure_sun_shadow_maps`).
     let (shadow_depth_texture, shadow_texture_view, shadow_cascade_layer_views, shadow_rain_layer_view, shadow_sampler) =
@@ -1071,55 +1071,9 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let layouts = build_layouts(device);
     let cookies = crate::cookies::CookieTextures::placeholder(device);
 
-    let grid = crate::clustered::ClusterGrid::default();
-    let cluster_table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("cluster_table"),
-        size: crate::clustered::table_bytes(grid),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let cluster_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("cluster_light_indices"),
-        size: crate::clustered::index_bytes(grid),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let (cluster_table_buffer, cluster_index_buffer) = cluster_buffers(device);
 
-    let behind_fallback = device
-        .create_texture(&wgpu::TextureDescriptor {
-            label: Some("nothing behind glass yet"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    // A texel at the far plane: nothing behind, which `behind_distance` reads as sky.
-    let behind_depth_fallback = {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("nothing behind glass yet (depth)"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        texture.create_view(&wgpu::TextureViewDescriptor::default())
-    };
-    let behind_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("behind glass"),
-        address_mode_u: wgpu::AddressMode::ClampToEdge,
-        address_mode_v: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::MipmapFilterMode::Linear,
-        ..Default::default()
-    });
+    let (behind_fallback, behind_depth_fallback, behind_sampler) = behind_fallbacks(device, queue);
     let env_cube = crate::env_cube::EnvironmentCube::new(device);
     let forward_probes = ForwardProbes::new(device);
     let global_bind_group = global_group(
@@ -1138,86 +1092,15 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let shadow_bind_group =
         shadow_group(device, &layouts.shadow, &shadow_texture_view, &shadow_sampler, &local_shadow_maps.view, &cookies);
 
-    let id4 = [
-        [1.0f32, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ];
-    let shadow_cascade_uniform_buffers = std::array::from_fn(|i| {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("Shadow cascade VS uniform {i}")),
-            contents: bytemuck::bytes_of(&ShadowVsUniform::new(id4, [0.0; 3], 0.0)),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        })
-    });
+    let (shadow_cascade_uniform_buffers, shadow_pass_bind_groups) =
+        shadow_pass_uniforms(device, &layouts.shadow_pass, "Shadow cascade VS uniform", "shadow_pass_bind_group_");
+    // The cascades' layout: every shadow pass binds the same group 0.
+    let (local_shadow_uniform_buffers, local_shadow_pass_bind_groups) =
+        shadow_pass_uniforms(device, &layouts.shadow_pass, "Local shadow VS uniform", "local_shadow_pass_bind_group_");
 
-    let shadow_pass_bind_groups = std::array::from_fn(|i| {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &layouts.shadow_pass,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: shadow_cascade_uniform_buffers[i].as_entire_binding(),
-            }],
-            label: Some(&format!("shadow_pass_bind_group_{i}")),
-        })
-    });
-
-    let local_shadow_uniform_buffers: [wgpu::Buffer; MAX_LOCAL_SHADOW_LAYERS] = std::array::from_fn(|i| {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("Local shadow VS uniform {i}")),
-            contents: bytemuck::bytes_of(&ShadowVsUniform::new(id4, [0.0; 3], 0.0)),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        })
-    });
-
-    let local_shadow_pass_bind_groups = std::array::from_fn(|i| {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &layouts.shadow_pass, // The cascades' layout: every shadow pass binds the same group 0.
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: local_shadow_uniform_buffers[i].as_entire_binding(),
-            }],
-            label: Some(&format!("local_shadow_pass_bind_group_{i}")),
-        })
-    });
-
-    let dummy_identity: [[f32; 4]; 4] = [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ];
-    let dummy_skeleton_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Dummy Skeleton Buffer"),
-        contents: bytemuck::cast_slice(&[dummy_identity; 128]),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
-    let dummy_skeleton_bind_group =
-        Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &layouts.skeleton,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: dummy_skeleton_buffer.as_entire_binding(),
-            }],
-            label: Some("dummy_skeleton_bind_group"),
-        }));
-
+    let dummy_skeleton_bind_group = dummy_skeleton(device, &layouts.skeleton);
     let initial_capacity: usize = 8_192;
-    let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Instance Buffer"),
-        size: (initial_capacity * std::mem::size_of::<crate::InstanceRaw>()) as u64,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: &layouts.instance,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: instance_buffer.as_entire_binding(),
-        }],
-        label: Some("instance_bind_group"),
-    });
+    let (instance_buffer, instance_bind_group) = instance_storage(device, &layouts.instance, initial_capacity);
 
     let wire_color_layout = layouts::wire_color_layout(device);
     let indirect = crate::irradiance::IrradianceState::layout(device);
@@ -1289,6 +1172,135 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         instance_bind_group,
         instance_capacity: initial_capacity,
     }
+}
+
+/// The clustered lights' table and index buffers, at the default grid's size.
+fn cluster_buffers(device: &wgpu::Device) -> (wgpu::Buffer, wgpu::Buffer) {
+    let grid = crate::clustered::ClusterGrid::default();
+    let buffer = |label: &str, size| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    };
+    (
+        buffer("cluster_table", crate::clustered::table_bytes(grid)),
+        buffer("cluster_light_indices", crate::clustered::index_bytes(grid)),
+    )
+}
+
+/// What glass reads until a frame copies what is behind it (`crate::transmission`): a texel of
+/// nothing, a texel of depth at the far plane — nothing behind, which `behind_distance` reads as sky
+/// — and the sampler.
+///
+/// The depth texel is cleared to 1.0 by a pass. It was left as made until 2026-11-23, and a texture
+/// starts zeroed: 0.0 is the near plane, so a glass draw over the fallback read its volume as the
+/// distance back to the camera instead of open sky. (No draw reaches it today — a frame with glass
+/// in view builds the real surface first — but the fallback is there for the draw that does.) A
+/// pass, because WebGPU does not let a buffer be written into a `Depth32Float` texture.
+fn behind_fallbacks(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureView, wgpu::TextureView, wgpu::Sampler) {
+    let texel = |label: &str, format: wgpu::TextureFormat, usage: wgpu::TextureUsages| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    };
+    let colour = texel("nothing behind glass yet", wgpu::TextureFormat::Rgba16Float, wgpu::TextureUsages::TEXTURE_BINDING)
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let depth = texel(
+        "nothing behind glass yet (depth)",
+        wgpu::TextureFormat::Depth32Float,
+        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("behind glass: the far plane") });
+    drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("behind glass: the far plane"),
+        color_attachments: &[],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: &depth,
+            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+            stencil_ops: None,
+        }),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    }));
+    queue.submit(Some(encoder.finish()));
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("behind glass"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        ..Default::default()
+    });
+    (colour, depth, sampler)
+}
+
+/// One shadow pass's vertex uniform per layer — `uniform_label {i}` — and the group 0 that binds
+/// it — `group_label{i}` — over `layout`, each starting at the identity.
+fn shadow_pass_uniforms<const N: usize>(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniform_label: &str,
+    group_label: &str,
+) -> ([wgpu::Buffer; N], [wgpu::BindGroup; N]) {
+    let identity = gizmo_math::Mat4::IDENTITY.to_cols_array_2d();
+    let buffers: [wgpu::Buffer; N] = std::array::from_fn(|i| {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{uniform_label} {i}")),
+            contents: bytemuck::bytes_of(&ShadowVsUniform::new(identity, [0.0; 3], 0.0)),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+    });
+    let groups = std::array::from_fn(|i| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("{group_label}{i}")),
+            layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffers[i].as_entire_binding() }],
+        })
+    });
+    (buffers, groups)
+}
+
+/// The skeleton group a mesh with no skin binds: 128 identity bones.
+fn dummy_skeleton(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> Arc<wgpu::BindGroup> {
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Dummy Skeleton Buffer"),
+        contents: bytemuck::cast_slice(&[gizmo_math::Mat4::IDENTITY.to_cols_array_2d(); 128]),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+    Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("dummy_skeleton_bind_group"),
+        layout,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+    }))
+}
+
+/// The instance buffer, room for `capacity` instances, and its group.
+fn instance_storage(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, capacity: usize) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Instance Buffer"),
+        size: (capacity * std::mem::size_of::<crate::InstanceRaw>()) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("instance_bind_group"),
+        layout,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+    });
+    (buffer, group)
 }
 
 /// The lit shaders' shadow group: the cascades, the comparison sampler, the local shadow array and
@@ -1397,6 +1409,55 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
 
 #[cfg(test)]
 mod tests {
+    /// The depth glass reads before a frame has copied what is behind it is the far plane: nothing
+    /// behind, which `behind_distance` reads as open sky. It was a texture left as made, and a texture
+    /// starts zeroed — the near plane, 0.0, read back on the old code.
+    #[test]
+    fn the_glass_depth_fallback_is_the_far_plane() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        pollster::block_on(async {
+            #[cfg(not(gizmo_forward_only))]
+            let device = crate::test_gpu::headless_native_device().await;
+            #[cfg(gizmo_forward_only)]
+            let device = crate::test_gpu::headless_device().await;
+            let Some((device, queue)) = device else {
+                eprintln!("skipped: no GPU");
+                return;
+            };
+            let scene = build_scene_pipelines(&device, &queue);
+            let staging = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("the fallback's texel"),
+                size: 256,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: scene.behind_depth_fallback.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::DepthOnly,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &staging,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(1) },
+                },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
+            queue.submit(Some(encoder.finish()));
+            let slice = staging.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            rx.recv().expect("mapped").expect("mapped");
+            let depth = f32::from_le_bytes(slice.get_mapped_range().expect("the range")[..4].try_into().expect("four bytes"));
+            assert_eq!(depth, 1.0, "the fallback is the far plane");
+        });
+    }
+
     /// **The forward-only path's lit shader carries only the kinds of local light a scene has.** On an
     /// Adreno 618 a floor under one plain point light read 64 fps with the rectangle's, tube's and sphere's
     /// lighting compiled in and none taken, 92 without them, and a scene with no local light pays for the
@@ -1764,7 +1825,7 @@ mod tests {
                 return;
             }
 
-            let (device, _) = adapter
+            let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor {
                     required_features: wgpu::Features::POLYGON_MODE_LINE,
                     required_limits: wgpu::Limits {
@@ -1780,7 +1841,7 @@ mod tests {
                 .unwrap();
 
             // Sahnemizi kur, default capacity 8_192 olmali!
-            let mut scene_state = build_scene_pipelines(&device);
+            let mut scene_state = build_scene_pipelines(&device, &queue);
             assert_eq!(scene_state.instance_capacity, 8_192);
 
             // Daha kucuk bir obje listesi istenirse buyumez.

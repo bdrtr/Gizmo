@@ -464,7 +464,7 @@ impl Renderer {
 
         let depth_texture_view = Self::create_depth_texture(&device, config.width, config.height);
 
-        let scene = crate::pipeline::build_scene_pipelines(&device);
+        let scene = crate::pipeline::build_scene_pipelines(&device, &queue);
         let post_res = crate::post_process::build_post_process_resources(
             &device,
             config.format,

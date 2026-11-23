@@ -14,7 +14,7 @@ mod assets;
 mod construction;
 // For a test device that binds what the desktop renderer's does (`test_gpu::headless_native_device`).
 #[cfg(all(test, not(gizmo_forward_only)))]
-pub(crate) use construction::native_device_limits;
+pub(crate) use construction::{native_device_features, native_device_limits};
 mod textures;
 
 // ============================================================

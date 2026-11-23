@@ -192,10 +192,11 @@ the first write (Unity's material instance — a hidden un-sharing).
 > 2. **The renderer's construction functions are still god functions.** *Under way 2026-11-23:*
 >    `build_core_pipelines` (561 lines → three families of 90, 62 and 40, one shader loader per
 >    path), `build_layouts` (349 → one function per group), `gpu_physics::system::new` (356 → 73,
->    finding a collider overlay that could be turned on half-built), `gpu_smoke::new` (273 → 82)
->    and `decal::new` (261 → 113) are split. Left: `finish_construction` (264),
->    `build_post_process_resources` (263), `create_particle_pipelines` (257),
->    `build_scene_pipelines` (230), and the bench `create_resource_world` (504). Mostly
+>    finding a collider overlay that could be turned on half-built), `gpu_smoke::new` (273 → 82),
+>    `decal::new` (261 → 113), `create_particle_pipelines` (257 → 86) and `build_scene_pipelines`
+>    (230 → 113, finding a glass depth fallback that was the near plane) are split. Left:
+>    `finish_construction` (264), `build_post_process_resources` (263), and the bench
+>    `create_resource_world` (504). Mostly
 >    descriptors, but full of per-target `#[cfg]` arms, so each split needs the golden render tests
 >    on both paths, the forward-only plain tests, the wasm lint and the feature powerset.
 > 3. ~~**The fight HUD exists only in the editor.**~~ **Closed 2026-11-23:** it is the engine's,

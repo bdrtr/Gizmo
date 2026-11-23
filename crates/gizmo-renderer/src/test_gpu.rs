@@ -96,15 +96,17 @@ pub(crate) async fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     headless_adapter().await?.request_device(&wgpu::DeviceDescriptor::default()).await.ok()
 }
 
-/// [`headless_device`] with the limits the renderer asks of a native adapter
-/// ([`native_device_limits`](crate::renderer::native_device_limits)): the desktop's post chain binds six
-/// groups where the default allows four. **Does not lock**, likewise. The desktop's only: its one user,
-/// `post_process`'s bloom tests, is, and on the forward-only path it was dead code that no lint built.
+/// [`headless_device`] with the features and limits the renderer asks of a native adapter
+/// ([`native_device_features`](crate::renderer::native_device_features),
+/// [`native_device_limits`](crate::renderer::native_device_limits)): the desktop's post chain binds six
+/// groups where the default allows four, and its wireframe draws lines. **Does not lock**, likewise.
+/// The desktop's only, as those are; on the forward-only path [`headless_device`] is the renderer's.
 #[cfg(not(gizmo_forward_only))]
 pub(crate) async fn headless_native_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let adapter = headless_adapter().await?;
+    let required_features = crate::renderer::native_device_features(&adapter);
     let required_limits = crate::renderer::native_device_limits(&adapter);
-    adapter.request_device(&wgpu::DeviceDescriptor { required_limits, ..Default::default() }).await.ok()
+    adapter.request_device(&wgpu::DeviceDescriptor { required_features, required_limits, ..Default::default() }).await.ok()
 }
 
 /// The adapter both of them open.

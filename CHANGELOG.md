@@ -804,6 +804,16 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **The depth glass reads before a frame copies what is behind it is the far plane, as it said.**
+  `SceneState::behind_depth_fallback` claimed to be "a texel at the far plane: nothing behind,
+  which `behind_distance` reads as sky". It was a texture left as made, and a texture starts
+  zeroed: 0.0 is the near plane, so a glass draw over it would have read its volume as the
+  distance back to the camera. No draw reaches it today, since a frame with glass builds the real
+  surface first. It is cleared to 1.0 by a pass, because WebGPU writes no buffer into a
+  `Depth32Float`. `build_scene_pipelines` takes the queue for that (behavioural for a caller).
+  `the_glass_depth_fallback_is_the_far_plane` reads the texel back: 0.0 on the old code.
+  `test_gpu::headless_native_device` now asks for the renderer's native features as well as its
+  limits; without line polygons the scene's wireframe pipeline could not be built on it.
 - **The GPU bodies build on Windows.** `physics_compute.wgsl`'s `integrate` set a slab normal with
   `n1[a] = -1.0` inside its three-axis loop: a write to a vector component through a run-time
   index. D3D's FXC cannot address that, so it unrolls the loop. Under wgpu's loop bounding on
