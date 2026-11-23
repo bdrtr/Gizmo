@@ -273,10 +273,18 @@ fn golden_hinge_pendulum_swing() {
     //   vx    1.084_893_6 → 1.080_646_4   (-4.2e-3)
     //   vy    3.196_372_5 → 3.191_738     (-4.6e-3)
     //   arm error x1000  0.414_609_9 → 0.320_434_57  (-23 %, the direction that matters)
-    lock("pendulum x", w.transforms[1].position.x, 1.896_123_6);
-    lock("pendulum y", w.transforms[1].position.y, 4.362_821);
-    lock("pendulum vx", w.velocities[1].linear.x, 1.080_646_4);
-    lock("pendulum vy", w.velocities[1].linear.y, 3.191_738);
+    // RE-BLESSED 2026-11-23 — a joint's anchor is one 3×3 block now
+    // (`JointSolver::apply_point_constraint`), not three rows solved one after another. Old → new:
+    //   x     1.896_123_6 → 1.897_378     (+1.3e-3)
+    //   y     4.362_821   → 4.367_345     (+4.5e-3)
+    //   vx    1.080_646_4 → 1.073_021_8   (-7.6e-3)
+    //   vy    3.191_738   → 3.182_202     (-9.5e-3)
+    //   arm error x1000  0.320_434_57 → 0.073_909_76  (-77 %)
+    // and the energy it has lost in the three seconds, with the default damping, 0.535 → 0.530 J.
+    lock("pendulum x", w.transforms[1].position.x, 1.897_378);
+    lock("pendulum y", w.transforms[1].position.y, 4.367_345);
+    lock("pendulum vx", w.velocities[1].linear.x, 1.073_021_8);
+    lock("pendulum vy", w.velocities[1].linear.y, 3.182_202);
 
     // The arm length is the joint's whole job, and its ERROR is the sharpest instrument in
     // this file. Scaled by 1000 on purpose: the raw length is 2.0008, so an absolute 1e-3
@@ -296,7 +304,7 @@ fn golden_hinge_pendulum_swing() {
     // BETTER after the change, and had it come back near 0.85 the model behind it would have
     // been wrong.
     let arm = (w.transforms[1].position - Vec3::new(0.0, 5.0, 0.0)).length();
-    lock("pendulum arm error x1000", (arm - 2.0) * 1000.0, 0.320_434_57);
+    lock("pendulum arm error x1000", (arm - 2.0) * 1000.0, 0.073_909_76);
 
     // …and independently of every golden value above: whatever those numbers become after a
     // deliberate re-blessing, a hinge that lets the bob drift off its arm is broken, not
@@ -367,15 +375,21 @@ fn golden_hinge_pendulum_swing_legacy_baumgarte() {
     //   vy    3.208_478_7 → 3.196_055_7   (-1.2e-2)
     //   arm error x1000  0.846_624_4 → 0.486_612_32  (-43 %; the Baumgarte lever gains MORE
     //   from warm start than the soft path, which is what a repair-rate-limited row should do)
-    lock("legacy pendulum x", w.transforms[1].position.x, 1.894_964_7);
-    lock("legacy pendulum y", w.transforms[1].position.y, 4.358_864);
-    lock("legacy pendulum vx", w.velocities[1].linear.x, 1.087_582_6);
-    lock("legacy pendulum vy", w.velocities[1].linear.y, 3.196_055_7);
+    // RE-BLESSED 2026-11-23 — same cause as the soft scene above: the anchor is one 3×3 block.
+    //   x     1.894_964_7 → 1.897_142_2   (+2.2e-3)
+    //   y     4.358_864   → 4.366_327_3   (+7.5e-3)
+    //   vx    1.087_582_6 → 1.074_876_1   (-1.3e-2)
+    //   vy    3.196_055_7 → 3.183_831_2   (-1.2e-2)
+    //   arm error x1000  0.486_612_32 → 0.172_376_63  (-65 %), energy lost 0.553 → 0.533 J
+    lock("legacy pendulum x", w.transforms[1].position.x, 1.897_142_2);
+    lock("legacy pendulum y", w.transforms[1].position.y, 4.366_327_3);
+    lock("legacy pendulum vx", w.velocities[1].linear.x, 1.074_876_1);
+    lock("legacy pendulum vy", w.velocities[1].linear.y, 3.183_831_2);
     let arm = (w.transforms[1].position - Vec3::new(0.0, 5.0, 0.0)).length();
     lock(
         "legacy pendulum arm error x1000",
         (arm - 2.0) * 1000.0,
-        0.486_612_32,
+        0.172_376_63,
     );
 }
 

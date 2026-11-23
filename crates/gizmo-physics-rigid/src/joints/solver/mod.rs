@@ -1,7 +1,7 @@
 use super::data::*;
 use gizmo_physics_core::components::Transform;
 use crate::components::{RigidBody, Velocity};
-use gizmo_math::{Quat, Vec3};
+use gizmo_math::{Mat3, Quat, Vec3};
 
 /// Accumulated-λ slots ([`JointScratch`]).
 ///
@@ -1059,6 +1059,81 @@ impl JointSolver {
             vb.angular += inv_i_b.mul_vec3(r_b.cross(impulse));
         }
         lambda
+    }
+
+    /// A point constraint — `anchor_b` held on `anchor_a`, `error = anchor_a − anchor_b` — solved as
+    /// one 3×3 block: the three axes' impulse together, `Δλ = K⁻¹·(bias − v_rel)` with
+    /// `K = (m_a⁻¹ + m_b⁻¹)·𝟙 − [r_a]ₓ I_a⁻¹ [r_a]ₓ − [r_b]ₓ I_b⁻¹ [r_b]ₓ`, softened as a rigid row
+    /// is (`rigid_coefficients`; the old Baumgarte arm at `rigid_hertz == 0`). Its three
+    /// accumulators are `slot..slot + 3`, x, y, z.
+    ///
+    /// Until 2026-11-23 these were three rows along x, y and z, each solved alone. Coupled through
+    /// the rotation the anchor's lever gives the bodies, they converged slowly or not at all where
+    /// the lever is long against the inertia — `m·r²/I` was 18 000 on a 4 mm bob hung 0.34 m from
+    /// its pivot, whose pendulum then swung 33 % slower than its period and lost half its amplitude
+    /// in thirty seconds; 324 % on a 1 m string. A block has no such coupling to iterate away.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_point_constraint(
+        &self,
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &mut [Velocity],
+        idx_a: usize,
+        idx_b: usize,
+        r_a: Vec3,
+        r_b: Vec3,
+        error: Vec3,
+        dt: f32,
+        scratch: &mut JointScratch,
+        slot: usize,
+    ) {
+        let dyn_a = rigid_bodies[idx_a].is_dynamic();
+        let dyn_b = rigid_bodies[idx_b].is_dynamic();
+        let inv_m_a = rigid_bodies[idx_a].inv_mass();
+        let inv_m_b = rigid_bodies[idx_b].inv_mass();
+        let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+        let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+        // `[r]ₓ·p = r × p`.
+        let cross = |r: Vec3| Mat3::from_cols(Vec3::new(0.0, r.z, -r.y), Vec3::new(-r.z, 0.0, r.x), Vec3::new(r.y, -r.x, 0.0));
+        let (ra, rb) = (cross(r_a), cross(r_b));
+        let k = Mat3::from_diagonal(Vec3::splat(inv_m_a + inv_m_b)) - ra * inv_i_a * ra - rb * inv_i_b * rb;
+        if k.determinant().abs() < 1e-12 {
+            return; // Neither body can move: nothing to solve.
+        }
+        let v_a = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
+        let v_b = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
+        let rel_vel = v_b - v_a;
+
+        // The rigid row's arms (`apply_linear_constraint_soft`), for a vector error; the bias's
+        // ceiling bounds its length, so it is the same in every direction.
+        let (bias, mass_scale, impulse_scale) = if self.rigid_hertz > 0.0 {
+            let (bias_rate, m, i) = self.rigid_coefficients(dt);
+            (error * bias_rate, m, i)
+        } else {
+            (error * self.position_bias / dt, 1.0, 0.0)
+        };
+        let bias = bias.clamp_length_max(self.max_correction_speed);
+        let accumulated = Vec3::new(scratch.row_value(slot), scratch.row_value(slot + 1), scratch.row_value(slot + 2));
+        // Warm-start injection — see `apply_angular_constraint_soft`.
+        let delta = if let Some(factor) = scratch.warm_injection() {
+            Vec3::new(scratch.prev_row_value(slot), scratch.prev_row_value(slot + 1), scratch.prev_row_value(slot + 2)) * factor
+        } else {
+            k.inverse() * (bias - rel_vel) * mass_scale - accumulated * impulse_scale
+        };
+        for (i, d) in delta.to_array().into_iter().enumerate() {
+            *scratch.row(slot + i) += d;
+        }
+        scratch.impulse_lin += delta;
+
+        let (va, vb) = pair_mut(velocities, idx_a, idx_b);
+        if dyn_a {
+            va.linear -= delta * inv_m_a;
+            va.angular -= inv_i_a.mul_vec3(r_a.cross(delta));
+        }
+        if dyn_b {
+            vb.linear += delta * inv_m_b;
+            vb.angular += inv_i_b.mul_vec3(r_b.cross(delta));
+        }
     }
 
     // ── joint solvers ─────────────────────────────────────────────────────────

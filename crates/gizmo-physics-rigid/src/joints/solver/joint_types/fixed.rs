@@ -33,54 +33,22 @@ impl JointSolver {
             let r_a = Self::lever_arm(rigid_bodies, transforms, idx_a, anchor_a);
             let r_b = Self::lever_arm(rigid_bodies, transforms, idx_b, anchor_b);
 
-            let max_impulse = f32::MAX;
-            let min_impulse = f32::MIN;
-
-            self.apply_linear_constraint(
-                    rigid_bodies,
-                    transforms,
-                    velocities,
-                    idx_a,
-                    idx_b,
-                    Vec3::new(1.0, 0.0, 0.0),
-                    r_a,
-                    r_b,
-                    error.x,
-                    dt,
-                    min_impulse,
-                    max_impulse,
-                    &mut joint.scratch, row::LIN,
-                );
-            self.apply_linear_constraint(
-                    rigid_bodies,
-                    transforms,
-                    velocities,
-                    idx_a,
-                    idx_b,
-                    Vec3::new(0.0, 1.0, 0.0),
-                    r_a,
-                    r_b,
-                    error.y,
-                    dt,
-                    min_impulse,
-                    max_impulse,
-                    &mut joint.scratch, row::LIN + 1,
-                );
-            self.apply_linear_constraint(
-                    rigid_bodies,
-                    transforms,
-                    velocities,
-                    idx_a,
-                    idx_b,
-                    Vec3::new(0.0, 0.0, 1.0),
-                    r_a,
-                    r_b,
-                    error.z,
-                    dt,
-                    min_impulse,
-                    max_impulse,
-                    &mut joint.scratch, row::LIN + 2,
-                );
+            // The three axes as one block (`apply_point_constraint`): solved one after another they
+            // were three rows coupled through the bodies' rotation, and on an anchor far from a light
+            // body's centre — a pendulum's bob — that coupling is nearly all there is.
+            self.apply_point_constraint(
+                rigid_bodies,
+                transforms,
+                velocities,
+                idx_a,
+                idx_b,
+                r_a,
+                r_b,
+                error,
+                dt,
+                &mut joint.scratch,
+                row::LIN,
+            );
 
         }
 
