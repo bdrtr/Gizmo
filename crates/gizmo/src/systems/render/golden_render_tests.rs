@@ -17364,18 +17364,36 @@ fn the_particle_system_goes_idle_when_the_last_particle_dies() {
     });
 }
 
-/// A matte floor with — optionally — a decal projector volume straddling its surface.
-#[cfg(not(gizmo_forward_only))] // Its test is the desktop's: the forward-only path draws no decals.
-async fn render_decal_scene(with_decal: bool) -> Vec<u8> {
+/// What [`render_decal_scene`] projects over its floor.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DecalShown {
+    /// No decal.
+    None,
+    /// A red decal over the white material: its tint alone.
+    Tint,
+    /// A white decal over the engine's checkerboard: the pattern.
+    Checker,
+}
+
+/// A matte floor with — optionally — a decal projector volume straddling its surface, under the
+/// default sun (`sun`) or in a black night with none. `parent` hangs the decal under an entity set
+/// there, its own `Transform` taking it back to the same place in the world. The frame, and the
+/// format its bytes are in.
+async fn render_decal_scene(shown: DecalShown, sun: bool, parent: Option<Vec3>) -> (Vec<u8>, wgpu::TextureFormat) {
     const W: u32 = 128;
     let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
-    let mut asset_manager = AssetManager::new();
     let mut world = World::new();
-    let tex = asset_manager.create_white_texture(
-        &renderer.device,
-        &renderer.queue,
-        &renderer.scene.texture_bind_group_layout,
-    );
+    let (tex, checker) = {
+        let mut assets = renderer.asset_manager.write().unwrap();
+        let layout = &renderer.scene.texture_bind_group_layout;
+        (
+            assets.create_white_texture(&renderer.device, &renderer.queue, layout),
+            assets.create_checkerboard_texture(&renderer.device, &renderer.queue, layout),
+        )
+    };
+    if !sun {
+        renderer.sky = Some(crate::renderer::Sky::uniform([0.0, 0.0, 0.0]));
+    }
 
     // Matte floor, top face at y = -1.1.
     let floor = world.spawn();
@@ -17391,21 +17409,22 @@ async fn render_decal_scene(with_decal: bool) -> Vec<u8> {
     );
     world.add_component(floor, MeshRenderer::new());
 
-    if with_decal {
+    if shown != DecalShown::None {
         // A projector volume straddling the floor surface, right where the camera looks.
+        let at = Vec3::new(0.0, -1.1, 0.0);
         let d = world.spawn();
-        world.add_component(
-            d,
-            Transform::new(Vec3::new(0.0, -1.1, 0.0)).with_scale(Vec3::splat(3.0)),
-        );
+        world.add_component(d, Transform::new(at - parent.unwrap_or(Vec3::ZERO)).with_scale(Vec3::splat(3.0)));
         world.add_component(d, GlobalTransform::default());
-        world.add_component(
-            d,
-            crate::renderer::components::Decal::new(
-                tex.clone(),
-                Vec4::new(1.0, 0.0, 0.0, 1.0),
-            ),
-        );
+        let decal = match shown {
+            DecalShown::Checker => crate::renderer::components::Decal::new(checker.clone(), Vec4::ONE),
+            _ => crate::renderer::components::Decal::new(tex.clone(), Vec4::new(1.0, 0.0, 0.0, 1.0)),
+        };
+        world.add_component(d, decal);
+        if let Some(offset) = parent {
+            use gizmo_core::hierarchy::HierarchyExt;
+            let holder = world.spawn_bundle((Transform::new(offset), GlobalTransform::default()));
+            world.add_child(holder, d);
+        }
     }
 
     world.spawn_bundle(CameraBundle {
@@ -17415,11 +17434,31 @@ async fn render_decal_scene(with_decal: bool) -> Vec<u8> {
         primary: true,
         ..Default::default()
     });
-    world.spawn_bundle(DirectionalLightBundle::default());
+    if sun {
+        world.spawn_bundle(DirectionalLightBundle::default());
+    } else if let Some(mut c) = world.query_mut::<&mut crate::renderer::Camera>().iter_mut().next() {
+        c.clear_color = Some(Vec3::ZERO);
+    }
 
-    render_world(&mut renderer, &mut world).await
+    let format = renderer.config.format;
+    (render_world(&mut renderer, &mut world).await, format)
 }
 
+/// The pixels a red decal in the sun changes from the floor without it: where the decal lies.
+async fn decal_footprint() -> Vec<usize> {
+    let (with, _) = render_decal_scene(DecalShown::Tint, true, None).await;
+    let (without, _) = render_decal_scene(DecalShown::None, true, None).await;
+    (0..128 * 128).filter(|&p| (0..3).any(|c| with[p * 4 + c].abs_diff(without[p * 4 + c]) > 8)).collect()
+}
+
+/// The mean red, green and blue over `pixels`, whatever order `format` stores them in.
+fn mean_rgb(frame: &[u8], format: wgpu::TextureFormat, pixels: &[usize]) -> [f32; 3] {
+    let swap = matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb);
+    [0usize, 1, 2].map(|c| {
+        let c = if swap && c != 1 { 2 - c } else { c };
+        pixels.iter().map(|&p| f32::from(frame[p * 4 + c])).sum::<f32>() / pixels.len().max(1) as f32
+    })
+}
 /// Render a floor lit by `MAX_LIGHTS` point lights stacked in one spot, where only the
 /// **last-ranked** one emits any light (`white_last`) or none of them do.
 ///
@@ -17625,7 +17664,6 @@ fn the_last_light_slot_reaches_the_frame() {
 /// which is exactly why it needs a measurement standing behind it rather than an argument:
 /// a red projector over a white floor moves 1133 of 16384 pixels, max delta 75.
 #[test]
-#[cfg(not(gizmo_forward_only))] // The forward-only path draws no decals (ENGINE.md §3).
 fn decals_reach_the_frame() {
     let _gpu = crate::test_gpu::gpu_lock();
     if !pollster::block_on(Renderer::headless_adapter_available())
@@ -17635,14 +17673,87 @@ fn decals_reach_the_frame() {
         return;
     }
     pollster::block_on(async {
-        let with = render_decal_scene(true).await;
-        let without = render_decal_scene(false).await;
+        let (with, _) = render_decal_scene(DecalShown::Tint, true, None).await;
+        let (without, _) = render_decal_scene(DecalShown::None, true, None).await;
         let (changed, total) = changed_pixels(&with, &without, 128);
         assert!(
             changed >= 200,
             "spawning a decal over the floor changed {changed}/{total} pixels — it is not \
                  reaching the frame (measured 1133)",
         );
+    });
+}
+
+/// **A decal is lit as the surface under it is**: red in the sun, and in a black night with no
+/// light as dark as the floor. On the desktop the decal paints the G-buffer's albedo; on the
+/// forward-only path the lit shader projects it over the surface before the light
+/// (`shader.wgsl`'s `decaled`), which it did not do at all until 2026-11-23 — the decal the editor's
+/// forward pass once drew was blended in unlit and glowed in the dark.
+#[test]
+fn a_decal_is_lit_as_its_surface_is() {
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let footprint = decal_footprint().await;
+        assert!(footprint.len() >= 200, "the decal covers {} pixels", footprint.len());
+        let rgb = |(frame, format): (Vec<u8>, wgpu::TextureFormat)| mean_rgb(&frame, format, &footprint);
+        let [r, g, b] = rgb(render_decal_scene(DecalShown::Tint, true, None).await);
+        assert!(r > g + 40.0 && r > b + 40.0, "in the sun the decal is not red: {r} {g} {b}");
+        let dark = rgb(render_decal_scene(DecalShown::Tint, false, None).await);
+        let floor = rgb(render_decal_scene(DecalShown::None, false, None).await);
+        assert!(dark[0] < floor[0] + 4.0 && dark[0] < 12.0, "in the dark the decal glows: {dark:?} (the floor {floor:?})");
+    });
+}
+
+/// **A textured decal shows its texture**: the checkerboard over the floor is light and dark
+/// squares, where the white one over the same floor is one colour. On the forward-only path the
+/// texture is copied into a layer of the decal array (`ForwardDecals::place`).
+#[test]
+fn a_textured_decal_shows_its_texture() {
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        // Over the decal's middle, where its fade has not set in: the green channel's spread.
+        let footprint = decal_footprint().await;
+        let spread = |frame: &[u8]| {
+            let mut values: Vec<u8> = footprint.iter().map(|&p| frame[p * 4 + 1]).collect();
+            values.sort_unstable();
+            let at = |q: usize| values[(values.len() - 1) * q / 100];
+            at(90) - at(10)
+        };
+        let checker = spread(&render_decal_scene(DecalShown::Checker, true, None).await.0);
+        let plain = spread(&render_decal_scene(DecalShown::None, true, None).await.0);
+        assert!(checker > plain + 40, "the checkerboard does not show: {checker} against the floor's {plain}");
+    });
+}
+
+/// **A decal is where its `GlobalTransform` is**: hung under an entity ten metres off, its own
+/// `Transform` taking it back, it is drawn where the unparented one is. Until 2026-11-23 a decal
+/// was placed by its `Transform` alone, and this one was drawn ten metres away.
+#[test]
+fn a_parented_decal_is_drawn_where_it_is_in_the_world() {
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let (alone, _) = render_decal_scene(DecalShown::Tint, true, None).await;
+        let (parented, _) = render_decal_scene(DecalShown::Tint, true, Some(Vec3::new(10.0, 0.0, 3.0))).await;
+        let (changed, total) = changed_pixels(&alone, &parented, 128);
+        assert!(changed <= 4, "the parented decal drew {changed}/{total} pixels otherwise");
     });
 }
 

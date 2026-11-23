@@ -28,6 +28,13 @@
 #ifdef LOCAL_LIGHTS
 #import gizmo::common::{light_falloff, spot_cone, spot_cookie_uv, gizmo_cluster_index}
 #endif
+// The decals, on the forward-only path while a frame draws one: projected over the surface before it
+// is lit (`decaled`), read from their half of the cluster lists.
+#ifdef DECALS
+#ifndef LOCAL_LIGHTS
+#import gizmo::common::{gizmo_cluster_index}
+#endif
+#endif
 #ifdef SIZED_LIGHTS
 #import gizmo::common::{compute_sphere_lighting, compute_tube_lighting}
 #endif
@@ -152,6 +159,57 @@ var s_cookie: sampler;
 @group(#{SUN_SHADOW_GROUP}) @binding(#{SUN_SHADOW_SAMPLER_BINDING})
 var s_shadow: sampler_comparison;
 #endif
+#endif
+
+#ifdef DECALS
+// One decal (`decal::GpuDecal`): world → its box's space, its tint, its texture's layer.
+struct GpuDecal {
+    inv_model: mat4x4<f32>,
+    tint: vec4<f32>,
+    layer: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+// The decals' textures, a layer each (`decal::ForwardDecals`), the decals, and their sampler.
+@group(0) @binding(15)
+var t_decals: texture_2d_array<f32>;
+@group(0) @binding(16)
+var<storage, read> decals: array<GpuDecal>;
+@group(0) @binding(17)
+var s_decals: sampler;
+
+// `decal::NO_DECAL_TEXTURE`: a decal with no texture of its own, its tint its colour.
+const NO_DECAL_TEXTURE: u32 = 0xFFFFFFFFu;
+
+// The surface with every decal of its cluster projected over its albedo, in the decals' order — what
+// the deferred pass does to the G-buffer's (`decal.wgsl`), and the same projection: down the box's
+// Y, its X and Z the texture's u and v, faded out towards a circle's edge, blended by alpha. The
+// metallic and everything else are the surface's. `dx`/`dy` are how the position runs across the
+// neighbouring pixels: the texture's mip, read inside a loop no derivative may be taken in.
+fn decaled(undecaled: Surface, p: vec3<f32>, dx: vec3<f32>, dy: vec3<f32>) -> Surface {
+    var surface = undecaled;
+    let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, p);
+    let clusters = scene.cluster_dims.x * scene.cluster_dims.y * scene.cluster_dims.z;
+    let range = cluster_table[cluster + clusters];
+    for (var k = 0u; k < range.y; k++) {
+        let decal = decals[cluster_light_indices[range.x + k]];
+        let local = (decal.inv_model * vec4<f32>(p, 1.0)).xyz;
+        if (any(abs(local) > vec3<f32>(0.5))) {
+            continue;
+        }
+        let uv = local.xz + vec2<f32>(0.5);
+        var colour = decal.tint;
+        if (decal.layer != NO_DECAL_TEXTURE) {
+            let uv_dx = (decal.inv_model * vec4<f32>(dx, 0.0)).xz;
+            let uv_dy = (decal.inv_model * vec4<f32>(dy, 0.0)).xz;
+            colour *= textureSampleGrad(t_decals, s_decals, uv, i32(decal.layer), uv_dx, uv_dy);
+        }
+        let alpha = colour.a * (1.0 - smoothstep(0.3, 0.5, distance(uv, vec2<f32>(0.5))));
+        surface.albedo = mix(surface.albedo, colour.rgb, clamp(alpha, 0.0, 1.0));
+    }
+    return surface;
+}
 #endif
 
 struct SkeletonData {
@@ -491,11 +549,16 @@ fn shade(in: VertexOutput) -> vec4<f32> {
     let wet = wet_surface(fragment_surface(in, true), rain, ripples);
 #endif
 #ifdef SUN_SHADOW_PER_VERTEX
-    let surface = wet;
+    let undecaled = wet;
 #else
     // The rain's beads on a sealed surface.
     let beads = rain_beads(in.surface_local, bead_density(scene.wetness, normalize(in.normal).y, rain.z), max(length(world_dx), length(world_dy)));
-    let surface = beaded(wet, beads, local_dx, local_dy, world_dx, world_dy);
+    let undecaled = beaded(wet, beads, local_dx, local_dy, world_dx, world_dy);
+#endif
+#ifdef DECALS
+    let surface = decaled(undecaled, in.world_position, world_dx, world_dy);
+#else
+    let surface = undecaled;
 #endif
 #ifdef WIREFRAME
     // `WireframeConfig::color`: one flat colour for every line, readable on any material. Alpha 0

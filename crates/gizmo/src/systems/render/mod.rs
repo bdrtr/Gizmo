@@ -1317,6 +1317,13 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // water without one) and every `FluidInteractor` where its transform now is (`fluid`).
     fluid_scene_system(world, renderer, animation_dt);
 
+    // **The decals, on the forward-only path**, which projects them in its lit shader: their textures
+    // in the decal array, the decals where that shader reads them (`decals`). The desktop draws its
+    // own over the G-buffer, view by view.
+    if cfg!(gizmo_forward_only) {
+        decals::prepare_forward_decals(world, renderer);
+    }
+
     // ECS veri GPU'ya basılır ve GPU verisi ECS'ye alınır (GPU-fizik yolu — `physics` ister)
     #[cfg(feature = "physics")]
     {
@@ -1613,7 +1620,7 @@ mod render_world;
 pub use render_world::{render_extractor, RenderWorld};
 
 mod decals;
-pub use decals::collect_decals;
+pub use decals::{collect_decals, prepare_forward_decals};
 
 mod particles;
 pub use particles::{emit, step_particle_emitters, ParticleSpawns};

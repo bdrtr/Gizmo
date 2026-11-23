@@ -570,6 +570,9 @@ pub struct SceneSetupInputs {
     /// The box around what the last frame drew — `renderer.scene_extent.last()` — which the cascades
     /// are fitted into when `shadow_settings.fit_to_scene` says so. `None` leaves them the distance.
     pub scene_extent: Option<crate::math::Aabb>,
+    /// The spheres round the frame's decals on the forward-only path, which assigns them to the
+    /// clusters after the lights (`renderer.scene.forward_decal_spheres`); empty elsewhere.
+    pub decals: Vec<crate::renderer::clustered::LightSphere>,
 }
 
 /// Build one frame's scene state, for either render path.
@@ -636,17 +639,20 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
             crate::renderer::clustered::LightSphere { center, radius }
         })
         .collect();
-    let clusters = crate::renderer::clustered::assign_lights(
-        grid,
-        crate::renderer::clustered::ClusterView {
-            view_proj: inputs.camera.view_proj,
-            camera_pos: inputs.camera.position,
-            forward: inputs.camera.forward,
-            near: inputs.camera.near,
-            far: inputs.camera.far,
-        },
-        &spheres,
-    );
+    let cluster_view = crate::renderer::clustered::ClusterView {
+        view_proj: inputs.camera.view_proj,
+        camera_pos: inputs.camera.position,
+        forward: inputs.camera.forward,
+        near: inputs.camera.near,
+        far: inputs.camera.far,
+    };
+    let clusters = crate::renderer::clustered::assign_lights(grid, cluster_view, &spheres);
+    // The decals' lists after the lights', in the same table (`ClusterAssignment::with_decals`).
+    let clusters = if inputs.decals.is_empty() {
+        clusters
+    } else {
+        clusters.with_decals(crate::renderer::clustered::assign_decals(grid, cluster_view, &inputs.decals))
+    };
     if clusters.dropped > 0 {
         tracing::debug!(
             dropped = clusters.dropped,
@@ -872,6 +878,7 @@ mod tests {
             light_cookies: Default::default(),
             shadow_settings: crate::renderer::ShadowSettings::default().with_fit_to_scene(fit),
             scene_extent,
+            decals: Vec::new(),
         };
         let mut world = World::new();
         let sun = world.spawn();
@@ -911,6 +918,7 @@ mod tests {
             light_cookies: Default::default(),
             shadow_settings: Default::default(),
             scene_extent: None,
+            decals: Vec::new(),
         };
         let mut world = World::new();
         let spot = world.spawn();
@@ -935,7 +943,7 @@ mod tests {
 
         // The forward-only path — the browser's, a phone's — draws the sun's cascades and no local
         // light's layer: it plans none, and keeps no off-screen object for them.
-        let phone = collect_scene_setup(&world, &SceneSetupInputs { local_shadow_maps: false, light_cookies: Default::default(), ..inputs });
+        let phone = collect_scene_setup(&world, &SceneSetupInputs { local_shadow_maps: false, light_cookies: Default::default(), decals: Vec::new(), ..inputs });
         assert!(phone.draws_cascades() && phone.local_shadows.layers().is_empty());
         assert_eq!(phone.shadow_view_projs(), phone.cascade_view_projs[..drawn].to_vec(), "the cascades alone");
         // A path that draws neither plans neither, sun or not.

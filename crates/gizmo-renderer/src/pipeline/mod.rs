@@ -88,6 +88,18 @@ pub struct SceneState {
     /// The kinds of local light the forward-only path's lit pipelines are built for
     /// ([`set_forward_lights`](Self::set_forward_lights)).
     pub(crate) forward_lights: LightShape,
+    /// Whether the forward-only path's lit pipelines project decals (`DECALS`): while a frame draws
+    /// one ([`set_forward_decals`](Self::set_forward_decals)).
+    pub(crate) forward_decals_drawn: bool,
+    /// The forward-only path's decals — their textures' array, the decals themselves and the
+    /// sampler, on its group 0 at bindings 15–17 ([`crate::decal::ForwardDecals`]). A texel until a
+    /// frame draws a decal ([`ensure_forward_decals`](Self::ensure_forward_decals)). The desktop
+    /// draws its decals over the G-buffer and binds none of this.
+    pub forward_decals: crate::decal::ForwardDecals,
+    /// The spheres round this frame's forward-only decals, in the order of
+    /// [`forward_decals`](Self::forward_decals)' buffer: what every view assigns to its clusters
+    /// ([`crate::clustered::assign_decals`]). Empty on the desktop, and in a frame with no decal.
+    pub forward_decal_spheres: Vec<crate::clustered::LightSphere>,
     /// The [`SceneUniforms`](crate::gpu_types::SceneUniforms) buffer — group 0, rewritten each
     /// frame.
     pub global_uniform_buffer: wgpu::Buffer,
@@ -294,7 +306,7 @@ impl SceneView {
             scene.env_cube.view(),
             &scene.forward_probes,
             (&scene.shadow_texture_view, &scene.shadow_sampler),
-            (&scene.local_shadow_maps.view, &scene.cookies),
+            (&scene.local_shadow_maps.view, &scene.cookies, &scene.forward_decals),
         );
 
         let mk_shadow_uniform = |i: usize, kind: &str| {
@@ -419,7 +431,7 @@ impl SceneState {
                 self.env_cube.view(),
                 &self.forward_probes,
                 (&self.shadow_texture_view, &self.shadow_sampler),
-                (&self.local_shadow_maps.view, &self.cookies),
+                (&self.local_shadow_maps.view, &self.cookies, &self.forward_decals),
             )
         };
         let global = build(&self.global_uniform_buffer, &self.cluster_table_buffer, &self.cluster_index_buffer);
@@ -475,6 +487,27 @@ impl SceneState {
         let changed = reads != self.forward_local_light_maps;
         self.forward_local_light_maps = reads;
         changed
+    }
+
+    /// Whether the forward-only path's lit pipelines project decals — `draws`: this frame draws one.
+    /// True when that changed, and the caller builds the pipelines again ([`rebuild_pipelines`]), as
+    /// for the lights: a scene with no decal pays nothing for them per fragment.
+    pub fn set_forward_decals(&mut self, draws: bool) -> bool {
+        let changed = draws != self.forward_decals_drawn;
+        self.forward_decals_drawn = draws;
+        changed
+    }
+
+    /// Makes the forward-only path's decal array and buffer — a texel until a frame draws a decal —
+    /// and returns whether it did, rebuilding every view's group 0 to hold them.
+    pub fn ensure_forward_decals(&mut self, device: &wgpu::Device) -> bool {
+        if self.forward_decals.is_resident() {
+            return false;
+        }
+        self.forward_decals = crate::decal::ForwardDecals::resident(device);
+        let behind = (self.behind_view.clone(), self.behind_depth_view.clone());
+        self.set_behind_view(device, Some((&behind.0, &behind.1)));
+        true
     }
 
     /// The kinds of local light the forward-only path's lit pipelines read — `shape`: this frame's
@@ -710,9 +743,10 @@ fn global_group(
         &wgpu::TextureView,
         &wgpu::Sampler,
     ),
-    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] (local_shadow, cookies): (
+    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] (local_shadow, cookies, decals): (
         &wgpu::TextureView,
         &crate::cookies::CookieTextures,
+        &crate::decal::ForwardDecals,
     ),
 ) -> wgpu::BindGroup {
     #[allow(unused_mut)] // The forward-only path adds to it.
@@ -737,6 +771,9 @@ fn global_group(
         wgpu::BindGroupEntry { binding: 11, resource: wgpu::BindingResource::TextureView(local_shadow) },
         wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::TextureView(&cookies.view) },
         wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::Sampler(&cookies.sampler) },
+        wgpu::BindGroupEntry { binding: 15, resource: wgpu::BindingResource::TextureView(&decals.view) },
+        wgpu::BindGroupEntry { binding: 16, resource: decals.buffer.as_entire_binding() },
+        wgpu::BindGroupEntry { binding: 17, resource: wgpu::BindingResource::Sampler(&decals.sampler) },
     ]);
     device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some(label), layout, entries: &entries })
 }
@@ -1076,6 +1113,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device, queue: &wgpu::Queue) -> Scen
     let (behind_fallback, behind_depth_fallback, behind_sampler) = behind_fallbacks(device, queue);
     let env_cube = crate::env_cube::EnvironmentCube::new(device);
     let forward_probes = ForwardProbes::new(device);
+    let forward_decals = crate::decal::ForwardDecals::placeholder(device);
     let global_bind_group = global_group(
         device,
         &layouts.global,
@@ -1086,7 +1124,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device, queue: &wgpu::Queue) -> Scen
         env_cube.view(),
         &forward_probes,
         (&shadow_texture_view, &shadow_sampler),
-        (&local_shadow_maps.view, &cookies),
+        (&local_shadow_maps.view, &cookies, &forward_decals),
     );
 
     let shadow_bind_group =
@@ -1114,7 +1152,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device, queue: &wgpu::Queue) -> Scen
         indirect: &indirect,
         wire_color: &wire_color_layout,
     };
-    let core_pipelines = build_core_pipelines(device, &layout_refs, ProbeShape::default(), false, false, LightShape::default());
+    let core_pipelines = build_core_pipelines(device, &layout_refs, ProbeShape::default(), false, false, LightShape::default(), false);
     let pipelines::ShadowPipelines {
         plain: [shadow_pipeline, shadow_open_pipeline],
         cut_out: shadow_cut_out_pipelines,
@@ -1137,6 +1175,9 @@ pub fn build_scene_pipelines(device: &wgpu::Device, queue: &wgpu::Queue) -> Scen
         forward_sun_shadows: false,
         forward_local_light_maps: false,
         forward_lights: LightShape::default(),
+        forward_decals_drawn: false,
+        forward_decals,
+        forward_decal_spheres: Vec::new(),
         behind_fallback,
         behind_sampler,
         shadow_pipeline,
@@ -1368,6 +1409,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
             renderer.scene.forward_sun_shadows,
             renderer.scene.forward_local_light_maps,
             renderer.scene.forward_lights,
+            renderer.scene.forward_decals_drawn,
         );
     let pipelines::ShadowPipelines {
         plain: [shadow_pipeline, shadow_open_pipeline],

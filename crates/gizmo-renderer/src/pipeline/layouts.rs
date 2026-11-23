@@ -94,6 +94,16 @@ fn global_entries() -> Vec<Entry> {
         fragment_texture(12, Dim::D2Array, FILTERED),
         fragment_sampler(13, Sampler::Filtering),
     ]);
+    // The decals the forward-only path's lit shaders project over a surface (`DECALS`,
+    // `crate::decal::ForwardDecals`): their textures' array, the decals and the sampler. That path has
+    // no G-buffer for a decal to be drawn over, as the desktop's are. One sampled texture more: 15 of
+    // WebGPU's 16 a stage in the lit pipeline layout, with the texture group's seven.
+    #[cfg(gizmo_forward_only)]
+    entries.extend([
+        fragment_texture(15, Dim::D2Array, FILTERED),
+        buffer_entry(16, Stages::FRAGMENT, BufferType::Storage { read_only: true }),
+        fragment_sampler(17, Sampler::Filtering),
+    ]);
     entries
 }
 

@@ -521,6 +521,7 @@ fn scene_setup(
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
             scene_extent: renderer.scene_extent.last(),
+            decals: renderer.scene.forward_decal_spheres.clone(),
         },
     );
     (setup, rain_map)

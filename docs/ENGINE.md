@@ -223,14 +223,23 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    follows the parent's scale (`Relative::then`). `misket` divides its tray walls' half sizes by
 >    the tray's scale by hand. A decision to make: scale shapes by the world scale, as Unity does,
 >    or keep scale visual-only and say so where a scaled parent is given a child collider.
-> 6. **(2026-11-23) The forward-only path — every browser's and phone's frame — draws no decals
->    or volumetric light.** Found running that path's plain (not `#[ignore]`d) tests for the first
->    time: the recipe in use ran only the ignored GPU tests. Each is its own design and needs a
->    phone's measurement:
->    - decals: the deferred pass paints the G-buffer's albedo, which this path does not have. The
->      forward variant the editor once used blended a decal unlit into the lit image, and would glow
->      in the dark; a decal here has to be lit, in the lit shader (clustered, as the lights are) or
->      by a pass that has the light. That variant, dead since the editor draws deferred, is gone.
+> 6. **(2026-11-23) The forward-only path — every browser's and phone's frame — draws no
+>    volumetric light.** Found running that path's plain (not `#[ignore]`d) tests for the first
+>    time: the recipe in use ran only the ignored GPU tests, and decals, GPU particles and the fluid
+>    were missing with it. Each its own design, and a phone's measurement:
+>    - ~~decals~~ **closed the same day, in the lit shader (the owner's choice over a pass of their
+>      own):** the deferred pass paints the G-buffer's albedo, which this path does not have, so its
+>      lit shader projects each decal over the surface before the light (`shader.wgsl`'s `DECALS`
+>      tier, built only while a frame draws one): the same projection and blend as `decal.wgsl`, the
+>      surface's normal, metal and roughness kept, lit as the surface is. A fragment reads only its
+>      cluster's decals — their lists follow the lights' in the one table
+>      (`ClusterAssignment::with_decals`), so they take no binding of their own — and their textures
+>      from an array of sixteen 256² layers with mips (`decal::ForwardDecals`, a texel until a frame
+>      has a decal), copied in from the base colour the asset manager made the decal's bind group
+>      with (`AssetManager::base_colour_view_of`); the `Decal` API is unchanged. Group 0's bindings
+>      15–17, 15 of WebGPU's 16 sampled textures in the lit layout. Found with it, on both paths: a
+>      decal was placed by its `Transform` alone, so one parented to a moved entity was drawn where
+>      the entity started. Not measured on a phone: what the tier costs a frame there.
 >    - ~~GPU particles and the fluid~~ **closed the same day:** both are built on this path. The
 >      particles' pass needs only the HDR target and the depth, which every path has, and steps and
 >      draws nothing with none alive; their tests, and the fluid's, run on it (the fluid's had been
@@ -242,8 +251,8 @@ the first write (Unity's material instance — a hidden un-sharing).
 >      a phone: what live particles cost a frame there.
 >    - volumetric light: built over the G-buffer and the desktop's cascades.
 >
->    Their tests are `#[cfg(not(gizmo_forward_only))]`, the reason beside each, pointing here. STATUS
->    lists the two as absent from the browser.
+>    Its tests are `#[cfg(not(gizmo_forward_only))]`, the reason beside each, pointing here. STATUS
+>    lists it as absent from the browser.
 > 7. ~~**A body under a parent was simulated at its own `Transform` as a world pose, and drawn at
 >    its parent's pose composed with it.**~~ **Closed 2026-11-23, option (a), the owner's choice:**
 >    a rigid body is a root of the propagation. Its `Transform` is its world pose whatever its

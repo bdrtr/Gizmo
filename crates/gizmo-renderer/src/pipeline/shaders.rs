@@ -559,6 +559,10 @@ mod tests {
             // With the local lights' shadows and cookies, since 2026-11-13, alone and with the sun's.
             &["LOCAL_LIGHTS", "LOCAL_LIGHT_MAPS"],
             &["SUN_SHADOWS", "LOCAL_LIGHTS", "SIZED_LIGHTS", "RECT_LIGHTS", "LOCAL_LIGHT_MAPS", "DETAILS", "KEEPS", "LOBES", "TRANSMISSION"],
+            // With the decals, since 2026-11-23: alone, with no local light's loop to share the
+            // cluster's index, and with everything.
+            &["DECALS"],
+            &["SUN_SHADOWS", "LOCAL_LIGHTS", "SIZED_LIGHTS", "RECT_LIGHTS", "LOCAL_LIGHT_MAPS", "DETAILS", "KEEPS", "LOBES", "TRANSMISSION", "DECALS"],
         ];
         let mut offenders = Vec::new();
         for &(name, src) in shaders {
@@ -626,6 +630,10 @@ mod tests {
             &["SUN_SHADOWS", "DETAILS", "KEEPS", "LOBES"],
             &["LOCAL_LIGHTS", "LOCAL_LIGHT_MAPS"],
             &["SUN_SHADOWS", "LOCAL_LIGHTS", "SIZED_LIGHTS", "RECT_LIGHTS", "LOCAL_LIGHT_MAPS", "DETAILS", "KEEPS", "LOBES", "TRANSMISSION"],
+            // With the decals, since 2026-11-23: alone, with no local light's loop to share the
+            // cluster's index, and with everything.
+            &["DECALS"],
+            &["SUN_SHADOWS", "LOCAL_LIGHTS", "SIZED_LIGHTS", "RECT_LIGHTS", "LOCAL_LIGHT_MAPS", "DETAILS", "KEEPS", "LOBES", "TRANSMISSION", "DECALS"],
         ];
         let mut offenders = Vec::new();
         for &(name, src) in shaders {

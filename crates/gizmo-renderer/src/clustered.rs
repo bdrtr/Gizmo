@@ -95,19 +95,27 @@ impl ClusterGrid {
 /// `collect_scene_lights` produced, so what is dropped is what mattered least.
 pub const MAX_LIGHTS_PER_CLUSTER: usize = 32;
 
-/// Bytes the cluster table needs: one `(offset, count)` pair per cluster.
+/// The most decals one cluster will carry — on the forward-only path, whose lit shader projects
+/// the decals over a surface itself (`shader.wgsl`'s `DECALS`): the deferred path draws its decals
+/// as boxes over the G-buffer and needs no list. The decals' lists follow the lights' in the same
+/// table and index list ([`ClusterAssignment::with_decals`]), so they cost the lit shader no binding
+/// of their own. Overflow drops the decals that come last, as for the lights.
+pub const MAX_DECALS_PER_CLUSTER: usize = 8;
+
+/// Bytes the cluster table needs: one `(offset, count)` pair per cluster for its lights, then one for
+/// its decals ([`ClusterAssignment::with_decals`]).
 pub fn table_bytes(grid: ClusterGrid) -> u64 {
-    (grid.count() * std::mem::size_of::<[u32; 2]>()) as u64
+    (2 * grid.count() * std::mem::size_of::<[u32; 2]>()) as u64
 }
 
 /// Bytes the light-index list needs, at its **worst case** — every cluster full.
 ///
 /// Sized for the worst case on purpose: the buffers are then allocated once, the bind group never
 /// has to be rebuilt mid-frame because a list grew, and there is no truncation path to get wrong.
-/// At the default grid that is 3456 × 32 × 4 = 442 KB of VRAM, which is not worth a cleverer
-/// scheme.
+/// At the default grid that is 3456 × (32 + 8) × 4 = 553 KB of VRAM, the decals' lists included,
+/// which is not worth a cleverer scheme.
 pub fn index_bytes(grid: ClusterGrid) -> u64 {
-    (grid.count() * MAX_LIGHTS_PER_CLUSTER * std::mem::size_of::<u32>()) as u64
+    (grid.count() * (MAX_LIGHTS_PER_CLUSTER + MAX_DECALS_PER_CLUSTER) * std::mem::size_of::<u32>()) as u64
 }
 
 /// A light, as this module needs it: a sphere of influence in world space.
@@ -150,6 +158,34 @@ pub struct ClusterAssignment {
     /// lighting is wrong somewhere, and the caller can say so once instead of the renderer looking
     /// mysteriously dim.
     pub dropped: u32,
+}
+
+impl ClusterAssignment {
+    /// These lists — the lights' — followed by `decals`' ([`assign_decals`]): the table grows by a
+    /// second `grid.count()` pairs, cluster `c`'s decals at `table[c + grid.count()]`, pointing past
+    /// the lights' indices into the same list. What the forward-only lit shader reads its decals
+    /// from (`DECALS` in `shader.wgsl`). Dropped pairs add up.
+    #[must_use]
+    pub fn with_decals(mut self, decals: ClusterAssignment) -> Self {
+        let base = self.indices.len() as u32;
+        self.table.extend(decals.table.iter().map(|&[offset, count]| [offset + base, count]));
+        self.indices.extend(decals.indices);
+        self.dropped += decals.dropped;
+        self
+    }
+}
+
+/// The sphere round a decal's projector box, `model` mapping the unit cube (−0.5..0.5) into the
+/// world: its centre, and half the length of the box's diagonal.
+pub fn decal_sphere(model: Mat4) -> LightSphere {
+    let half_diagonal = 0.5 * (model.x_axis.truncate().length_squared() + model.y_axis.truncate().length_squared() + model.z_axis.truncate().length_squared()).sqrt();
+    LightSphere { center: model.w_axis.truncate(), radius: half_diagonal }
+}
+
+/// Assign decals, each its box's sphere ([`decal_sphere`]), to the clusters of `view`: as
+/// [`assign_lights`] does lights, a cluster keeping the first [`MAX_DECALS_PER_CLUSTER`].
+pub fn assign_decals(grid: ClusterGrid, view: ClusterView, decals: &[LightSphere]) -> ClusterAssignment {
+    assign_spheres(grid, view, decals, MAX_DECALS_PER_CLUSTER)
 }
 
 /// The two constants the shader needs to turn a view depth into a slice index.
@@ -219,6 +255,12 @@ pub fn assign_lights(
     view: ClusterView,
     lights: &[LightSphere],
 ) -> ClusterAssignment {
+    assign_spheres(grid, view, lights, MAX_LIGHTS_PER_CLUSTER)
+}
+
+/// [`assign_lights`] and [`assign_decals`]: every sphere to every cluster it might touch, `cap` a
+/// cluster.
+fn assign_spheres(grid: ClusterGrid, view: ClusterView, lights: &[LightSphere], cap: usize) -> ClusterAssignment {
     let cluster_count = grid.count();
     let mut lists: Vec<Vec<u32>> = vec![Vec::new(); cluster_count];
     let mut dropped = 0u32;
@@ -286,7 +328,7 @@ pub fn assign_lights(
         // asked to be finite.
         if light.radius == f32::INFINITY {
             for list in &mut lists {
-                if list.len() < MAX_LIGHTS_PER_CLUSTER {
+                if list.len() < cap {
                     list.push(light_index as u32);
                 } else {
                     dropped += 1;
@@ -316,7 +358,7 @@ pub fn assign_lights(
                         continue;
                     }
                     let list = &mut lists[cluster];
-                    if list.len() < MAX_LIGHTS_PER_CLUSTER {
+                    if list.len() < cap {
                         list.push(light_index as u32);
                     } else {
                         dropped += 1;
@@ -363,6 +405,38 @@ mod tests {
 
     fn total(a: &ClusterAssignment) -> usize {
         a.table.iter().map(|[_, c]| *c as usize).sum()
+    }
+
+    /// A decal's lists follow the lights' in the one table and index list: cluster `c`'s decals at
+    /// `table[c + count]`, pointing past the lights' indices, and each names the decal by its
+    /// place in the decals' own list. A box's sphere holds its corners.
+    #[test]
+    fn the_decals_lists_follow_the_lights() {
+        let grid = ClusterGrid::default();
+        let v = view(0.1, 100.0);
+        let lights = assign_lights(grid, v, &[LightSphere { center: Vec3::new(0.0, 0.0, -10.0), radius: 2.0 }]);
+        let model = Mat4::from_scale_rotation_translation(Vec3::new(2.0, 1.0, 4.0), gizmo_math::Quat::from_rotation_y(0.6), Vec3::new(3.0, 0.0, -20.0));
+        let sphere = decal_sphere(model);
+        for corner in [Vec3::splat(-0.5), Vec3::splat(0.5), Vec3::new(0.5, -0.5, 0.5)] {
+            assert!((model.transform_point3(corner) - sphere.center).length() <= sphere.radius + 1e-4, "a corner outside the sphere");
+        }
+        let decals = assign_decals(grid, v, &[LightSphere { center: Vec3::new(0.0, 0.0, -50.0), radius: 0.5 }, sphere]);
+        let (light_count, light_pairs) = (lights.indices.len() as u32, total(&lights));
+        let both = lights.clone().with_decals(decals.clone());
+        assert_eq!(both.table.len(), 2 * grid.count());
+        assert_eq!(&both.table[..grid.count()], &lights.table[..], "the lights' half changed");
+        assert_eq!(total(&both), light_pairs + total(&decals));
+        for (c, &[offset, count]) in both.table[grid.count()..].iter().enumerate() {
+            let [own_offset, own_count] = decals.table[c];
+            assert_eq!((offset, count), (own_offset + light_count, own_count));
+            let named = &both.indices[offset as usize..(offset + count) as usize];
+            assert_eq!(named, &decals.indices[own_offset as usize..(own_offset + own_count) as usize]);
+            assert!(named.iter().all(|&d| d < 2), "a decal named past the list");
+        }
+        let at = |p: Vec3| both.table[cluster_of_point(grid, v, p) as usize + grid.count()];
+        assert!(at(Vec3::new(3.0, 0.0, -20.0))[1] >= 1, "the box's own cluster has no decal");
+        assert_eq!(at(Vec3::new(-8.0, 3.0, -10.0))[1], 0, "a cluster far from every box has one");
+        assert!((table_bytes(grid) as usize) >= both.table.len() * 8 && (index_bytes(grid) as usize) >= both.indices.len() * 4);
     }
 
     /// The table always covers the grid, and an empty scene fills no cluster.

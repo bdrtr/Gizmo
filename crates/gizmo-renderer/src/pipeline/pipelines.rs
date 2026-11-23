@@ -274,9 +274,10 @@ pub(super) fn build_core_pipelines(
     sun_shadows: bool,
     local_light_maps: bool,
     lights: super::LightShape,
+    decals: bool,
 ) -> CorePipelines {
     let layouts = ForwardLayouts::new(device, layouts);
-    let scene = SceneDefs::new(probes, sun_shadows, local_light_maps, lights);
+    let scene = SceneDefs::new(probes, sun_shadows, local_light_maps, lights, decals);
     let LitPipelines { render, render_double_sided, wireframe, transparent, blend_lit, lobes, render_details, transmissive } =
         lit_pipelines(device, &layouts, &scene);
     let UnlitPipelines {
@@ -378,7 +379,8 @@ impl ForwardLayouts {
 /// What the forward-only path builds its lit shaders for: the scene's reflection probes
 /// (`SceneState::set_forward_reflections`), whether they read the sun's shadow
 /// (`forward_sun_shadows`) and the local lights' shadows and cookies (`forward_local_light_maps`),
-/// and the kinds of local light it has (`forward_lights`). A branch a phone does not take still
+/// the kinds of local light it has (`forward_lights`), and whether they project decals
+/// (`forward_decals_drawn`). A branch a phone does not take still
 /// costs it. The desktop's shaders are built with all of it, deciding per pixel, and take none.
 #[derive(Default)]
 struct SceneDefs {
@@ -387,7 +389,7 @@ struct SceneDefs {
 }
 
 impl SceneDefs {
-    fn new(probes: super::ProbeShape, sun_shadows: bool, local_light_maps: bool, lights: super::LightShape) -> Self {
+    fn new(probes: super::ProbeShape, sun_shadows: bool, local_light_maps: bool, lights: super::LightShape, decals: bool) -> Self {
         if !cfg!(gizmo_forward_only) {
             return Self::default();
         }
@@ -395,7 +397,7 @@ impl SceneDefs {
         let [local, sized, rect] = lights.defs();
         Self {
             probes: probes.defs().to_vec(),
-            lights: vec![("SUN_SHADOWS", on(sun_shadows)), ("LOCAL_LIGHT_MAPS", on(local_light_maps)), local, sized, rect],
+            lights: vec![("SUN_SHADOWS", on(sun_shadows)), ("LOCAL_LIGHT_MAPS", on(local_light_maps)), local, sized, rect, ("DECALS", on(decals))],
         }
     }
 

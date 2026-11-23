@@ -85,6 +85,7 @@ impl super::AssetManager {
         let bg = self
             .assemble_single_texture_bind_group(device, queue, layout, &view, &sampler, cache_key);
         self.texture_cache.insert(cache_key.to_string(), bg.clone());
+        self.base_colour_views.insert(cache_key.to_string(), Arc::new(view));
         Ok(bg)
     }
 
@@ -307,6 +308,11 @@ impl super::AssetManager {
         // nothing, and a material that comes back to those sources builds it again (the textures
         // themselves stay, in `view_cache`). Swept on a miss only: the cache grows on nothing else.
         self.material_cache.retain(|_, held| Arc::strong_count(held) > 1);
+        let (textures, materials) = (&self.texture_cache, &self.material_cache);
+        self.base_colour_views.retain(|key, _| textures.contains_key(key) || materials.contains_key(key));
+        if let Some(view) = base_view {
+            self.base_colour_views.insert(key.clone(), view);
+        }
         self.material_cache.insert(key, bind_group.clone());
         bind_group
     }
@@ -394,6 +400,27 @@ impl super::AssetManager {
             .find(|(_, cached)| Arc::ptr_eq(cached, bind_group))
             .map(|(key, _)| key.clone())
             .filter(|key| key != Self::WHITE_TEXTURE)
+    }
+
+    /// The base colour texture a material bind group from this manager was made with — what a
+    /// [`Decal`](crate::components::Decal) drawn with it projects on the forward-only path, which has
+    /// no G-buffer to draw the bind group over and copies the texture into its decal array instead.
+    /// `None` for the white one, which is a material with no texture, and for a bind group this
+    /// manager did not make.
+    #[must_use]
+    pub fn base_colour_view_of(&self, bind_group: &Arc<wgpu::BindGroup>) -> Option<Arc<wgpu::TextureView>> {
+        fn made<'a>(cache: &'a std::collections::HashMap<String, Arc<wgpu::BindGroup>>, bind_group: &Arc<wgpu::BindGroup>) -> Option<&'a String> {
+            cache.iter().find(|(_, cached)| Arc::ptr_eq(cached, bind_group)).map(|(key, _)| key)
+        }
+        let key = made(&self.texture_cache, bind_group).or_else(|| made(&self.material_cache, bind_group))?;
+        self.base_colour_views.get(key).cloned()
+    }
+
+    /// Whether `bind_group` is one this manager made: the white material or one in its caches. A
+    /// decal over a bind group it did not make has no texture the forward-only path can find.
+    #[must_use]
+    pub fn made(&self, bind_group: &Arc<wgpu::BindGroup>) -> bool {
+        self.texture_cache.values().chain(self.material_cache.values()).any(|cached| Arc::ptr_eq(cached, bind_group))
     }
 
     /// Return (creating once) a 1×1 opaque-white texture.

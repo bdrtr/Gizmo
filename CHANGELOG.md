@@ -549,6 +549,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The browser and the phone draw decals, lit.** The forward-only path's lit shader projects each
+  decal over the surface it shades before the light, as the deferred pass paints the G-buffer's
+  albedo — the same projection and blend, the surface's normal and metal kept — in a tier built
+  only while a frame has a decal. A fragment reads its cluster's decals (their lists follow the
+  lights' in the cluster table: `ClusterAssignment::with_decals`, `clustered::assign_decals`,
+  `decal_sphere`), their textures from an array of sixteen 256² layers (`decal::ForwardDecals`),
+  copied from the base colour the decal's bind group was made with
+  (`AssetManager::base_colour_view_of`, `AssetManager::made`). The `Decal` API is unchanged.
+  docs/ENGINE.md §3 item 6 (the owner's choice: in the lit shader).
+  `a_decal_is_lit_as_its_surface_is`, `a_textured_decal_shows_its_texture`, and `decals_reach_the_frame`
+  on both paths.
+  - **Fixed:** a decal was placed by its `Transform` alone, so one parented to an entity that had
+    moved was drawn where the entity started; it is where its `GlobalTransform` is
+    (`a_parented_decal_is_drawn_where_it_is_in_the_world`).
 - **The browser and the phone draw the GPU particles and the fluid.** The forward-only path built
   neither; its particle and fluid tests run on it now (the fluid's skipped there in silence).
   docs/ENGINE.md §3 item 6.

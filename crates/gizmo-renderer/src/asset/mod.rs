@@ -355,6 +355,11 @@ pub struct AssetManager {
     texture_cache: std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
     /// Texture views by cache key and whether they were read as sRGB: what a material's maps are.
     view_cache: std::collections::HashMap<(String, bool), Arc<wgpu::TextureView>>,
+    /// The base colour view of every material bind group in [`texture_cache`](Self::texture_cache)
+    /// and [`material_cache`](Self::material_cache) that has one, under the same key: what a decal
+    /// drawn with that bind group projects on the forward-only path, which copies it into its decal
+    /// array ([`base_colour_view_of`](Self::base_colour_view_of)).
+    base_colour_views: std::collections::HashMap<String, Arc<wgpu::TextureView>>,
     /// Material bind groups by the sources and strengths they were built from
     /// ([`load_material`](Self::load_material)). An entry nothing else holds is dropped when the next
     /// one is made, so a material whose strengths are animated costs the values it is drawn with,
@@ -405,6 +410,7 @@ impl AssetManager {
             data_meshes: std::collections::HashMap::new(),
             texture_cache: std::collections::HashMap::new(),
             view_cache: std::collections::HashMap::new(),
+            base_colour_views: std::collections::HashMap::new(),
             material_cache: std::collections::HashMap::new(),
             gltf_scenes: std::collections::HashMap::new(),
             placeholder_mesh: None,
