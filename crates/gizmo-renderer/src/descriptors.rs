@@ -52,6 +52,26 @@ pub(crate) fn texture_2d_entry(binding: u32, visibility: wgpu::ShaderStages, fil
     }
 }
 
+/// A single-sampled texture of `dimension` and `sample_type` at `binding`, seen by the fragment stage:
+/// what nearly every texture a render pipeline binds is.
+pub(crate) fn fragment_texture(
+    binding: u32,
+    dimension: wgpu::TextureViewDimension,
+    sample_type: wgpu::TextureSampleType,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture { sample_type, view_dimension: dimension, multisampled: false },
+        count: None,
+    }
+}
+
+/// A sampler of `kind` at `binding`, seen by the fragment stage.
+pub(crate) fn fragment_sampler(binding: u32, kind: wgpu::SamplerBindingType) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(kind), count: None }
+}
+
 /// A bind group's entries for `buffers`, each bound whole at its index: the first at binding 0.
 pub(crate) fn whole_buffer_entries<'a>(buffers: &[&'a wgpu::Buffer]) -> Vec<wgpu::BindGroupEntry<'a>> {
     buffers
