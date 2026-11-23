@@ -50,6 +50,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`sarkac`, a pendulum wave.** Fifteen ball-socket pendulums on a static beam, the k-th long
+  enough to swing 51 + k times a minute, released together, undamped. `--test` measures every
+  period over thirty seconds against the analytic one (a compound pendulum at large amplitude)
+  and every amplitude against the release angle: 0.002 % and 0.13 % now. It found the point
+  constraint below.
 - **`tahterevalli`, a seesaw that throws a ball.** The game:
   - a plank on a hinge (`Joint::hinge`) at the top of a static block, with a lip that holds the
     ball, a child collider of the plank;
@@ -850,6 +855,19 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A joint's anchor is held as one point, and a pendulum swings at its period.** The point
+  constraint that hinges, ball sockets and fixed joints share was three rows along x, y and z,
+  each solved alone. Through the rotation an anchor's lever gives a body they are coupled, by
+  `m·L²/I`, and where the lever is long against the inertia they did not converge:
+  - a 4 cm bob on a 0.34 m string swung 0.12 % slow and lost 0.6 % of its amplitude in 30 s;
+  - a 4 mm one swung 33 % slow and lost half its amplitude;
+  - on a 1 m string, 324 % slow.
+
+  More iterations or a stiffer joint changed little. The three are one 3×3 block now
+  (`JointSolver::apply_point_constraint`), and every one of those pendulums is within 0.01 % of
+  its period with its amplitude kept. `pendulum.rs` is red on the code before.
+  `golden_hinge_pendulum_swing` and its Baumgarte twin are re-blessed: their arm error, the file's
+  sharpest instrument, fell 77 % and 65 %.
 - **A box a kinematic body pushes stays awake, and the game sees where it is.** An island's sleep
   read only its dynamic members' counters, and a kinematic one has none. So an island of a sleeping
   box and the kinematic paddle pushing it was all-eligible while the paddle woke the box: the box
