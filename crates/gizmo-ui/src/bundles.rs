@@ -1,4 +1,4 @@
-use crate::components::{Style, Node, BackgroundColor, Interaction, Clicked};
+use crate::components::{Style, Node, BackgroundColor, Interaction, Clicked, DoubleClicked};
 
 /// Bundle for a plain, non-interactive UI element.
 #[derive(Default)]
@@ -51,6 +51,8 @@ pub struct ButtonBundle {
     pub interaction: Interaction,
     /// Set for the one frame a click completes — see [`Clicked`].
     pub clicked: Clicked,
+    /// Set for the one frame a double click completes — see [`DoubleClicked`].
+    pub double_clicked: DoubleClicked,
 }
 
 impl gizmo_core::component::Bundle for ButtonBundle {
@@ -61,6 +63,7 @@ impl gizmo_core::component::Bundle for ButtonBundle {
             gizmo_core::archetype::ComponentInfo::of::<BackgroundColor>(),
             gizmo_core::archetype::ComponentInfo::of::<Interaction>(),
             gizmo_core::archetype::ComponentInfo::of::<Clicked>(),
+            gizmo_core::archetype::ComponentInfo::of::<DoubleClicked>(),
         ]
     }
 
@@ -70,6 +73,7 @@ impl gizmo_core::component::Bundle for ButtonBundle {
         world.add_component(entity, self.background_color);
         world.add_component(entity, self.interaction);
         world.add_component(entity, self.clicked);
+        world.add_component(entity, self.double_clicked);
     }
 
     unsafe fn write_to_archetype(
@@ -83,6 +87,7 @@ impl gizmo_core::component::Bundle for ButtonBundle {
         self.background_color.write_to_archetype(arch, row, tick);
         self.interaction.write_to_archetype(arch, row, tick);
         self.clicked.write_to_archetype(arch, row, tick);
+        self.double_clicked.write_to_archetype(arch, row, tick);
     }
 }
 
@@ -134,8 +139,8 @@ mod tests {
         assert_eq!(bg.0, Vec4::new(1.0, 1.0, 1.0, 1.0));
         // A fresh button has not been clicked.
         assert_eq!(world.query::<&Clicked>().get(e).copied(), Some(Clicked(false)));
-        // Button advertises two more components (Interaction, Clicked) than a plain node.
-        assert_eq!(ButtonBundle::get_infos().len(), 5);
-        assert_eq!(ButtonBundle::get_infos().len(), NodeBundle::get_infos().len() + 2);
+        // Button advertises three more components (Interaction, Clicked, DoubleClicked) than a plain node.
+        assert_eq!(ButtonBundle::get_infos().len(), 6);
+        assert_eq!(ButtonBundle::get_infos().len(), NodeBundle::get_infos().len() + 3);
     }
 }

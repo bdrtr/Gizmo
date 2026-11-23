@@ -799,6 +799,7 @@ fn the_game_view_draws_what_the_game_draws_hud_included() {
                 position: gizmo::math::Vec2::new(W as f32 * 0.25, H as f32 * 0.25),
                 size: gizmo::math::Vec2::new(W as f32 * 0.5, H as f32 * 0.5),
                 visible: true,
+                ..Default::default()
             },
             gizmo::ui::BackgroundColor(Vec4::new(0.0, 0.0, 1.0, 1.0)),
             gizmo::ui::ZIndex(1000),

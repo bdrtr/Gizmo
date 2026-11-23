@@ -151,7 +151,7 @@ pub use components::*;
 pub use bundles::*;
 pub use layout::*;
 pub use interaction::{
-    layer_with, pointer_over_ui, ui_drag_system, ui_drop_system, ui_dropdown_system, ui_tooltip_system, ui_layer, ui_scroll_system, ui_slider_system, ui_toggle_system,
+    layer_with, pointer_over_ui, ui_double_click_system, ui_drag_system, ui_drop_system, ui_dropdown_system, ui_tooltip_system, ui_layer, ui_scroll_system, ui_slider_system, ui_toggle_system,
     UiNavigation,
 };
 pub use text_input::{text_input_system, TextInput};
@@ -168,6 +168,7 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<Node>();
     world.register_component_type::<Interaction>();
     world.register_component_type::<Clicked>();
+    world.register_component_type::<DoubleClicked>();
     world.register_component_type::<ClipContent>();
     world.register_component_type::<ZIndex>();
     world.register_component_type::<Scroll>();
@@ -224,6 +225,12 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
         interaction::ui_toggle_system
             .into_config()
             .label("ui_toggle")
+            .after("ui_interaction"),
+    );
+    schedule.add_di_system(
+        interaction::ui_double_click_system
+            .into_config()
+            .label("ui_double_click")
             .after("ui_interaction"),
     );
     schedule.add_di_system(
@@ -287,7 +294,7 @@ pub mod prelude {
     pub use crate::{
         components::{
             AlignContent, AlignItems, AlignSelf, BackgroundColor, Display, FlexDirection,
-            Clicked, ClipContent, Drag, Dropdown, FlexWrap, Interaction, JustifyContent, ProgressBar, Scroll, Slider, Toggle, ZIndex, Node, PositionType, Style, UiRect, UiRoot, Val,
+            Clicked, ClipContent, DoubleClicked, Drag, Dropdown, FlexWrap, Interaction, JustifyContent, ProgressBar, Scroll, Slider, Toggle, ZIndex, Node, PositionType, Style, UiRect, UiRoot, Val,
         },
         bundles::{NodeBundle, ButtonBundle},
     };

@@ -192,6 +192,18 @@ fn ui_boxes(_world: &World) -> Vec<UiBox> {
     Vec::new()
 }
 
+/// The box a `Text` on a laid-out UI node is placed in: the node's inside its padding and border
+/// (`Node::content_position`, `content_size`), top-left and size. `None` for an entity with no node.
+#[cfg(feature = "ui")]
+fn ui_text_box(world: &World, id: Entity) -> Option<(Vec2, Vec2)> {
+    world.query::<&crate::ui::Node>().get(id).map(|n| (n.content_position(), n.content_size()))
+}
+
+#[cfg(not(feature = "ui"))]
+fn ui_text_box(_world: &World, _id: Entity) -> Option<(Vec2, Vec2)> {
+    None
+}
+
 
 
 
@@ -597,9 +609,10 @@ impl<'w> TextLookups<'w> {
 /// # What a `Node` on the same entity does
 ///
 /// It **positions the text**: a screen-space `Text` beside a `gizmo-ui` [`Node`](crate::ui::Node)
-/// is placed at the box's own corner, chosen by the text's anchor — `TopLeft` at the box's
-/// top-left, `Center` in the middle of it — and the position the component itself carries is
-/// ignored. That is the only thing putting both on one entity can sensibly mean, and it is what
+/// is placed at the corner of the box's content — inside its padding and border, as its children
+/// are — chosen by the text's anchor: `TopLeft` at the content's top-left, `Center` in the middle
+/// of it. The position the component itself carries is ignored; a label set in from its box's
+/// edge says so with the node's padding (on its very edge until 2026-11-24, whatever the padding). That is the only thing putting both on one entity can sensibly mean, and it is what
 /// makes a laid-out button able to have a label. A `Node` does **not** clip the text and does not
 /// resize it: a string longer than its box overflows it, because `gizmo-ui` has no clipping.
 /// Nor does it wrap the text to its width on its own: `gizmo-ui` never measures text, so a box
@@ -674,8 +687,10 @@ pub fn record_text(
             // button rather than centring it on the button's top-left.
             let anchor = boxes
                 .iter()
-                .find(|(e, ..)| *e == id)
-                .map(|(_, position, size, _)| *position + *size * item.anchor.factors());
+                .any(|(e, ..)| *e == id)
+                .then(|| ui_text_box(world, id))
+                .flatten()
+                .map(|(position, size)| position + size * item.anchor.factors());
             (Vec3::ZERO, anchor)
         };
         // A clipping UI box above it (or on it) cuts screen text to the box.
@@ -794,7 +809,7 @@ mod clip_tests {
     use crate::ui::{ClipContent, Node};
 
     fn node(x: f32, y: f32, w: f32, h: f32) -> Node {
-        Node { position: Vec2::new(x, y), size: Vec2::new(w, h), visible: true }
+        Node { position: Vec2::new(x, y), size: Vec2::new(w, h), visible: true, ..Default::default() }
     }
 
     /// A clipping panel cuts what is under it to its box; a nested one narrows it to the

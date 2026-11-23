@@ -333,6 +333,20 @@ impl UiContext {
         ))
     }
 
+    /// The padding plus border of `entity` from the last layout, layout pixels: left, top, right,
+    /// bottom.
+    pub(crate) fn insets(&self, entity: Entity) -> gizmo_math::Vec4 {
+        let Some(layout) = self.entity_to_node.get(&entity).and_then(|&n| self.taffy.layout(n).ok()) else {
+            return gizmo_math::Vec4::ZERO;
+        };
+        gizmo_math::Vec4::new(
+            layout.padding.left + layout.border.left,
+            layout.padding.top + layout.border.top,
+            layout.padding.right + layout.border.right,
+            layout.padding.bottom + layout.border.bottom,
+        )
+    }
+
     /// The right and bottom padding plus border of `entity` from the last layout — the room a
     /// scrolled-to-the-end list keeps below its last row, as it keeps above its first.
     pub(crate) fn inner_end(&self, entity: Entity) -> Vec2 {

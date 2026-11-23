@@ -19808,7 +19808,7 @@ async fn overlapping_boxes(red_z: Option<i32>, blue_z: Option<i32>) -> [u8; 4] {
         (gizmo_math::Vec2::new(40.0, 40.0), Vec4::new(0.0, 0.0, 1.0, 1.0), blue_z),
     ] {
         let e = world.spawn_bundle((
-            crate::ui::Node { position: pos, size: gizmo_math::Vec2::new(60.0, 60.0), visible: true },
+            crate::ui::Node { position: pos, size: gizmo_math::Vec2::new(60.0, 60.0), visible: true, ..Default::default() },
             crate::ui::BackgroundColor(colour),
         ));
         if let Some(z) = z {
@@ -19870,7 +19870,7 @@ fn a_screen_fade_covers_everything_including_the_ui() {
         let mut world = World::new();
         world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
         world.spawn_bundle((
-            crate::ui::Node { position: gizmo_math::Vec2::ZERO, size: gizmo_math::Vec2::splat(64.0), visible: true },
+            crate::ui::Node { position: gizmo_math::Vec2::ZERO, size: gizmo_math::Vec2::splat(64.0), visible: true, ..Default::default() },
             crate::ui::BackgroundColor(Vec4::new(1.0, 0.0, 0.0, 1.0)),
             crate::ui::ZIndex(1000),
         ));
@@ -19923,7 +19923,7 @@ fn a_tooltip_draws_a_box_and_its_text_beside_the_pointer() {
         input.set_mouse_position(10.0, 10.0);
         world.insert_resource(input);
         world.spawn_bundle((
-            crate::ui::Node { position: gizmo_math::Vec2::ZERO, size: gizmo_math::Vec2::splat(20.0), visible: true },
+            crate::ui::Node { position: gizmo_math::Vec2::ZERO, size: gizmo_math::Vec2::splat(20.0), visible: true, ..Default::default() },
             crate::ui::Interaction::Hovered,
             crate::ui::Tooltip::new(tip).with_delay(0.0),
             gizmo_renderer::components::Text::screen("", font, 14.0, gizmo_math::Vec2::ZERO),
@@ -20144,7 +20144,7 @@ async fn render_ui_scene(ui_box: bool, label: bool) -> Vec<u8> {
             e,
             crate::ui::Node {
                 position: gizmo_math::Vec2::new(10.0, 10.0),
-                size: gizmo_math::Vec2::new(60.0, 30.0), visible: true },
+                size: gizmo_math::Vec2::new(60.0, 30.0), visible: true, ..Default::default() },
         );
         world.add_component(
             e,

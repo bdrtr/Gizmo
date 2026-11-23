@@ -226,6 +226,7 @@ fn register_facade_components(reg: &mut scene::registry::SceneRegistry) {
         reg_or_warn!(gizmo_ui::ClipContent, "ClipContent");
         reg_or_warn!(gizmo_ui::Interaction, "Interaction");
         reg_or_warn!(gizmo_ui::Clicked, "Clicked");
+        reg_or_warn!(gizmo_ui::DoubleClicked, "DoubleClicked");
         reg_or_warn!(gizmo_ui::Scroll, "Scroll");
         reg_or_warn!(gizmo_ui::Drag, "Drag");
         reg_or_warn!(gizmo_ui::DropTarget, "DropTarget");

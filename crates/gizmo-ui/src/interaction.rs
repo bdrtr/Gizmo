@@ -3,7 +3,7 @@ use gizmo_core::query::Query;
 use gizmo_core::system::{Res, ResMut};
 use gizmo_core::input::{GamepadButton, Input};
 use crate::components::{
-    Clicked, ClipContent, Drag, DropTarget, Dropdown, Interaction, Node, Scroll, Slider, Toggle, Tooltip, ZIndex,
+    Clicked, ClipContent, DoubleClicked, Drag, DropTarget, Dropdown, Interaction, Node, Scroll, Slider, Toggle, Tooltip, ZIndex,
 };
 use gizmo_core::component::Parent;
 
@@ -383,6 +383,19 @@ pub fn ui_dropdown_system(
     }
 }
 
+/// Steps every [`DoubleClicked`] on this frame's [`Clicked`] and the real time since the last. Runs
+/// after `ui_interaction_system`, which sets the click.
+pub fn ui_double_click_system(mut clicks: Query<(&Clicked, &mut DoubleClicked)>, time: Option<Res<gizmo_core::time::Time>>) {
+    let dt = time.map_or(0.0, |t| t.raw_dt());
+    for (clicked, mut double) in clicks.iter_mut() {
+        let mut next = *double;
+        next.step(dt, clicked.0);
+        if next != *double {
+            *double = next;
+        }
+    }
+}
+
 /// Flips every [`Toggle`] whose element was [`Clicked`] this frame. Runs after
 /// `ui_interaction_system`, which sets the click.
 pub fn ui_toggle_system(mut toggles: Query<(&Clicked, &mut Toggle)>) {
@@ -621,7 +634,7 @@ mod tests {
     fn node(pos: (f32, f32), size: (f32, f32)) -> Node {
         Node {
             position: Vec2::new(pos.0, pos.1),
-            size: Vec2::new(size.0, size.1), visible: true }
+            size: Vec2::new(size.0, size.1), visible: true, ..Default::default() }
     }
 
     /// One frame of the real system over `world`, with the mouse at `at` and the primary button
@@ -1206,6 +1219,43 @@ mod tests {
         assert_eq!(focused(&world), Some(top), "up still moves the focus");
         slider_frame(&mut world, (500.0, 500.0), false, Some("right"));
         assert!((value(&world) - 0.4).abs() < 1e-6, "an unfocused slider took the key");
+    }
+
+    /// **Two clicks on one button within half a second are a double click, on the second's frame
+    /// only.** Two further apart are two clicks; a third quick one starts again.
+    #[test]
+    fn two_quick_clicks_are_a_double_click() {
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        let (mut world, button, _) = button_world();
+        world.add_component(world.live(button).unwrap(), DoubleClicked::default());
+        world.insert_resource(gizmo_core::time::Time::new());
+        // One frame `dt` real seconds after the last, the button held or not; whether it was
+        // double-clicked on it.
+        fn step(w: &mut gizmo_core::World, button: Entity, down: bool, dt: f32) -> bool {
+            if let Some(mut clock) = w.get_resource_mut::<gizmo_core::time::Time>() {
+                clock.update(dt);
+            }
+            frame(w, (50.0, 20.0), down);
+            let mut s = Schedule::new();
+            s.add_di_system(ui_double_click_system.into_config());
+            s.build();
+            s.run(w, 0.0);
+            w.query::<&DoubleClicked>().get(button).unwrap().get()
+        }
+        let step = |w: &mut gizmo_core::World, down: bool, dt: f32| step(w, button, down, dt);
+        let click = |w: &mut gizmo_core::World, gap: f32| {
+            let pressed = step(w, true, gap);
+            let released = step(w, false, 1.0 / 60.0);
+            assert!(!pressed, "a press is not a click");
+            released
+        };
+        assert!(!click(&mut world, 1.0 / 60.0), "one click is not a double click");
+        assert!(click(&mut world, 0.2), "a second one 0.2 s later is");
+        assert!(!step(&mut world, false, 1.0 / 60.0), "on its frame only");
+        assert!(!click(&mut world, 0.1), "a third quick one starts again");
+        assert!(click(&mut world, 0.1), "and the fourth finishes the next");
+        assert!(!click(&mut world, 1.0), "a second later is a first click again");
+        assert!(!click(&mut world, 0.6), "and 0.6 s after that, too");
     }
 
     /// A toggle flips once per click — the frame the click completes — and reports that frame

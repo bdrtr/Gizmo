@@ -236,6 +236,10 @@ pub fn ui_layout_system(
         if let Some(mut node) = nodes.get_mut(entity) {
             node.size = size * s;
             node.position = abs * s;
+            let inset = ctx.insets(entity) * s;
+            if node.inset != inset {
+                node.inset = inset;
+            }
             if node.visible != visible {
                 node.visible = visible;
             }
@@ -331,6 +335,30 @@ mod tests {
 
     fn node_of(world: &World, e: Entity) -> Node {
         *world.query::<&Node>().get(e).unwrap()
+    }
+
+    /// **A node says how far in its content starts**: its padding and border, each side, scaled as
+    /// its box is — which is where a `Text` on it is placed (`Node::content_position`).
+    #[test]
+    fn a_node_carries_its_padding_and_border_as_its_inset() {
+        let (mut world, mut schedule) = make_world();
+        set_window(&mut world, 800.0, 600.0);
+        let style = Style {
+            width: Val::Px(100.0),
+            height: Val::Px(50.0),
+            padding: UiRect::new(Val::Px(6.0), Val::Px(2.0), Val::Px(3.0), Val::Px(4.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            ..Default::default()
+        };
+        let e = world.spawn_bundle(crate::NodeBundle { style, ..Default::default() });
+        schedule.run(&mut world, 0.016);
+        let n = node_of(&world, e);
+        assert_eq!(n.inset, gizmo_math::Vec4::new(7.0, 4.0, 3.0, 5.0));
+        assert_vec2(n.content_position() - n.position, 7.0, 4.0);
+        assert_vec2(n.content_size(), 90.0, 41.0);
+        world.insert_resource(crate::UiScale::fixed(2.0));
+        schedule.run(&mut world, 0.016);
+        assert_eq!(node_of(&world, e).inset, gizmo_math::Vec4::new(14.0, 8.0, 6.0, 10.0), "scaled with the box");
     }
 
     fn assert_vec2(got: Vec2, x: f32, y: f32) {
@@ -949,7 +977,7 @@ mod tests {
         let btn = world.spawn();
         world.add_component(
             btn,
-            Node { position: Vec2::new(100.0, 100.0), size: Vec2::new(50.0, 30.0), visible: true },
+            Node { position: Vec2::new(100.0, 100.0), size: Vec2::new(50.0, 30.0), visible: true, ..Default::default() },
         );
         world.add_component(btn, Interaction::None);
 
@@ -992,14 +1020,14 @@ mod tests {
         let a = world.spawn();
         world.add_component(
             a,
-            Node { position: Vec2::new(0.0, 0.0), size: Vec2::new(50.0, 50.0), visible: true },
+            Node { position: Vec2::new(0.0, 0.0), size: Vec2::new(50.0, 50.0), visible: true, ..Default::default() },
         );
         world.add_component(a, Interaction::None);
 
         let b = world.spawn();
         world.add_component(
             b,
-            Node { position: Vec2::new(100.0, 0.0), size: Vec2::new(50.0, 50.0), visible: true },
+            Node { position: Vec2::new(100.0, 0.0), size: Vec2::new(50.0, 50.0), visible: true, ..Default::default() },
         );
         world.add_component(b, Interaction::None);
 

@@ -488,6 +488,26 @@ pub struct Node {
     /// Added 2026-11-15. Before it, the label of a node inside a closed panel still drew — at the
     /// window's top-left corner, where its never-laid-out box sat (`dunya`'s inventory title).
     pub visible: bool,
+    /// How far in from each side its content starts — its padding and border, in window pixels:
+    /// `x` left, `y` top, `z` right, `w` bottom. A `Text` on the node is placed in the box inside
+    /// them ([`content_position`](Self::content_position), [`content_size`](Self::content_size)), as
+    /// its children are. Added 2026-11-24: a label could only sit on its box's very edge (`sabir`'s
+    /// cards).
+    pub inset: gizmo_math::Vec4,
+}
+
+impl Node {
+    /// The top-left of the box inside its padding and border, window pixels.
+    #[must_use]
+    pub fn content_position(&self) -> Vec2 {
+        self.position + Vec2::new(self.inset.x, self.inset.y)
+    }
+
+    /// The size of the box inside its padding and border, window pixels; never negative.
+    #[must_use]
+    pub fn content_size(&self) -> Vec2 {
+        (self.size - Vec2::new(self.inset.x + self.inset.z, self.inset.y + self.inset.w)).max(Vec2::ZERO)
+    }
 }
 
 impl Default for Node {
@@ -496,6 +516,7 @@ impl Default for Node {
             size: Vec2::ZERO,
             position: Vec2::ZERO,
             visible: true,
+            inset: gizmo_math::Vec4::ZERO,
         }
     }
 }
@@ -554,6 +575,48 @@ pub struct Clicked(
     #[serde(skip)]
     pub bool,
 );
+
+/// Whether the element was **double-clicked** this frame: `true` for the frame a second
+/// [`Clicked`] completes within [`WINDOW`](Self::WINDOW) of the first, on the same element — a card
+/// sent home, a file opened, a word selected. A third click starts again: three quick clicks are
+/// one double click and the start of the next.
+///
+/// Counted in real time, as a pause does not stop a hand: a menu is double-clicked while the game is
+/// paused. A tap is a click, so two quick taps are a double tap. Part of
+/// [`ButtonBundle`](crate::ButtonBundle) beside [`Clicked`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct DoubleClicked {
+    // A pulse and a clock between two clicks: a reopened element has been clicked neither once nor
+    // twice.
+    #[serde(skip)]
+    now: bool,
+    /// Seconds since the last click that could be a double click's first, `None` with none.
+    #[serde(skip)]
+    since: Option<f32>,
+}
+
+impl DoubleClicked {
+    /// How close the second click has to follow the first, in seconds: what most desktops default to.
+    pub const WINDOW: f32 = 0.5;
+
+    /// The second click of a double click completed this frame.
+    #[must_use]
+    pub fn get(&self) -> bool {
+        self.now
+    }
+
+    /// One frame: `dt` real seconds passed, and `clicked` says whether a click completed in it.
+    pub(crate) fn step(&mut self, dt: f32, clicked: bool) {
+        self.since = self.since.map(|s| s + dt).filter(|s| *s <= Self::WINDOW);
+        self.now = clicked && self.since.is_some();
+        self.since = match (clicked, self.now) {
+            (true, false) => Some(0.0),
+            _ if self.now => None,
+            _ => self.since,
+        };
+    }
+}
 
 /// Makes an element draggable, and says how the drag is going — a slider's knob, an inventory
 /// item, a window's title bar. Add it to any element that has an [`Interaction`].
@@ -1278,7 +1341,7 @@ impl Scroll {
 /// Marker component for the root of a UI tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct UiRoot;
-gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag, DropTarget, Slider, ProgressBar, Toggle, Dropdown, Tooltip);
+gizmo_core::impl_component!(Style, Node, Interaction, Clicked, DoubleClicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag, DropTarget, Slider, ProgressBar, Toggle, Dropdown, Tooltip);
 
 #[cfg(test)]
 mod tests {

@@ -525,7 +525,7 @@ fn a_render_world_draws_every_frame_of_a_changing_game_as_the_game_itself() {
         let to_hide = game.spawn_bundle(cube(-1.5, Vec4::new(0.9, 0.9, 0.1, 1.0)));
         #[cfg(feature = "ui")]
         let panel = game.spawn_bundle((
-            crate::ui::Node { position: gizmo_math::Vec2::new(4.0, 4.0), size: gizmo_math::Vec2::new(30.0, 12.0), visible: true },
+            crate::ui::Node { position: gizmo_math::Vec2::new(4.0, 4.0), size: gizmo_math::Vec2::new(30.0, 12.0), visible: true, ..Default::default() },
             crate::ui::BackgroundColor(Vec4::new(0.1, 0.2, 0.9, 1.0)),
         ));
 

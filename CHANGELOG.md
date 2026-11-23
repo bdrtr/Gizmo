@@ -549,6 +549,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`sabir`, a game of Klondike** — the engine's first card game: seven columns, the stock, four
+  foundations; a card and the ones on it dragged together, a double click sends one home, undo,
+  a new deal, and the rest played out by itself once every card is face up. Each move slides from
+  where it was (`UiTransform` and `UiTween`). `--test` checks the rules, a drag, a double click and
+  a click on the stock with the real pointer, and a greedy game for 52 cards each once. It found:
+  - **No double click.** `DoubleClicked`, in `ButtonBundle` beside `Clicked`: the frame a second
+    click completes within half a second (`DoubleClicked::WINDOW`) of the first on the same element,
+    in real time; a third quick one starts again. `two_quick_clicks_are_a_double_click`.
+  - **A label could not be set in from its box's edge.** A `Text` on a UI node sat on the node's
+    very corner whatever its padding; the position it carries is ignored there. It is placed in the
+    content box now — inside the padding and border, as the node's children are: `Node::inset`
+    (written by the layout, scaled with it), `content_position`, `content_size`. A label on a padded
+    node anchored to a corner moves in by the padding; a centred one with even padding stays.
+    `a_node_carries_its_padding_and_border_as_its_inset`.
 - **An Android game survives the screen going off, or the home button, while it starts.** The
   renderer's pipelines — some fifteen seconds on an Adreno 618 — were built inside the first
   `resumed`, on the event loop's thread, and the system waits on that thread at every turn of the
