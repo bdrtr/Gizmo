@@ -1,11 +1,11 @@
-// soft_body.wgsl
-
-struct SoftBodyNode {
-    position: vec3<f32>,
-    mass: f32,
-    velocity: vec3<f32>,
-    is_fixed: u32,
-}
+// soft_body.wgsl — the elastic forces of tetrahedral FEM soft bodies, one invocation per element.
+//
+// The element pass of `SoftBodyMesh::step_coupled` (soft_body.rs), with the same expressions:
+// the deformation gradient F = Ds · Dm⁻¹, the Neo-Hookean first Piola–Kirchhoff stress
+// P = μ·(F − F⁻ᵀ) + λ·ln(J)·F⁻ᵀ, and the four nodal forces −P · Dm⁻ᵀ · V₀. Each element carries
+// its own body's μ and λ. Nothing else happens here: `GpuCompute::step_soft_bodies` reads the
+// forces back and the CPU's own integrator (`SoftBodyMesh::advance_nodes`) sums, integrates,
+// damps and collides them, so a GPU step and a CPU step differ only by this pass's rounding.
 
 struct Tetrahedron {
     i0: u32,
@@ -19,192 +19,81 @@ struct Tetrahedron {
     inv_rest_matrix_col2: vec3<f32>,
     pad2: f32,
     rest_volume: f32,
-    // `pad3` (a `vec3<f32>` here) KASITLI OLARAK YOK. WGSL'de vec3<f32>'nin hizalaması 16,
-    // dolayısıyla rest_volume 64..68'de bittikten sonra shader onu 68'e DEĞİL 80'e koyuyor ve
-    // struct'ı 96 bayta yuvarlıyordu — CPU tarafının yüklediği 80 bayta karşı. Sonuç sessiz:
-    // 0. indeksten sonraki her tetrahedron yanlış offsetten okunur, hata da panik de yok.
-    // Rust tarafındaki `pad3: [f32; 3]` (hizalama 4) 68..80'i doldurup struct'ı 80'de
-    // tutuyor; buradaki struct'ın hizalaması zaten 16 olduğu için boyut da 80'e yuvarlanıyor.
-    // Bu struct'ın SONUNA vec3 EKLEME — `tests/wgsl_layout.rs` bunu naga ile kontrol ediyor.
+    // Its body's Lamé parameters, in pascals.
+    mu: f32,
+    lambda: f32,
+    pad3: f32,
+    // The tail is three SCALARS on purpose. A `vec3<f32>` here aligns to 16, so after
+    // `rest_volume` ends at 68 the shader would place it at 80 and round the struct to 96 bytes
+    // against the 80 the CPU uploads — every element past index 0 read from the wrong offset,
+    // silently. `tests/wgsl_layout.rs` checks the layout with naga.
 }
 
 struct Parameters {
-    dt: f32,
-    mu: f32,
-    lambda: f32,
-    damping: f32,
-    gravity: vec3<f32>,
     num_elements: u32,
-    num_nodes: u32,
-    pad0: f32,
-    pad1: f32,
-    pad2: f32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
 
-@group(0) @binding(0) var<storage, read_write> nodes: array<SoftBodyNode>;
+// Node positions in world space; `w` is unused.
+@group(0) @binding(0) var<storage, read> positions: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read> elements: array<Tetrahedron>;
 @group(0) @binding(2) var<uniform> params: Parameters;
-@group(0) @binding(3) var<storage, read_write> forces_x: array<atomic<i32>>;
-@group(0) @binding(4) var<storage, read_write> forces_y: array<atomic<i32>>;
-@group(0) @binding(5) var<storage, read_write> forces_z: array<atomic<i32>>;
+// Four per element: the force on i0, i1, i2 and i3, in newtons, with `w` = 1 when the element
+// pushes and 0 when it is crushed past `J_EPS` and pushes on nothing.
+@group(0) @binding(3) var<storage, read_write> forces: array<vec4<f32>>;
 
-const FIXED_POINT_MULTIPLIER: f32 = 10000.0;
-
-fn atomic_add_force(index: u32, force: vec3<f32>) {
-    let fx = i32(force.x * FIXED_POINT_MULTIPLIER);
-    let fy = i32(force.y * FIXED_POINT_MULTIPLIER);
-    let fz = i32(force.z * FIXED_POINT_MULTIPLIER);
-    
-    atomicAdd(&forces_x[index], fx);
-    atomicAdd(&forces_y[index], fy);
-    atomicAdd(&forces_z[index], fz);
-}
+// The CPU's `soft_body::J_EPS`: the smallest det(F) at which an element still pushes.
+const J_EPS: f32 = 1e-4;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let elem_idx = global_id.x;
-    if (elem_idx >= params.num_elements) {
+    let e = global_id.x;
+    if (e >= params.num_elements) {
         return;
     }
+    let elem = elements[e];
+    let out = e * 4u;
+    let p0 = positions[elem.i0].xyz;
+    let ds0 = positions[elem.i1].xyz - p0;
+    let ds1 = positions[elem.i2].xyz - p0;
+    let ds2 = positions[elem.i3].xyz - p0;
 
-    let elem = elements[elem_idx];
-    
-    let n0 = nodes[elem.i0];
-    let n1 = nodes[elem.i1];
-    let n2 = nodes[elem.i2];
-    let n3 = nodes[elem.i3];
-
-    // Deformed shape matrix (Ds)
-    let ds_col0 = n1.position - n0.position;
-    let ds_col1 = n2.position - n0.position;
-    let ds_col2 = n3.position - n0.position;
-    
-    // Matrix multiplication Ds * Dm^-1
-    // Dm^-1 is stored column-wise in elem
+    // F = Ds · Dm⁻¹, column by column; Dm⁻¹ is stored by columns.
     let inv0 = elem.inv_rest_matrix_col0;
     let inv1 = elem.inv_rest_matrix_col1;
     let inv2 = elem.inv_rest_matrix_col2;
-    
-    let f_col0 = ds_col0 * inv0.x + ds_col1 * inv0.y + ds_col2 * inv0.z;
-    let f_col1 = ds_col0 * inv1.x + ds_col1 * inv1.y + ds_col2 * inv1.z;
-    let f_col2 = ds_col0 * inv2.x + ds_col1 * inv2.y + ds_col2 * inv2.z;
+    let f0 = ds0 * inv0.x + ds1 * inv0.y + ds2 * inv0.z;
+    let f1 = ds0 * inv1.x + ds1 * inv1.y + ds2 * inv1.z;
+    let f2 = ds0 * inv2.x + ds1 * inv2.y + ds2 * inv2.z;
 
-    // Determinant of F (J)
-    let cof0 = cross(f_col1, f_col2);
-    let cof1 = cross(f_col2, f_col0);
-    let cof2 = cross(f_col0, f_col1);
-    
-    let j = dot(f_col0, cof0);
-          
-    if (j < 0.05) {
+    // J = det(F), and F⁻ᵀ from F's cofactors: its columns are f1×f2, f2×f0, f0×f1 over J.
+    let cof0 = cross(f1, f2);
+    let cof1 = cross(f2, f0);
+    let cof2 = cross(f0, f1);
+    let j = dot(f0, cof0);
+    if (j <= J_EPS) {
+        forces[out] = vec4<f32>(0.0);
+        forces[out + 1u] = vec4<f32>(0.0);
+        forces[out + 2u] = vec4<f32>(0.0);
+        forces[out + 3u] = vec4<f32>(0.0);
         return;
     }
-    
-    // Neo-Hookean Energy derivative (Piola-Kirchhoff stress P)
-    // P = mu * (F - F^-T) + lambda * log(J) * F^-T
-    
-    // Need cofactor matrix of F for F^-T
-    // We already computed cof0, cof1, cof2 using cross products above!
-    
-    let f_inv_t_col0 = cof0 / j;
-    let f_inv_t_col1 = cof1 / j;
-    let f_inv_t_col2 = cof2 / j;
-    
-    let log_j = log(j);
-    let mu = params.mu;
-    let lambda = params.lambda;
-    
-    let p_col0 = mu * (f_col0 - f_inv_t_col0) + lambda * log_j * f_inv_t_col0;
-    let p_col1 = mu * (f_col1 - f_inv_t_col1) + lambda * log_j * f_inv_t_col1;
-    let p_col2 = mu * (f_col2 - f_inv_t_col2) + lambda * log_j * f_inv_t_col2;
-    
-    // H = -P * Dm^-T * rest_volume
-    // This part involves transpose of inv_rest_matrix, let's keep it simple:
-    // f1, f2, f3 are forces on nodes 1, 2, 3. f0 = -(f1+f2+f3).
-    let h_col0 = (p_col0 * inv0.x + p_col1 * inv1.x + p_col2 * inv2.x) * (-elem.rest_volume);
-    let h_col1 = (p_col0 * inv0.y + p_col1 * inv1.y + p_col2 * inv2.y) * (-elem.rest_volume);
-    let h_col2 = (p_col0 * inv0.z + p_col1 * inv1.z + p_col2 * inv2.z) * (-elem.rest_volume);
-    
-    let f1 = h_col0;
-    let f2 = h_col1;
-    let f3 = h_col2;
-    let f0 = -(f1 + f2 + f3);
-    
-    // Accumulate forces using atomic additions
-    atomic_add_force(elem.i0, f0);
-    atomic_add_force(elem.i1, f1);
-    atomic_add_force(elem.i2, f2);
-    atomic_add_force(elem.i3, f3);
-}
+    let fit0 = cof0 / j;
+    let fit1 = cof1 / j;
+    let fit2 = cof2 / j;
+    let volume_term = elem.lambda * log(j);
+    let p0c = elem.mu * (f0 - fit0) + volume_term * fit0;
+    let p1c = elem.mu * (f1 - fit1) + volume_term * fit1;
+    let p2c = elem.mu * (f2 - fit2) + volume_term * fit2;
 
-@compute @workgroup_size(64)
-fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let node_idx = global_id.x;
-    if (node_idx >= params.num_nodes) {
-        return;
-    }
-
-    var node = nodes[node_idx];
-    if (node.is_fixed != 0u) {
-        // Clear forces anyway
-        atomicStore(&forces_x[node_idx], 0);
-        atomicStore(&forces_y[node_idx], 0);
-        atomicStore(&forces_z[node_idx], 0);
-        return;
-    }
-
-    // Dummy read to force compiler to keep binding 1 (elements) in the implicit layout
-    let _dummy = elements[0].rest_volume;
-
-    let fx = f32(atomicLoad(&forces_x[node_idx])) / FIXED_POINT_MULTIPLIER;
-    let fy = f32(atomicLoad(&forces_y[node_idx])) / FIXED_POINT_MULTIPLIER;
-    let fz = f32(atomicLoad(&forces_z[node_idx])) / FIXED_POINT_MULTIPLIER;
-    let force = vec3<f32>(fx, fy, fz);
-
-    let inv_mass = select(0.0, 1.0 / node.mass, node.mass > 0.0);
-    let acceleration = force * inv_mass + params.gravity;
-
-    node.velocity += acceleration * params.dt;
-
-    // `damping` is a per-SECOND RETENTION FACTOR (SoftBodyMesh::damping, default 0.99 =
-    // "keep 99% of the velocity per second"), NOT a rate in 1/s. The CPU reference
-    // integrator — `SoftBodyMesh::step` in soft_body.rs, the one the test suite covers —
-    // applies it as `v *= damping.powf(dt)`, so this pass must apply exactly `pow(damping, dt)`.
-    //
-    // This line used to read `max(1.0 - params.damping * params.dt, 0.0)`, i.e. it read the
-    // same field as a rate. Measured divergence at the default damping = 0.99, comparing the
-    // effective continuous decay rate -ln(factor)/dt of the two expressions:
-    //   dt=1/240 -> CPU 0.0100503/s vs GPU 0.9920/s  (98.7x)
-    //   dt=1/60  -> CPU 0.0100503/s vs GPU 0.9983/s  (99.3x)
-    //   dt=1/30  -> CPU 0.0100503/s vs GPU 1.0067/s  (100.2x)   <- soft_body_step_system's clamp
-    // The ratio is ~ -0.99/ln(0.99) = 98.5 in the small-dt limit and grows slowly with dt, so
-    // the audit's "~100x" holds. Concretely at dt=1/60 the per-step retention here was 0.98350
-    // against the CPU's 0.99983; after one simulated second a body kept 36.9% of its velocity
-    // on the GPU against 99.0% on the CPU.
-    //
-    // Caveat, unmeasured: WGSL leaves `pow` indeterminate for a negative base and for
-    // pow(0, 0), where `f32::powf` is defined (powf(0,0) == 1). Neither path validates
-    // `damping`, but values outside [0, 1] are meaningless for both, so this is not narrowed
-    // here — it is only a difference in what happens to already-invalid input.
-    node.velocity *= pow(params.damping, params.dt);
-
-    // Simple ground collision at Y=0.1
-    let next_pos = node.position + node.velocity * params.dt;
-    if (next_pos.y < 0.1) {
-        node.position.y = 0.1;
-        node.position.x = next_pos.x;
-        node.position.z = next_pos.z;
-        node.velocity.y *= -0.1; // Bounce
-        node.velocity.x *= 0.8;  // Friction
-        node.velocity.z *= 0.8;
-    } else {
-        node.position = next_pos;
-    }
-
-    nodes[node_idx] = node;
-    
-    // Clear forces for next sub-step
-    atomicStore(&forces_x[node_idx], 0);
-    atomicStore(&forces_y[node_idx], 0);
-    atomicStore(&forces_z[node_idx], 0);
+    // The forces on nodes 1..3 are the columns of −P · Dm⁻ᵀ · V₀; node 0 takes what balances them.
+    let n1 = -(p0c * inv0.x + p1c * inv1.x + p2c * inv2.x) * elem.rest_volume;
+    let n2 = -(p0c * inv0.y + p1c * inv1.y + p2c * inv2.y) * elem.rest_volume;
+    let n3 = -(p0c * inv0.z + p1c * inv1.z + p2c * inv2.z) * elem.rest_volume;
+    forces[out] = vec4<f32>(-(n1 + n2 + n3), 1.0);
+    forces[out + 1u] = vec4<f32>(n1, 1.0);
+    forces[out + 2u] = vec4<f32>(n2, 1.0);
+    forces[out + 3u] = vec4<f32>(n3, 1.0);
 }

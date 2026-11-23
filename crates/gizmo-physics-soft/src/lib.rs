@@ -43,7 +43,8 @@ pub mod cloth;
 /// when the `rigid-coupling` feature is on.
 pub mod coupling;
 pub mod error;
-/// WGPU compute-shader path for stepping [`soft_body::SoftBodyMesh`] on the GPU.
+/// Stepping [`soft_body::SoftBodyMesh`]es with their element forces computed on the GPU, and the
+/// rest of the step the CPU's own.
 ///
 /// Only compiled when the `gpu_physics` feature is enabled; that feature also pulls in
 /// `wgpu` and `bytemuck`. The CPU path in [`soft_body`] remains available and

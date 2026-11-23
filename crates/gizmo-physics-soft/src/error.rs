@@ -69,6 +69,9 @@ pub enum SoftBodyError {
 
     /// Requesting a logical GPU device from the adapter failed.
     DeviceRequestFailed(String),
+
+    /// A GPU step's forces could not be read back: the device was lost, or the mapping failed.
+    ReadbackFailed(String),
 }
 
 impl std::fmt::Display for SoftBodyError {
@@ -98,6 +101,9 @@ impl std::fmt::Display for SoftBodyError {
             }
             SoftBodyError::DeviceRequestFailed(msg) => {
                 write!(f, "failed to request GPU device for soft-body compute: {msg}")
+            }
+            SoftBodyError::ReadbackFailed(msg) => {
+                write!(f, "failed to read a soft-body GPU step back: {msg}")
             }
         }
     }

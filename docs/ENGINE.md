@@ -172,7 +172,16 @@ the first write (Unity's material instance — a hidden un-sharing).
 > god functions and building `misket` and `rampa`; written down here so they are not lost, not as
 > limits:
 >
-> 1. **GPU soft bodies** (`gizmo-physics-soft::gpu_compute`, behind the default-off `gpu_physics`
+> 1. ~~**GPU soft bodies**~~ **Closed 2026-11-23, at the root rather than as planned:** the shader
+>    had its own integrator, a copy of the CPU's that had drifted (a floor at y = 0.1 m, J < 0.05,
+>    falling massless nodes, no push-out from colliders, fixed-point force sums), so a per-element
+>    material would have fixed one of seven. Now the GPU computes only the element forces, each
+>    element with its own body's `mu` and `lambda`, and the step ends in the CPU's own
+>    `SoftBodyMesh::advance_nodes`: damping, collisions and coupling are the CPU step's, and
+>    `step_soft_bodies_coupled` gives the GPU path two-way coupling. It waits on the calling thread.
+>    `tests/gpu_step.rs` steps it beside the CPU on a real GPU, red on the old code; CI runs it
+>    under `gpu_physics` (skipping the GPU part without an adapter). *(Was:)*
+>    **GPU soft bodies** (`gizmo-physics-soft::gpu_compute`, behind the default-off `gpu_physics`
 >    feature; no game uses it). Every body is simulated with the first body's material — `mu`,
 >    `lambda` and `damping` are read from `soft_bodies[0]`, and a mix is only logged, in debug
 >    builds, on every step — and every step spawns an OS thread just to poll the device. The fix:
@@ -2001,15 +2010,16 @@ its precision, and a section that silently rewrites itself cannot be checked.
 
 - **`wgpu` in `gizmo-physics-soft` — an explicit CARVE-OUT from the 1.0 promise.**
   `gizmo-physics-soft` is a Stage A crate, but its default-OFF `gpu_physics` feature compiles
-  `pub mod gpu_compute`, whose `GpuCompute` holds `wgpu::Device` / `Queue` / `ComputePipeline` /
-  `BindGroupLayout` / `Buffer` in public fields. Nothing in this workspace enables it. Therefore,
+  `pub mod gpu_compute`, whose `GpuCompute::with_device` takes a `wgpu::Device` and `Queue` (its
+  fields are private since 2026-11-23; they were public `wgpu` handles). Nothing in this workspace
+  enables it. Therefore,
   said explicitly rather than left to be inferred: **enabling `gpu_physics` opts that crate out of
   the 1.0 stability promise.** With the feature on, a wgpu major is a breaking change for
   `gizmo-physics-soft` and will ship as a minor bump, not as a 2.0. This is the weakest of the
   carve-outs — default-off, unused in-tree, and the module is a compute path rather than an API
   anyone builds on — but the promise has to name it, because a 1.0 that is silently
-  conditional on features is not a promise. (The feature also pulls `bytemuck` and `pollster`;
-  wgpu is the one with the cadence.)
+  conditional on features is not a promise. (The feature also pulls `bytemuck`; wgpu is the one
+  with the cadence.)
 
 - **`renet` in `gizmo-net` — a second feature carve-out, NOT part of the 2026-08-09 audit.**
   Found while writing this section up, so it is recorded as unverified by that audit and needs its

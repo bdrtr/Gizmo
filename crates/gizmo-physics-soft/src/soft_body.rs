@@ -731,7 +731,7 @@ impl SoftBodyMesh {
         reactions: &[(BodyHandle, RigidReaction)],
         out_impulses: &mut Vec<RigidImpulse>,
     ) {
-        let mut forces: Vec<Vec3> = self.nodes.iter().map(|n| gravity * n.mass).collect();
+        let mut forces = self.weights(gravity);
 
         // 1. Calculate and accumulate internal elastic forces from all tetrahedra in PARALLEL
         #[cfg(not(target_arch = "wasm32"))]
@@ -740,11 +740,6 @@ impl SoftBodyMesh {
         use crate::parallel_compat::*;
 
         let positions: Vec<Vec3> = self.nodes.iter().map(|n| n.position).collect();
-        // Yalnızca gerçekten dejenere/ters (J ≤ eps) elemanlar atlanır — NaN/tekillik
-        // koruması. Eskiden J < 0.1 ile GEÇERLİ ama sıkışmış elemanlar da tüm sertliğini
-        // kaybediyordu (sıkışma altında çöküyor, geri toparlanamıyordu).
-        const J_EPS: f32 = 1e-4;
-
         // Her tetrahedronun düğüm kuvvetlerini PARALEL hesapla, sonra DETERMİNİSTİK
         // (eleman sırasında) topla. (Paralel `reduce` float toplamı sırayı bozup
         // lockstep determinizmini kırıyordu — float toplaması birleşmeli değil.)
@@ -773,11 +768,7 @@ impl SoftBodyMesh {
                 let f2 = -h.col(1);
                 let f3 = -h.col(2);
                 let f0 = -(f1 + f2 + f3);
-                // NaN/Inf koruması: tutarsız kuvvet üretildiyse atla.
-                if !(f0.is_finite() && f1.is_finite() && f2.is_finite() && f3.is_finite()) {
-                    return None;
-                }
-                Some((idx, [f0, f1, f2, f3]))
+                finite_forces(idx, [f0, f1, f2, f3])
             };
         // In parallel only where there is enough to share: a thread pool's hand-off costs more
         // than a few dozen elements take — `sinama`'s twelve 48-element jellies, 36 sub-steps a
@@ -790,13 +781,32 @@ impl SoftBodyMesh {
             self.elements.iter().map(element_force).collect()
         };
 
-        for (idx, f) in elem_forces.into_iter().flatten() {
-            forces[idx[0]] += f[0];
-            forces[idx[1]] += f[1];
-            forces[idx[2]] += f[2];
-            forces[idx[3]] += f[3];
-        }
+        add_element_forces(&mut forces, elem_forces);
+        self.advance_nodes(&forces, dt, rigid_colliders, reactions, out_impulses);
+    }
 
+    /// Each node's weight, `gravity · mass`: where a step's force on it starts.
+    pub(crate) fn weights(&self, gravity: Vec3) -> Vec<Vec3> {
+        self.nodes.iter().map(|n| gravity * n.mass).collect()
+    }
+
+    /// The rest of a step once each node's force is known: integrated, damped, swept against the
+    /// colliders and put back on the surface of any it crept into, with what the bodies are owed
+    /// pushed to `out_impulses`. The one integrator there is — [`step_coupled`](Self::step_coupled)
+    /// ends in it, and so does [`crate::gpu_compute::GpuCompute`]'s step, whose forces come from
+    /// the GPU.
+    pub(crate) fn advance_nodes(
+        &mut self,
+        forces: &[Vec3],
+        dt: f32,
+        rigid_colliders: &[(
+            BodyHandle,
+            gizmo_physics_core::Transform,
+            gizmo_physics_core::Collider,
+        )],
+        reactions: &[(BodyHandle, RigidReaction)],
+        out_impulses: &mut Vec<RigidImpulse>,
+    ) {
         // 2. Integrate velocities and positions
         for (i, node) in self.nodes.iter_mut().enumerate() {
             // Skip pinned nodes and any node with non-positive / non-finite mass:
@@ -812,11 +822,10 @@ impl SoftBodyMesh {
             node.velocity += acceleration * dt;
 
             // `damping` is a per-SECOND retention factor, so it is applied as `damping^dt` —
-            // that is what makes the decay independent of how the second is subdivided. This
-            // is the REFERENCE expression; `soft_body.wgsl`'s `integrate` pass must apply the
-            // same `pow(damping, dt)` (it once applied `max(1 - damping*dt, 0)`, a rate
-            // reading, which damped ~99x harder at the 0.99 default). Pinned on both sides by
-            // `tests/cpu_gpu_parity.rs`.
+            // that is what makes the decay independent of how the second is subdivided. The GPU
+            // path comes here too: its shader once had its own integrator, which applied
+            // `max(1 - damping*dt, 0)`, a rate reading that damped ~99x harder at the 0.99
+            // default (`tests/cpu_gpu_parity.rs`).
             node.velocity *= self.damping.powf(dt);
 
             let next_pos = node.position + node.velocity * dt;
@@ -876,6 +885,32 @@ impl SoftBodyMesh {
                 }
             }
         }
+    }
+}
+
+/// The smallest `J = det(F)` at which an element still pushes: below it the element is crushed
+/// flat or turned inside out, its stress is singular, and it pushes on nothing that step. Only
+/// those — a valid, strongly compressed element still resists (it once stopped at J < 0.1 and
+/// stayed collapsed). `soft_body.wgsl`'s `J_EPS` is the same number.
+pub(crate) const J_EPS: f32 = 1e-4;
+
+/// An element's four nodal forces, or `None` if one of them is not finite: such an element pushes
+/// on nothing this step rather than poisoning its nodes.
+pub(crate) fn finite_forces(idx: [usize; 4], f: [Vec3; 4]) -> Option<([usize; 4], [Vec3; 4])> {
+    f.iter().all(|f| f.is_finite()).then_some((idx, f))
+}
+
+/// Adds each element's nodal forces to its nodes, in element order — the order that makes the
+/// float sum, and so the step, the same every run however the forces were computed.
+pub(crate) fn add_element_forces(
+    forces: &mut [Vec3],
+    elem_forces: impl IntoIterator<Item = Option<([usize; 4], [Vec3; 4])>>,
+) {
+    for (idx, f) in elem_forces.into_iter().flatten() {
+        forces[idx[0]] += f[0];
+        forces[idx[1]] += f[1];
+        forces[idx[2]] += f[2];
+        forces[idx[3]] += f[3];
     }
 }
 

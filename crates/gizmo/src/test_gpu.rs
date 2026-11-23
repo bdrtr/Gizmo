@@ -46,9 +46,10 @@ pub(crate) fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
 /// statics are not dropped, and the OS frees the lock when the process ends. That keeps today's
 /// guarantee exactly — one test binary's devices alive at a time, machine-wide — while every
 /// binary that never touches the GPU, and every CPU test inside one that does, runs freely.
-/// **The same file name is used in `gizmo-renderer/src/test_gpu.rs`, `gizmo/src/test_gpu.rs` and
-/// `gizmo-studio/tests/studio_render_pixels.rs`; one name, or it serialises nothing.** Best
-/// effort: if the file cannot be opened or locked, the test runs unlocked, as before.
+/// **The same file name is used in `gizmo-renderer/src/test_gpu.rs`, `gizmo/src/test_gpu.rs`,
+/// `gizmo-studio/tests/studio_render_pixels.rs` and `gizmo-physics-soft/tests/gpu_step.rs`; one
+/// name, or it serialises nothing.** Best effort: if the file cannot be opened or locked, the test
+/// runs unlocked, as before.
 fn hold_machine_gpu_lock() {
     static HELD: std::sync::OnceLock<Option<std::fs::File>> = std::sync::OnceLock::new();
     HELD.get_or_init(|| {

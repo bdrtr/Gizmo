@@ -798,6 +798,25 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **The GPU soft-body path (`gpu_physics`) is the CPU's step, with the element forces computed on
+  the GPU.** Its shader had an integrator of its own, a copy of the CPU's that had drifted:
+  - every body took the first body's `mu`, `lambda` and `damping`;
+  - a floor was built in at y = 0.1 m;
+  - an element stopped pushing at J < 0.05, where the CPU's limit is 10⁻⁴;
+  - a massless node still fell, and a node that crept into a collider was never put back;
+  - forces were summed in fixed point, which overflowed past about 2 × 10⁵ N;
+  - each step started a thread to poll the device.
+
+  The shader now computes only each element's four nodal forces, with the element's own body's
+  material. They are read back, and the step ends in `SoftBodyMesh::advance_nodes`, the function
+  the CPU step ends in. Two-way coupling comes with it: `GpuCompute::step_soft_bodies_coupled`.
+  `GpuCompute::with_device` builds it on a device the caller has. Its fields are private, it
+  waits on the calling thread, and a failed readback is `SoftBodyError::ReadbackFailed`. The CPU
+  step is unchanged bit for bit; it was split around that function.
+
+  `tests/gpu_step.rs` steps it beside the CPU on a real GPU. Measured, they are 0.7–5 µm apart in
+  the air and millimetres apart after contact. On the old code the stiff block was 0.24 m off and
+  the falling one stopped at 0.1 m. CI runs it under `gpu_physics`, where its GPU part skips.
 - **A collider under a scaled parent takes the parent's scale, as its mesh does.** Behavioural.
   The physics read no scale at all; a child's offset followed its parents' scales but its shape did
   not, so a child collider written like its mesh came out the mesh's size divided by the scale

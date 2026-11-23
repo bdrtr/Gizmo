@@ -120,6 +120,10 @@ jobs:
         run: cargo test --locked -p gizmo-core --features tracing-layer
       - name: Test experimental multibody (ABA) — opt-in, off by default
         run: cargo test --locked -p gizmo-physics-rigid --features experimental-multibody
+      # The GPU soft-body path builds and runs here; its GPU tests (`tests/gpu_step.rs`) skip,
+      # saying so, on a runner with no adapter, and compare it with the CPU step where there is one.
+      - name: Test the GPU soft-body path — opt-in, off by default
+        run: cargo test --locked -p gizmo-physics-soft --features gpu_physics
       # `gizmo-analysis/app` is the plugin that wires the collector into an App's schedules, and
       # NOTHING enables it in a plain workspace build: only `gizmo-engine/analysis` turns it on, and
       # no member asks for that. Measured — a guard added inside `plugin.rs` did not appear in

@@ -49,6 +49,7 @@ cargo test -p gizmo-net --features client-server,rollback
 cargo test -p gizmo-core -p gizmo-physics-core -p gizmo-physics-rigid -p gizmo-scene --features reflect
 cargo test -p gizmo-core --features tracing-layer   # the tracing_subscriber bridge, off by default
 cargo test -p gizmo-physics-rigid --features experimental-multibody
+cargo test -p gizmo-physics-soft --features gpu_physics   # steps it beside the CPU on the GPU
 # Structural chaos: seeded spawn/despawn/rope churn in a closed box — finite, contained,
 # deterministic. One storm runs in the suite; the three long ones are ignored (~30 s in release).
 cargo test --release -p gizmo-physics-rigid --test chaos -- --ignored

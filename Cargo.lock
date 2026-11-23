@@ -2966,6 +2966,7 @@ dependencies = [
  "gizmo-physics-core",
  "gizmo-physics-rigid",
  "naga",
+ "pollster 1.0.1",
  "proptest",
  "rayon",
  "serde",

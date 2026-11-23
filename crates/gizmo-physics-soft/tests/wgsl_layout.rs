@@ -6,9 +6,9 @@
 //! element past index 0 is read from the wrong offset — silently, with no validation error
 //! and no panic, producing garbage forces rather than a crash.
 //!
-//! Nothing else in the workspace can catch that. `GpuCompute` is behind the default-off
-//! `gpu_physics` feature and has no caller, so it is never built by the normal test run; and
-//! even when built, exercising it needs a GPU adapter that CI does not have.
+//! `GpuCompute` is behind the default-off `gpu_physics` feature, and running it needs a GPU
+//! adapter that CI does not have (`tests/gpu_step.rs` runs it where there is one, and would show a
+//! stride mismatch only as wrong forces).
 //!
 //! So this test does the one thing that works without a GPU: it parses `soft_body.wgsl` with
 //! naga — the same front end wgpu uses — and asks naga's layouter for each struct's size and
@@ -51,14 +51,8 @@ fn wgsl_struct_layout(name: &str) -> (u32, u32) {
 /// diff rather than silently agreeing with itself.
 #[test]
 fn shader_struct_sizes_match_the_uploaded_rust_records() {
-    // `GpuSoftBodyNode`: [f32;3] pos + pad + [f32;3] vel + pad + mass + 3 pad = 32 bytes.
-    let (size, _) = wgsl_struct_layout("SoftBodyNode");
-    assert_eq!(
-        size, 32,
-        "WGSL `SoftBodyNode` is {size} bytes; the Rust `GpuSoftBodyNode` uploaded into that buffer is 32"
-    );
-
-    // `GpuTetrahedron`: [u32;4] + 3 x ([f32;3] + pad) + rest_volume + [f32;3] = 80 bytes.
+    // The nodes are `array<vec4<f32>>` on both sides (`[f32; 4]` in Rust), so they have no struct.
+    // `GpuTetrahedron`: [u32;4] + 3 x ([f32;3] + pad) + rest_volume + mu + lambda + pad = 80.
     //
     // The trap: a trailing `vec3<f32>` would align to 16 and push the shader's struct to 96
     // while Rust stayed at 80. Keep the tail of this struct built from `f32`s.
@@ -71,12 +65,11 @@ fn shader_struct_sizes_match_the_uploaded_rust_records() {
          aligns to 16 and Rust's `[f32; 3]` does not."
     );
 
-    // `GpuParameters`: dt, gravity[3], stiffness, damping, node_count, element_count,
-    //                  collider_count, 3 pad = 48 bytes.
+    // `GpuParameters`: num_elements + 3 pad = 16 bytes.
     let (size, _) = wgsl_struct_layout("Parameters");
     assert_eq!(
-        size, 48,
-        "WGSL `Parameters` is {size} bytes; the Rust `GpuParameters` uploaded into that buffer is 48"
+        size, 16,
+        "WGSL `Parameters` is {size} bytes; the Rust `GpuParameters` uploaded into that buffer is 16"
     );
 }
 
@@ -85,7 +78,7 @@ fn shader_struct_sizes_match_the_uploaded_rust_records() {
 /// on size and still stride differently.
 #[test]
 fn shader_struct_array_strides_match_their_sizes() {
-    for name in ["SoftBodyNode", "Tetrahedron", "Parameters"] {
+    for name in ["Tetrahedron", "Parameters"] {
         let (size, stride) = wgsl_struct_layout(name);
         assert_eq!(
             size, stride,

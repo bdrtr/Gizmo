@@ -67,3 +67,5 @@ gizmo-physics-rigid = { path = "../gizmo-physics-rigid", version = "0.11.0" }
 # `tests/wgsl_layout.rs` — this caught an 80-vs-96 byte stride mismatch that no test,
 # and no CI job, could have caught otherwise.
 naga = { version = "30", features = ["wgsl-in"] }
+# `tests/gpu_step.rs` waits on `GpuCompute::new`, which is async.
+pollster = "1.0"
