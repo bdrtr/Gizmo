@@ -70,9 +70,9 @@ fn main() {
 
     app = app
         .set_setup(|world, renderer| {
-            // Bu vitrin ekran-uzayı efektlerini (SSR/SSGI) ve GPU akışkanı istemez → bir kez,
-            // burada kapat. GPU parçacık sistemi açık kalıyor: boştayken hiçbir iş yapmıyor.
-            renderer.gpu_fluid = None;
+            // Bu vitrin ekran-uzayı efektlerini (SSR/SSGI) istemez → bir kez, burada kapat. GPU
+            // parçacık sistemi açık kalıyor: boştayken hiçbir iş yapmıyor; akışkan, sahnede bir
+            // `FluidSimulation` olmadıkça hiç kurulmuyor.
             renderer.ssr = None;
             renderer.ssgi = None;
 

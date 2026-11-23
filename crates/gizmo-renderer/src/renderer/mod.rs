@@ -65,10 +65,11 @@ impl<'a> RenderContext<'a> {
         }
     }
 
-    /// Disables the GPU compute subsystems (fluid, particles, physics).
-    /// Removes needless GPU work in simple scenes.
+    /// Disables the GPU compute subsystems (particles, physics).
+    /// Removes needless GPU work in simple scenes. The fluid is not among them: none is built until
+    /// a scene has a `FluidSimulation` ([`Renderer::fluid_or_build`]), and one taken away here would
+    /// be built again on the next frame.
     pub fn disable_gpu_compute(&mut self) {
-        self.renderer.gpu_fluid = None;
         self.renderer.gpu_particles = None;
         self.renderer.gpu_physics = None;
     }
@@ -156,9 +157,10 @@ pub struct Renderer {
     pub gpu_physics: Option<crate::gpu_physics::GpuPhysicsSystem>,
 
     // === GPU SIVI SİSTEMİ ===
-    /// The SPH fluid solver and its surface. Allocated by the windowed path; simulated and drawn
-    /// only while its [`FluidSettings::particles`](crate::gpu_fluid::FluidSettings::particles) is
-    /// above zero — which `gizmo` sets from the scene's `FluidSimulation`, and nothing else.
+    /// The SPH fluid solver and its surface. `None` until a scene first has a fluid — `gizmo` builds
+    /// it then from the scene's `FluidSimulation` ([`fluid_or_build`](Self::fluid_or_build)) and keeps
+    /// it; simulated and drawn only while its
+    /// [`FluidSettings::particles`](crate::gpu_fluid::FluidSettings::particles) is above zero.
     pub gpu_fluid: Option<crate::gpu_fluid::GpuFluidSystem>,
     /// Volumetrik duman (T6, raymarch). Default None; demo `Some(SmokeVolume::new(..))` verir.
     pub smoke: Option<crate::gpu_smoke::SmokeVolume>,
@@ -466,6 +468,28 @@ pub const SYSTEM_FONT_PATHS: &[&str] = &["C:/Windows/Fonts/segoeui.ttf", "C:/Win
 pub const SYSTEM_FONT_PATHS: &[&str] = &[];
 
 impl Renderer {
+    /// The GPU fluid with room for at least `particles`: built on first use, with the surface's
+    /// targets at the window's size, and built again, larger, when a scene asks for more than it
+    /// holds — a change of count lays the water out afresh anyway
+    /// ([`apply_settings`](crate::gpu_fluid::GpuFluidSystem::apply_settings)). It is kept while it
+    /// is large enough.
+    ///
+    /// Until 2026-11-23 every renderer built one of a hundred thousand, whether or not its scene ever
+    /// had water: the particles' buffers, a sort over all of them every step, and six screen-sized
+    /// targets — tens of megabytes on a phone's screen — that a game with no water paid for, and that
+    /// a scene of three thousand particles sorted in full. The simple scene and `with_scene_render`
+    /// took it away again at their setup, and with it the water of a game that had a
+    /// `FluidSimulation`: nothing ran.
+    pub fn fluid_or_build(&mut self, particles: u32) -> &mut crate::gpu_fluid::GpuFluidSystem {
+        let particles = particles.max(1);
+        if self.gpu_fluid.as_ref().is_some_and(|f| f.num_particles < particles) {
+            self.gpu_fluid = None;
+        }
+        let (device, queue, layout) = (&self.device, &self.queue, &self.scene.global_bind_group_layout);
+        let (format, width, height) = (self.post.hdr_texture.format(), self.config.width, self.config.height);
+        self.gpu_fluid.get_or_insert_with(|| crate::gpu_fluid::GpuFluidSystem::new(device, queue, particles, layout, format, width, height))
+    }
+
     /// OPT-IN: enable the renderer's own GPU rigid-body physics (default OFF). Idempotent —
     /// safe to call every frame. Only games that drive massive body counts / GPU cloth via
     /// `GpuPhysicsLink` need this; a normal CPU-physics game

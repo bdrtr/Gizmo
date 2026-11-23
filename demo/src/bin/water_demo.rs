@@ -53,8 +53,8 @@ struct WaterState {
 
 fn setup(world: &mut World, renderer: &mut Renderer) -> WaterState {
     println!("Su demosu yükleniyor... (sağ-tık+fare=bak, WASD=yüz, Space=yüksel, Ctrl=dal)");
-    // GPU sıvısı kapalı: su yüzeyi kendi yolundan (Gerstner malzemesi) çiziliyor.
-    renderer.gpu_fluid = None;
+    // GPU sıvısı yok (sahnede `FluidSimulation` yok, kurulmuyor): su yüzeyi kendi yolundan
+    // (Gerstner malzemesi) çiziliyor.
 
     let mut asset = AssetManager::new();
     let white = asset.create_white_texture(

@@ -1023,9 +1023,10 @@ impl SimpleAppExt for App<SimpleSceneState> {
             // wants one of them back turns it on there. They used to be forced off in the render
             // closure every frame, which also switched off the GPU particle system and so made
             // `ParticleEmitter` do nothing in every `SimpleApp` game; the particle system is now
-            // free when idle and stays on.
+            // free when idle and stays on. The fluid is not here either: none is built until a
+            // scene has one (`Renderer::fluid_or_build`), and taking it away here took a
+            // `FluidSimulation`'s water away with it.
             renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
             renderer.ssr = None;
             renderer.ssgi = None;
 
@@ -1482,6 +1483,7 @@ mod fixed_physics_tests {
         let stage = src.split(".set_render_stage(").nth(1).and_then(|r| r.split('\n').next()).expect("the simple scene sets a render stage");
         assert_eq!(stage.trim(), "systems::render::RenderWorld::new())", "the simple scene's stage is no longer a bare copy of the world");
         assert!(!src.contains(concat!("renderer.gpu_particles", " = None")), "particles are switched off for every simple scene again");
+        assert!(!src.contains(concat!("renderer.gpu_fluid", " = None")), "the fluid is taken away from every simple scene again, and a FluidSimulation with it");
     }
 
     /// A `PhysicsWorld` the game's setup inserted survives; a world without one gets Earth's.

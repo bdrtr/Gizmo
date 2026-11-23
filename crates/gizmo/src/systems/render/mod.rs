@@ -168,7 +168,8 @@ pub trait AppSceneRenderExt {
 impl<State: 'static> AppSceneRenderExt for gizmo_app::App<State> {
     fn with_scene_render(self) -> Self {
         self.set_render_stage(RenderWorld::new().with_settings(|_, renderer| {
-            renderer.gpu_fluid = None;
+            // No `gpu_fluid = None`: none is built until a scene has one, and taking it away here
+            // took a `FluidSimulation`'s water away with it (`Renderer::fluid_or_build`).
             renderer.gpu_physics = None;
             renderer.ssr = None;
             renderer.ssgi = None;

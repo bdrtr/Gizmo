@@ -10305,7 +10305,9 @@ async fn fog_wall_frame(renderer: &mut Renderer, density: f32, wall_z: f32, emit
     }
     if water {
         // A pool standing on a raised floor, a metre or two under the camera's eye.
+        // Ten thousand particles: the default hundred thousand has hung this machine's GPU in a test.
         let mut fluid = gizmo_physics_core::components::FluidSimulation::default();
+        fluid.particles = 10_000;
         fluid.bounds_min = Vec3::new(-5.0, 6.0, -5.0);
         fluid.bounds_max = Vec3::new(5.0, 10.0, 5.0);
         let e = world.spawn();
@@ -10328,7 +10330,6 @@ async fn fog_wall_frame(renderer: &mut Renderer, density: f32, wall_z: f32, emit
     last
 }
 
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no GPU particles and smoke.
 /// **Particles and smoke stand in the fog like everything else.** In fog thick enough to hide a
 /// surface entirely, each vanishes into the wall behind it: the frame with it is the frame without
 /// it. With no fog it is plainly there, or this would prove nothing.
@@ -10396,18 +10397,6 @@ fn the_fluid_surface_is_where_the_water_is_and_stands_in_the_fog() {
         renderer.ssr = None;
         renderer.ssao = None;
         renderer.volumetric = None;
-        let hdr = renderer.post.hdr_texture.format();
-        let (width, height) = (renderer.config.width, renderer.config.height);
-        renderer.gpu_fluid = Some(gizmo_renderer::gpu_fluid::GpuFluidSystem::new(
-            &renderer.device,
-            &renderer.queue,
-            10_000,
-            &renderer.scene.global_bind_group_layout,
-            hdr,
-            width,
-            height,
-        ));
-
         let clear_wall = fog_wall_frame(&mut renderer, 0.0, -8.0, false, false, 1).await;
         let thick_wall = fog_wall_frame(&mut renderer, 5.0, -8.0, false, false, 1).await;
         let near_wall = fog_wall_frame(&mut renderer, 0.0, 6.0, false, false, 1).await;
@@ -17111,7 +17100,6 @@ async fn render_normal_mapped_quad_with(mapped: bool, graph: Option<&gizmo_rende
 
 /// Same scene, but with a `ParticleEmitter` on the cube, rendered over several frames from
 /// ONE renderer — particles need time to be spawned and to move.
-#[cfg(not(gizmo_forward_only))] // Its test is the desktop's: the forward-only path has no GPU particles.
 async fn render_emitter_scene(with_emitter: bool, frames: u32) -> Vec<u8> {
     const W: u32 = 128;
     let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
@@ -17179,7 +17167,6 @@ async fn render_emitter_scene(with_emitter: bool, frames: u32) -> Vec<u8> {
 /// ten frames and 355 after sixty, growing as the spawn accumulates. The floor here is set
 /// far below that: this asks whether particles reach the frame at all.
 #[test]
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no GPU particles (ENGINE.md §3).
 fn particles_from_an_emitter_reach_the_frame() {
     let _gpu = crate::test_gpu::gpu_lock();
     if !pollster::block_on(Renderer::headless_adapter_available())
@@ -17199,7 +17186,6 @@ fn particles_from_an_emitter_reach_the_frame() {
     });
 }
 
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no GPU particles.
 /// **Particles far from the world's origin reach the frame.** Particles born 480 m out along x, seen
 /// from 10 m off: they are drawn. The frame's level of detail measured a camera's distance from the
 /// world's origin rather than from the particles, and past 200 m of it drew none — every street of a
@@ -17252,7 +17238,6 @@ fn particles_far_from_the_worlds_origin_reach_the_frame() {
     });
 }
 
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no GPU particles.
 /// **A lit particle is lit by the lights round it, and dark where none reaches.** A dark night — a
 /// black sky, no sun — and a lamp reaching 3 m: lit particles beside it add light to the frame, the
 /// same particles 4.7 m from it, past its reach, almost none. A lit particle had a fixed 0.4 of
@@ -17330,7 +17315,6 @@ fn a_lit_particle_is_lit_by_the_lights_round_it_and_dark_where_none_reaches() {
     });
 }
 
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no GPU particles.
 /// The particle system is busy while an emitter feeds it and idle once the emitter is gone and
 /// the last particle has had time to die — the state the draw path skips the whole ring on.
 #[test]

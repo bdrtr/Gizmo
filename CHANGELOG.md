@@ -549,6 +549,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The browser and the phone draw the GPU particles and the fluid.** The forward-only path built
+  neither; its particle and fluid tests run on it now (the fluid's skipped there in silence).
+  docs/ENGINE.md §3 item 6.
+- **The GPU fluid is built when a scene first has a `FluidSimulation`, as large as it asks**
+  (`Renderer::fluid_or_build`, built again larger for a larger ask). Every renderer built one of a
+  hundred thousand particles, with six screen-sized targets, for scenes that never had water, and
+  sorted all of them each step for a scene of three thousand. `gpu_fluid` is `None` until then.
+  - **Fixed:** the simple scene and `with_scene_render` took the fluid away at their setup, so a
+    `FluidSimulation` in a game built on either ran no water. Neither touches it now;
+    `RenderContext::disable_gpu_compute` leaves it alone too (it would be built again the next
+    frame). `the_fluid_is_built_when_a_scene_first_has_one`.
 - **A rigid body's `Transform` is its world pose, whatever its parent.** A body is a root of the
   transform propagation: its parent organises the hierarchy and does not carry it, and what hangs
   under a body is local to it as before. The physics and everything that reads a body's pose

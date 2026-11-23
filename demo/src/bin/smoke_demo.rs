@@ -89,7 +89,6 @@ fn setup(world: &mut World, renderer: &mut Renderer) {
     // Stüdyo ortamı; kullanılmayan ağır pass'ler kapalı.
     renderer.environment_preset = 1;
     renderer.environment_preset_2 = 1;
-    renderer.gpu_fluid = None;
     renderer.ssr = None;
     renderer.ssgi = None;
     renderer.volumetric = None;

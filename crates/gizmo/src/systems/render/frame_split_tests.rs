@@ -300,7 +300,6 @@ fn a_probe_capture_request_is_honoured_once_without_writing_the_probe() {
     });
 }
 
-#[cfg(not(gizmo_forward_only))] // The forward-only path has no GPU particles.
 /// **A frame's particles are put out once, however many times it is drawn.** The draw reads
 /// `ParticleSpawns` and cannot clear it, so a frame drawn twice — or a copy of the world drawn again
 /// without being refreshed — would put the same burst out every time; the particle system keeps the
@@ -1390,10 +1389,8 @@ fn a_view_draws_what_the_frames_step_simulated() {
     pollster::block_on(async {
         let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
         quiet(&mut renderer);
-        if renderer.gpu_fluid.is_none() || renderer.gpu_particles.is_none() {
-            eprintln!("skipping: this renderer has no GPU fluid or particles");
-            return;
-        }
+        assert!(renderer.gpu_fluid.is_none(), "a renderer built a fluid before any scene had one");
+        assert!(renderer.gpu_particles.is_some(), "a renderer was built with no GPU particles");
         let hdr = renderer.post.hdr_texture.format();
         let (width, height) = (renderer.config.width, renderer.config.height);
         renderer.gpu_fluid = Some(crate::renderer::gpu_fluid::GpuFluidSystem::new(
@@ -1433,7 +1430,10 @@ fn a_view_draws_what_the_frames_step_simulated() {
         renderer.gpu_fluid = pool;
         assert_eq!(differ(&off, &no_system), 0, "the monitor drew a fluid the scene never turned on");
 
-        game.spawn_bundle((gizmo_physics_core::components::FluidSimulation::default(),));
+        // As many as the pool holds: a larger ask would build it again (`Renderer::fluid_or_build`).
+        let mut water = gizmo_physics_core::components::FluidSimulation::default();
+        water.particles = 10_000;
+        game.spawn_bundle((water,));
         prepare_frame(&mut game, &mut renderer);
         draw_ahead_of_views(&game, &mut renderer, SimulationDetail::Full);
         let (active, all) = fluid(&renderer);

@@ -223,20 +223,27 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    follows the parent's scale (`Relative::then`). `misket` divides its tray walls' half sizes by
 >    the tray's scale by hand. A decision to make: scale shapes by the world scale, as Unity does,
 >    or keep scale visual-only and say so where a scaled parent is given a child collider.
-> 6. **(2026-11-23) The forward-only path — every browser's and phone's frame — draws no decals,
->    GPU particles, fluid or volumetric light.** Found running that path's plain (not `#[ignore]`d)
->    tests for the first time: the recipe in use ran only the ignored GPU tests. Each is its own
->    design and needs a phone's measurement:
+> 6. **(2026-11-23) The forward-only path — every browser's and phone's frame — draws no decals
+>    or volumetric light.** Found running that path's plain (not `#[ignore]`d) tests for the first
+>    time: the recipe in use ran only the ignored GPU tests. Each is its own design and needs a
+>    phone's measurement:
 >    - decals: the deferred pass paints the G-buffer's albedo, which this path does not have. The
 >      forward variant the editor once used blended a decal unlit into the lit image, and would glow
 >      in the dark; a decal here has to be lit, in the lit shader (clustered, as the lights are) or
 >      by a pass that has the light. That variant, dead since the editor draws deferred, is gone.
->    - GPU particles and the fluid: not built on this path (`renderer/construction.rs`) — compute
->      passes and 100 000-particle buffers a phone pays for.
+>    - ~~GPU particles and the fluid~~ **closed the same day:** both are built on this path. The
+>      particles' pass needs only the HDR target and the depth, which every path has, and steps and
+>      draws nothing with none alive; their tests, and the fluid's, run on it (the fluid's had been
+>      skipping there in silence). What a phone pays for was the fluid, built by every renderer for
+>      scenes that never had water — a hundred thousand particles' buffers, a sort over all of them
+>      each step and six screen-sized targets — and taken away again by the simple scene and
+>      `with_scene_render`, with the water of a game that had a `FluidSimulation`. It is built now
+>      when a scene first has one, as large as it asks (`Renderer::fluid_or_build`). Not measured on
+>      a phone: what live particles cost a frame there.
 >    - volumetric light: built over the G-buffer and the desktop's cascades.
 >
 >    Their tests are `#[cfg(not(gizmo_forward_only))]`, the reason beside each, pointing here. STATUS
->    lists the three as absent from the browser.
+>    lists the two as absent from the browser.
 > 7. ~~**A body under a parent was simulated at its own `Transform` as a world pose, and drawn at
 >    its parent's pose composed with it.**~~ **Closed 2026-11-23, option (a), the owner's choice:**
 >    a rigid body is a root of the propagation. Its `Transform` is its world pose whatever its

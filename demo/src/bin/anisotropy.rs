@@ -103,9 +103,6 @@ fn main() {
     app = app
         .add_plugin(gizmo::plugins::TransformPlugin)
         .set_setup(|world, renderer| {
-            // Bu sahnede GPU sıvısı yok: bir kez, kurulumda kapatılıyor.
-            renderer.gpu_fluid = None;
-
             let mut asset_manager = AssetManager::new();
             // Yer-çekimsiz fizik dünyası: render pass kameranın bir su hacminde olup
             // olmadığına buradan bakar (bu sahnede su yok → etkisiz, ama kaynak beklenir).

@@ -84,7 +84,6 @@ struct Shown {
 impl RenderStage for Shown {
     fn prepare(&mut self, world: &mut World, renderer: &mut Renderer) {
         renderer.gpu_physics = None;
-        renderer.gpu_fluid = None;
         renderer.gpu_particles = None;
         renderer.ssr = None;
         renderer.ssgi = None;

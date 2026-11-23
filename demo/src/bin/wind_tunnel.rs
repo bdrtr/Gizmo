@@ -89,7 +89,6 @@ fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> WindTun
     renderer.environment_preset_2 = 1;
     // Kullanılmayan ağır pass'leri kapat — bir kez: kapatılan pass yeniden kurulmuyor. TAA AÇIK
     // (spekular parıltıyı temizler).
-    renderer.gpu_fluid = None;
     renderer.ssr = None;
     renderer.ssgi = None;
     renderer.volumetric = None;

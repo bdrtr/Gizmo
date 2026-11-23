@@ -969,11 +969,6 @@ fn wheel_mesh_radius(world: &World, wheel_id: Entity, scale_y: f32) -> f32 {
 fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> CarDemoState {
     println!("Araba Demo Yükleniyor...");
 
-    // Bu sahnede sıvı/parçacık/GPU fizik yok — sıvıyı kapat (GPU fizik zaten kapalı başlıyor,
-    // GPU parçacık sistemi boştayken hiçbir iş yapmıyor). Bir kez, burada: kapatılan bir pass
-    // yeniden kurulmuyor.
-    renderer.gpu_fluid = None;
-
     // Ağır post-processing pass'lerini kapat.
     renderer.ssr = None;
     renderer.ssgi = None;

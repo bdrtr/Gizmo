@@ -193,9 +193,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> RpgState {
         ),
     ));
 
-    // Gökyüzünden düşen su damlalarını kapatıyoruz (performans için) — bir kez: kapalı bir
-    // geçişi hiçbir şey geri açmıyor.
-    renderer.gpu_fluid = None;
+    // GPU parçacıkları kapatıyoruz (performans için) — bir kez: kapalı bir geçişi hiçbir şey
+    // geri açmıyor.
     renderer.gpu_particles = None;
 
     println!("✅ SETUP: Tamamlandı!");

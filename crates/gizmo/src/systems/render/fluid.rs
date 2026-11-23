@@ -47,10 +47,15 @@ pub fn fluid_settings(sim: &FluidSimulation) -> FluidSettings {
 
 /// Gives the GPU fluid the scene's: its settings from the first [`FluidSimulation`] (no particles
 /// at all without one), and every [`FluidInteractor`] as an obstacle where its `GlobalTransform`
-/// puts it, moving as it moves.
+/// puts it, moving as it moves. The solver is built the first time a scene has a fluid, with room
+/// for as many particles as it asks ([`Renderer::fluid_or_build`]), and kept; a renderer whose
+/// scenes never have one never pays for it.
 pub fn fluid_scene_system(world: &mut World, renderer: &mut Renderer, dt: f32) {
-    let Some(fluid) = renderer.gpu_fluid.as_mut() else { return };
     let sims: Vec<(Entity, FluidSimulation)> = world.query::<(Entity, &FluidSimulation)>().iter().map(|(e, s)| (e, s.clone())).collect();
+    if let Some((_, sim)) = sims.first() {
+        renderer.fluid_or_build(sim.particles);
+    }
+    let Some(fluid) = renderer.gpu_fluid.as_mut() else { return };
     let settings = match sims.first() {
         Some((_, sim)) => fluid_settings(sim),
         None => FluidSettings { particles: 0, ..fluid.settings() },
@@ -219,6 +224,56 @@ mod tests {
     fn particles(renderer: &Renderer) -> Vec<crate::renderer::gpu_fluid::FluidParticle> {
         let fluid = renderer.gpu_fluid.as_ref().unwrap();
         fluid.read_particles(&renderer.device, &renderer.queue, fluid.settings().particles).expect("read back")
+    }
+
+    /// **No fluid is built until a scene has one, and then with room for what it asks.** A larger
+    /// ask builds it again, larger; a smaller one and none at all keep it, idle. Until 2026-11-23
+    /// every renderer built a hundred thousand particles' fluid and six screen-sized targets for
+    /// scenes that never had water, and the simple scene took it away — with a game's water.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_fluid_is_built_when_a_scene_first_has_one() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !usable_gpu() {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let mut world = World::new();
+            step(&mut world, &mut renderer, 1);
+            assert!(renderer.gpu_fluid.is_none(), "a scene with no water built a fluid");
+
+            let mut sim = FluidSimulation::default();
+            sim.particles = 2_000;
+            let water = world.spawn_bundle((sim,));
+            let pool = |r: &Renderer| r.gpu_fluid.as_ref().map(|f| (f.num_particles, f.active_particles));
+            step(&mut world, &mut renderer, 1);
+            assert_eq!(pool(&renderer), Some((2_000, 2_000)), "the fluid is not built as large as the scene asked");
+            let ask = |world: &mut World, n| world.query_mut::<&mut FluidSimulation>().get_mut(water).unwrap().particles = n;
+            ask(&mut world, 3_000);
+            step(&mut world, &mut renderer, 1);
+            assert_eq!(pool(&renderer), Some((3_000, 3_000)), "a larger ask did not build it larger");
+            ask(&mut world, 1_000);
+            step(&mut world, &mut renderer, 1);
+            assert_eq!(pool(&renderer), Some((3_000, 1_000)), "a smaller ask built it again");
+            world.remove_component::<FluidSimulation>(water);
+            step(&mut world, &mut renderer, 1);
+            assert_eq!(pool(&renderer), Some((3_000, 0)), "with the water gone the fluid ran on or was dropped");
+        });
+    }
+
+    /// The render stage `with_scene_render` sets up takes no fluid away: it would take a
+    /// `FluidSimulation`'s water with it, and a fluid none asked for is not built. Source guard — the
+    /// stage needs a window to run.
+    #[test]
+    fn the_scene_render_stage_leaves_the_fluid_alone() {
+        let src = include_str!("mod.rs");
+        let stage = src.split("fn with_scene_render(self) -> Self {").nth(1).and_then(|r| r.split("\n    }").next()).expect("with_scene_render");
+        assert!(!stage.contains(concat!("renderer.gpu_fluid", " = None")), "with_scene_render takes the fluid away again");
     }
 
     /// **A `FluidSimulation` is the fluid that runs, and without one there is none.** The solver's

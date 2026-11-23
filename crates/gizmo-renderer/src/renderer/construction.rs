@@ -472,7 +472,7 @@ impl Renderer {
             config.height,
             &depth_texture_view,
         );
-        let (gpu_particles, gpu_fluid) = gpu_simulations(&device, &queue, &scene_state, &post_state, &config);
+        let gpu_particles = gpu_particles(&device, &scene_state);
         // GPU physics is OPT-IN — default `None`. When `Some`, the renderer runs its OWN
         // GPU rigid-body sim (`gpu_physics_submit_system` in `default_render_pass`), which
         // CONFLICTS with the CPU `PhysicsPlugin` (the common case) → wrong/blank scene, forcing
@@ -548,7 +548,7 @@ impl Renderer {
             deband_dither: false,
             gpu_particles,
             gpu_physics,
-            gpu_fluid,
+            gpu_fluid: None,
             smoke: None,
             debug_renderer,
             text,
@@ -609,33 +609,12 @@ impl Renderer {
     }
 }
 
-/// The GPU simulations a renderer is built with: the particles and the fluid, 100 000 each — the
-/// fluid allocated but idle until a scene opts in (its surface composites only then; otherwise every
-/// non-fluid scene got a stray mottled ocean drawn over it). Neither on the forward-only path.
-#[cfg_attr(gizmo_forward_only, allow(unused_variables))]
-fn gpu_simulations(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    scene: &crate::pipeline::SceneState,
-    post: &crate::post_process::PostProcessState,
-    config: &wgpu::SurfaceConfiguration,
-) -> (Option<crate::gpu_particles::GpuParticleSystem>, Option<crate::gpu_fluid::GpuFluidSystem>) {
-    #[cfg(not(gizmo_forward_only))]
-    let simulations = (
-        Some(crate::gpu_particles::GpuParticleSystem::new(device, 100_000, &scene.global_bind_group_layout, wgpu::TextureFormat::Rgba16Float)),
-        Some(crate::gpu_fluid::GpuFluidSystem::new(
-            device,
-            queue,
-            100_000,
-            &scene.global_bind_group_layout,
-            post.hdr_texture.format(),
-            config.width,
-            config.height,
-        )),
-    );
-    #[cfg(gizmo_forward_only)]
-    let simulations = (None, None);
-    simulations
+/// The GPU particles a renderer is built with, 100 000 of them, on every path: their pass needs only
+/// the HDR target and the depth, and a frame with none alive steps and draws nothing. The forward-only
+/// path has them since 2026-11-23 (docs/ENGINE.md §3 item 6). The fluid is not built here: it is
+/// built when a scene first has one ([`Renderer::fluid_or_build`]).
+fn gpu_particles(device: &wgpu::Device, scene: &crate::pipeline::SceneState) -> Option<crate::gpu_particles::GpuParticleSystem> {
+    Some(crate::gpu_particles::GpuParticleSystem::new(device, 100_000, &scene.global_bind_group_layout, wgpu::TextureFormat::Rgba16Float))
 }
 
 /// What is drawn over the world into the HDR target, against the main depth buffer: the debug
