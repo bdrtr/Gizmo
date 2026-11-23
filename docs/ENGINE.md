@@ -189,16 +189,18 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    the 80-byte layout `tests/wgsl_layout.rs` pins) and damping per node in the shader; poll on
 >    the calling thread; clear the force buffers with `clear_buffer` instead of uploading zeros.
 >    It needs a GPU test: the only tests today parse the shader.
-> 2. **The renderer's construction functions are still god functions.** *Under way 2026-11-23:*
+> 2. ~~**The renderer's construction functions are still god functions.**~~ **Closed 2026-11-23:**
 >    `build_core_pipelines` (561 lines → three families of 90, 62 and 40, one shader loader per
 >    path), `build_layouts` (349 → one function per group), `gpu_physics::system::new` (356 → 73,
 >    finding a collider overlay that could be turned on half-built), `gpu_smoke::new` (273 → 82),
->    `decal::new` (261 → 113), `create_particle_pipelines` (257 → 86) and `build_scene_pipelines`
->    (230 → 113, finding a glass depth fallback that was the near plane) are split. Left:
->    `finish_construction` (264), `build_post_process_resources` (263), and the bench
->    `create_resource_world` (504). Mostly
->    descriptors, but full of per-target `#[cfg]` arms, so each split needs the golden render tests
->    on both paths, the forward-only plain tests, the wasm lint and the feature powerset.
+>    `decal::new` (261 → 113), `create_particle_pipelines` (257 → 86), `build_scene_pipelines`
+>    (230 → 113, finding a glass depth fallback that was the near plane), `finish_construction`
+>    (264 → 156, most of it the `Renderer` literal's field list), `build_post_process_resources`
+>    (263 → 115) and the bench `create_resource_world` (504 → 11, a digit macro) are split. Each
+>    was gated by the golden render tests on both paths, the forward-only plain tests and the wasm
+>    lint (no feature `#[cfg]` was touched, so not the powerset). Along the way: an indexed vector
+>    write that kept the GPU bodies from building on Windows, eight shaders reading their overrides
+>    from the source tree, and the decal arena's numbers written four times.
 > 3. ~~**The fight HUD exists only in the editor.**~~ **Closed 2026-11-23:** it is the engine's,
 >    `gizmo::systems::fight_hud` — the bars, names, round, clock and K.O. as UI nodes, built and
 >    kept by `fight_hud_system` when player 1 and player 2 are in the world, run by `PlayLoop` in
