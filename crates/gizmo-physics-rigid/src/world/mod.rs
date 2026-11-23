@@ -432,6 +432,10 @@ pub struct PhysicsWorld {
     /// at the start of every `step`; may repeat an id.
     #[serde(skip)]
     pub(crate) moved_asleep: Vec<u32>,
+    /// The gravity the last `step` ran under (`Integrator::gravity`), so the next can tell it
+    /// changed: a body asleep under one gravity is not at rest under another, and is woken.
+    #[serde(skip)]
+    pub(crate) stepped_gravity: Option<gizmo_math::Vec3>,
     /// What the ECS bridge brought over last time — see `system::EcsSync`.
     #[cfg(feature = "ecs")]
     #[serde(skip)]

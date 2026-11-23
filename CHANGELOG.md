@@ -821,6 +821,19 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A box a kinematic body pushes stays awake, and the game sees where it is.** An island's sleep
+  read only its dynamic members' counters, and a kinematic one has none. So an island of a sleeping
+  box and the kinematic paddle pushing it was all-eligible while the paddle woke the box: the box
+  was woken and put straight back to sleep in the same substep, with a fresh velocity and no count.
+  The ECS mirror was never told. A release build drew the box a step behind its physics, and a
+  debug build panicked in the step's own check ("neither brought over nor written back"). An
+  island with anything moving in it no longer sleeps.
+  `a_kinematic_push_keeps_the_box_it_pushes_awake_and_in_step`.
+- **A change of gravity wakes what slept under the old one.** A sleeping body is not integrated,
+  so a game that turned gravity over left every settled body lying on the floor, asleep, until
+  something touched it. `PhysicsWorld::step` now wakes every sleeping dynamic body when
+  `integrator.gravity` differs from the gravity of its last step.
+  `a_change_of_gravity_wakes_what_slept_under_the_old_one`.
 - **A body breaks into pieces that weigh what it did.** Each piece of a broken body weighed its
   volume times its material's density, a relative scale with water at about 1, so a 600 kg crate
   broke into ten pieces weighing 1.0 together and its momentum went with the mass. A body with a

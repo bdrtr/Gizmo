@@ -49,6 +49,7 @@ impl PhysicsWorld {
             settled_bounds: _,
             body_revision: _,
             moved_asleep: _,
+            stepped_gravity: _,
             #[cfg(feature = "ecs")]
             ecs_sync: _,
             entity_index_map: _,

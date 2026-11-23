@@ -29,6 +29,7 @@ impl PhysicsWorld {
             settled_bounds: Vec::new(),
             body_revision: 0,
             moved_asleep: Vec::new(),
+            stepped_gravity: None,
             #[cfg(feature = "ecs")]
             ecs_sync: crate::system::EcsSync::default(),
             collision_events: Vec::new(),

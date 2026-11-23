@@ -989,9 +989,19 @@ impl PhysicsWorld {
         // that touch the sleepers. Requiring the whole island keeps that from
         // arising. Eligibility itself is still per body and still counted in
         // `advance_sleep_counter`.
-        let island_can_sleep = island_indices.iter().all(|&idx| {
-            !rigid_bodies[idx].is_dynamic() || rigid_bodies[idx].sleep_eligible()
-        });
+        //
+        // **And not while anything in it moves.** The counters say only what the dynamic members
+        // did, and a dynamic mover's was just reset — but a kinematic one has none. An island of a
+        // sleeping box and a kinematic paddle pushing it read as all-eligible while the paddle woke
+        // the box: the write-back below woke it (its counter to 0, its velocity written) and put the
+        // island back to sleep straight after — a body asleep with a fresh velocity and no count,
+        // which the ECS mirror was never told about. On screen the box lagged a step behind the
+        // physics; in a debug build the step's own check panicked ("neither brought over nor
+        // written back", `system.rs`). 2026-11-23.
+        let island_can_sleep = !island_has_mover
+            && island_indices.iter().all(|&idx| {
+                !rigid_bodies[idx].is_dynamic() || rigid_bodies[idx].sleep_eligible()
+            });
 
         result.manifolds = island_manifolds;
         result.wake_ups = wake_updates;

@@ -20,6 +20,18 @@ impl PhysicsWorld {
         dt: f32,
     ) -> Result<(), gizmo_physics_core::GizmoError> {
         self.moved_asleep.clear();
+        // A change of gravity wakes every sleeping dynamic body: one asleep on the floor under one
+        // gravity is not at rest under another. Until 2026-11-23 a game that turned gravity over
+        // left its sleepers lying on the floor, still asleep, until something touched them.
+        let gravity = self.integrator.gravity;
+        if self.stepped_gravity.is_some_and(|was| was != gravity) {
+            for rb in &mut self.rigid_bodies {
+                if rb.is_dynamic() && rb.is_sleeping {
+                    rb.wake_up();
+                }
+            }
+        }
+        self.stepped_gravity = Some(gravity);
         if self.rewind_requested {
             self.rewind_requested = false;
             if let Some(snapshot) = self.history.pop_back() {
