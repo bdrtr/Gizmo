@@ -146,7 +146,7 @@ pub fn create_fluid_pipelines(
     });
     let composite_shader = crate::pipeline::load_shader_composed(
         device,
-        "crates/gizmo-renderer/src/shaders/fluid_composite.wgsl",
+        "demo/assets/shaders/fluid_composite.wgsl",
         include_str!("../shaders/fluid_composite.wgsl"),
         "Composite Shader",
     );
@@ -225,7 +225,7 @@ pub fn create_fluid_pipelines(
     // AAA: Foam/Spray render pipeline
     let foam_shader = crate::pipeline::load_shader_composed(
         device,
-        "crates/gizmo-renderer/src/shaders/fluid_foam.wgsl",
+        "demo/assets/shaders/fluid_foam.wgsl",
         include_str!("../shaders/fluid_foam.wgsl"),
         "Foam Shader",
     );

@@ -798,6 +798,15 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **Every shader's disk override is where hot reload looks.** Eight shaders looked for theirs at
+  `crates/gizmo-renderer/src/shaders/<file>` instead of `demo/assets/shaders/<file>`: decal ×2,
+  fluid ×2, particles, GPU physics ×2 and smoke.
+  - Every demo started from the repository's root read those eight from the source tree at run
+    time, not from its own build.
+  - The studio never rebuilt them on an edit.
+
+  `gizmo-renderer/tests/shader_overrides.rs` reads every loader's path and holds it to
+  `demo/assets/shaders/` and to the file its `include_str!` compiles in.
 - **The GPU bodies' collider overlay can no longer be turned on half-built, and costs nothing while
   it shows nothing.** `GpuPhysicsSystem` held an empty placeholder bind group until `enable_debug`
   built the real one. `toggle_debug` could turn the overlay on without it, and the next frame bound

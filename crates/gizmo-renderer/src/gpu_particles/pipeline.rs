@@ -97,7 +97,7 @@ pub fn create_particle_pipelines(
     // Composed so particle_render.wgsl can `#import gizmo::common::{SceneUniforms}`.
     let render_shader = crate::pipeline::load_shader_composed(
         device,
-        "crates/gizmo-renderer/src/shaders/particle_render.wgsl",
+        "demo/assets/shaders/particle_render.wgsl",
         include_str!("../shaders/particle_render.wgsl"),
         "Particle Render Shader",
     );

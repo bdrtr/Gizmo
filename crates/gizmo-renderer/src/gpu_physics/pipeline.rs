@@ -113,7 +113,7 @@ pub fn create_physics_pipelines(
     // Composed so physics_render.wgsl can `#import gizmo::common::{SceneUniforms}`.
     let render_shader = crate::pipeline::load_shader_composed(
         device,
-        "crates/gizmo-renderer/src/shaders/physics_render.wgsl",
+        "demo/assets/shaders/physics_render.wgsl",
         include_str!("../shaders/physics_render.wgsl"),
         "Physics Render Shader",
     );
@@ -180,7 +180,7 @@ pub fn create_physics_pipelines(
     // Composed so physics_culling.wgsl can `#import gizmo::common::{SceneUniforms}`.
     let culling_shader = crate::pipeline::load_shader_composed(
         device,
-        "crates/gizmo-renderer/src/shaders/physics_culling.wgsl",
+        "demo/assets/shaders/physics_culling.wgsl",
         include_str!("../shaders/physics_culling.wgsl"),
         "Physics Culling Shader",
     );

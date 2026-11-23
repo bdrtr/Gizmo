@@ -71,7 +71,7 @@ impl DecalState {
     pub fn new(device: &wgpu::Device, scene: &SceneState, deferred: &DeferredState) -> Self {
         let shader = load_shader_composed(
             device,
-            "crates/gizmo-renderer/src/shaders/decal.wgsl",
+            "demo/assets/shaders/decal.wgsl",
             include_str!("shaders/decal.wgsl"),
             "decal",
         );
@@ -188,7 +188,7 @@ impl DecalState {
 
         let forward_shader = load_shader_composed(
             device,
-            "crates/gizmo-renderer/src/shaders/decal_forward.wgsl",
+            "demo/assets/shaders/decal_forward.wgsl",
             include_str!("shaders/decal_forward.wgsl"),
             "decal_forward",
         );

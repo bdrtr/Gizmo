@@ -18,6 +18,10 @@ and the studio recompiles the pipelines while it runs — the studio watches `de
 recursively and calls `Renderer::rebuild_shaders()` on any `.wgsl` change. Verified end to end on
 2026-08-16 by tinting `post_process.wgsl` mid-run and watching the frame turn green.
 
+Every loader's path is held to that directory, and to its own file, by
+`crates/gizmo-renderer/tests/shader_overrides.rs` (eight were reading `crates/gizmo-renderer/src/shaders/`
+until 2026-11-23, so the studio never rebuilt them).
+
 `demo/assets/shaders/` is deliberately **not** in the repository — see the note in `CLAUDE.md`.
 Committing copies there would mean two versions of every shader free to drift, with the disk one
 silently winning. Delete your override when you are done, or fold the change back into

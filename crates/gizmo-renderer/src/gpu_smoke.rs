@@ -291,7 +291,7 @@ impl SmokeVolume {
 
         let rm_shader = crate::pipeline::load_shader_composed(
             device,
-            "crates/gizmo-renderer/src/shaders/smoke_raymarch.wgsl",
+            "demo/assets/shaders/smoke_raymarch.wgsl",
             include_str!("shaders/smoke_raymarch.wgsl"),
             "Smoke Raymarch Shader",
         );
