@@ -166,9 +166,43 @@ the first write (Unity's material instance — a hidden un-sharing).
 > demo that can re-run it. The sweep also found seven engine defects (all fixed or reported) and
 > one complete subsystem — the irradiance-volume code in `gizmo-renderer::gi` — that is written,
 > tested, exported and **connected to nothing**. **First item of work named there: text/font
-> rendering, which the engine has no path for at all.**
+> rendering, which the engine has no path for at all.** *(Both closed: text landed 2026-08-24 (M7.6
+> below), and the irradiance volume is drawn — `IrradianceVolume`, captured from each probe, in
+> STATUS's rendering row. Confirmed in the 2026-11-24 sweep.)*
 
-> **2026-11-22 — five open items, each a piece of work of its own.** Found while splitting the
+> **2026-11-24 — what is open, all of it.** The owner asked for the old entries closed and the
+> current problems kept, so every entry below that still read as open was checked against the code
+> on 2026-11-24. What is open is listed here; each line points at its entry, which keeps the
+> detail. Everything else in this section is closed or decided, and says so where it stands.
+>
+> 1. **`World::entity_locations` is never cut back.** Indexed by entity id at 8 bytes an id and
+>    only grown; `compact` shrinks its capacity but does not truncate past the last valid slot, as
+>    it does for the sparse index. Waits on proving the row-location invariant for the unguarded
+>    index sites (round three of that audit is not advanced). Entry: "Open, filed 2026-08-31".
+> 2. **The editor cannot move or rename an asset**, and a rename done outside it leaves the `.meta`
+>    sidecar behind and orphans the asset's identity. Entry: "Asset identity".
+> 3. **Audio routing:** no sends/returns (a reverb bus fed from other buses); the underwater muffle
+>    applies to every bus, menu music too, with no per-bus opt-out (`Mixer::set_underwater`); a
+>    sound cannot be started on its bus (`play` then `set_sink_bus`, one buffer late). Entry: "M7.5".
+> 4. **A shader graph has no texture of its own**: it samples the five maps the material's group
+>    binds, and a sixth needs a binding the web's four groups have no room for. Entry: "Shader Graph".
+> 5. **Friction holds velocity, not position**: no positional term in the tangent channel. What it
+>    costs is measured at 10 µm of creep over 200 s at the friction limit. Entry: "Friction has no
+>    positional term".
+> 6. **Gamepads, waiting on something outside the engine:** a control held at launch is unseen until
+>    it moves (gilrs reads no initial state); the browser's pad is built and linted, never tried in a
+>    browser; rumble strengths never reached a device (gilrs reports no force feedback for the
+>    virtual pad). Entry: "Gamepad input".
+>
+> **Closed in the same sweep, each where it stands:** the irradiance volume "connected to nothing"
+> (it is drawn); no default font (`bundled-font`); no EQ or compressor (`gizmo_audio::{equalizer,
+> compressor}`); the scene-fidelity `OPEN` list (empty); Phase 7's one-line list (superseded by
+> STATUS); "optional" cross-platform determinism and networking in the browser (out of scope, and
+> native-only by decision); the human-eye A/B gate of the 0.2 upgrade; the 21 hand-rolled cameras,
+> the light array's uniform ceiling, the compute-shader cluster assignment and the doc-language
+> residuals (decisions with their triggers, not problems).
+
+> **2026-11-22 — five open items, each a piece of work of its own** *(all closed by 2026-11-23, with the three added after them)*. Found while splitting the
 > god functions and building `misket` and `rampa`; written down here so they are not lost, not as
 > limits:
 >
@@ -1018,8 +1052,10 @@ state instead.
   the type and at `RigidBody::new`. Verified 2026-08-17.
 
 **Phase 7 — Product layer (a shippable game)**
-- M7.4 authoritative client-server netcode; M7.7 WASM feature parities, editor panels +
-  AssetServer hot-reload.
+- ~~M7.4 authoritative client-server netcode; M7.7 WASM feature parities, editor panels +
+  AssetServer hot-reload.~~ *Closed 2026-11-24 as superseded:* `gizmo-net`'s `client-server`
+  feature, the browser's path and the editor's panels each have entries of their own and a line in
+  STATUS; a one-line list naming them is not a separate piece of work.
 
 - **M7.6 — font and text landed 2026-08-24; z-index and the common widgets on 2026-11-02/03.** `gizmo-renderer::text`
   is fonts, a glyph atlas and layout; `Text` is a component with two spaces and nine anchors, drawn
@@ -1032,12 +1068,14 @@ state instead.
   controls (`VirtualStick`, `VirtualButton`); `Scroll` has a draggable scrollbar since 2026-11-03.
   A select list (`Dropdown`) and flicking a list's content with a finger since 2026-11-03. Drag and drop targets (`DropTarget`) a layout scale that fits the window (`UiScale`) tooltips (`Tooltip`) and moving/fading boxes (`UiTransform`, `UiTween`) since 2026-11-03. No default font ships and none
   will without a licensing decision: a `Text` whose face was never loaded draws nothing rather than
-  substituting one.
+  substituting one. *(Superseded: the `bundled-font` feature ships one — `Renderer::default_font`,
+  what the browser and the Android games draw with. Checked 2026-11-24.)*
 
 - **M7.5 — the mixer landed 2026-08-18; reverb on 2026-11-03 (`AudioManager::set_reverb`, a
   Freeverb stage inside every source, bit-exact when off, its tail played past the sound's end);
   a master limiter on the summed output on 2026-11-03 (`AudioManager::set_limiter`). EQ and a
-  general compressor have not.** `gizmo_audio::Mixer` holds named
+  general compressor have not.** *(They have since: `gizmo_audio::equalizer` and `compressor`,
+  checked 2026-11-24. The routing below is what is open.)* `gizmo_audio::Mixer` holds named
   buses (`music`/`sfx`/`ui`/`voice`, created on demand so a game's own names need no engine
   change), a master gain, mute flags that keep their gains, and the environment modifier. Buses
   are the half a game ships: two sliders in a settings menu, applied to sounds that are *already
@@ -1117,8 +1155,12 @@ state instead.
   **Trigger for the opt-out:** a game with non-diegetic sound that dives. **Trigger for starting a
   sound already on its bus** (rather than `play` + `set_sink_bus`): a game that can hear the gap,
   which is one mixer buffer and audible only into a muted bus.
-- Optional: cross-platform determinism (as a feature — see §5), gizmo-net on WASM.
-- Gated on human-eye A/B: the textured-glTF `material_demo` asset, `car_demo` driving/geometry.
+- ~~Optional: cross-platform determinism (as a feature — see §5), gizmo-net on WASM.~~ *Closed
+  2026-11-24:* cross-platform bit-exactness is out of scope (§5), and networking is native-only by
+  decision (STATUS).
+- ~~Gated on human-eye A/B: the textured-glTF `material_demo` asset, `car_demo` driving/geometry.~~
+  *Closed 2026-11-24:* a sign-off of the 0.2 graphics upgrade, which shipped; both demos have
+  played on every build since, and the golden render tests hold what they draw.
 
 **The CI gates that were filed under "1.0" — decided, 2026-08-17.** They were one line
 ("rustfmt / `missing_docs` / coverage / cargo-deny / benchmark regression"), and two of them had
@@ -1387,7 +1429,7 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
 
   The other 21 hand-rolled cameras stay hand-rolled: some are orbit cameras, some are turrets, and
   converting a camera nobody asked about is churn against a demo that works. **Trigger:** the next
-  one that is a plain first-person or fly camera.
+  one that is a plain first-person or fly camera. *(A decision, not an open problem — 2026-11-24.)*
 - **The ten-light ceiling — CLOSED (2026-08-17), both halves. Read the item as history.**
   The heading said "the ceiling is not" for a day after clustering raised it to 256 and the
   paragraphs below recorded that; corrected 2026-08-18. `MAX_LIGHTS` is **256** in
@@ -1441,7 +1483,7 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   hard ceiling left is the uniform block: `(65536 − 3312) / 68` = 915 lights (1015 at the 560 B
   fixed part this was written against, 1013 at 656 B), and the honest move
   past a few hundred is to put the light array in a storage buffer rather than inch toward that
-  cliff.
+  cliff. *(A decision: the array holds 256 and nothing asks for more — 2026-11-24.)*
 
   **That ceiling is computed now, not argued.**
   `the_scene_block_fits_the_uniform_binding_floor_every_webgpu_target_guarantees` asserts the block
@@ -1488,7 +1530,8 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   where the grid has 3456. Built once a frame instead, the assignment is the same list for every
   cluster (`the_assignment_is_the_per_light_bounds_one` keeps the old build as its reference) at a
   fifth of the cost; the fixed part — building the bounds, 3456 empty lists — is the 0.03 ms the
-  smallest row now shows.
+  smallest row now shows. *(So the compute build stays a decision with its trigger, not an open
+  item — 2026-11-24.)*
 
   **The guard finding is the part worth remembering.** Clustering is correct only if
   `assign_lights` (CPU) and `gizmo_cluster_index` (WGSL) agree about which cluster a point is in,
@@ -1650,6 +1693,7 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   places). Measured remainder there, by the same detector: **221 lines** in `tests/` and `benches/`
   across the workspace. (An earlier count said 524; that figure predated citation-stripping and
   counted the `#[cfg(test)]` modules that live inside `src/` — which this session translated.)
+  *(Both residuals are the rule's scope as decided, not open work — 2026-11-24.)*
 - **Asset identity — decided and wired (2026-08-17); one of the three stays open, with a trigger.**
   The blocking question was *do scenes address assets by identity?* The answer is **the path stays
   authoritative and identity is the fallback**, because the two failure modes are not symmetric: a
@@ -1817,7 +1861,8 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   in `OPEN` — which only shrinks. Started at 119 components, 63 open, to be closed class by class:
   what is seen, physics and play, animation, UI. Already closed the same day: meshes built in code
   (`mesh_sync`), `MeshData`, glTF models with their skeletons, clips and clip edits, material maps,
-  unnamed textures.
+  unnamed textures. **`OPEN` is empty** (checked 2026-11-24): every engine component is saved or
+  named with why.
 - **Shader Graph.** A node editor plus WGSL generation. The largest item on the editor list and a
   project on its own. **The graph and its WGSL landed 2026-11-13** (`gizmo_renderer::shader_graph`):
   it generates a `material_surface`, so it reuses everything `SurfaceMaterial` already is — composed
