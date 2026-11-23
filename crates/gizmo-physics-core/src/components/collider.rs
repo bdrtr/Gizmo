@@ -737,9 +737,15 @@ impl Collider {
     /// compound when its mass is distributed.
     ///
     /// Exact for the primitives (sphere, box, capsule as cylinder + one full sphere).
-    /// **Approximate** for [`ColliderShape::TriMesh`], [`ColliderShape::ConvexHull`] and
-    /// [`ColliderShape::Compound`]: half the volume of the unrotated local AABB, which
-    /// for a compound spans the empty space between its parts as well.
+    /// **Exact** for a [`ColliderShape::ConvexHull`], from its faces (zero for a flat, degenerate
+    /// one), and for a [`ColliderShape::Compound`] the sum of its parts' (overlaps counted twice).
+    /// **Approximate** for [`ColliderShape::TriMesh`] and [`ColliderShape::Heightfield`]: half the
+    /// volume of the unrotated local AABB — static surfaces with no interior.
+    ///
+    /// Until 2026-11-23 a hull and a compound were the half-AABB too. A box-shaped hull read half
+    /// its volume, so it displaced half its water and its compound neighbours took the wrong share
+    /// of a body's mass; the ten hulls of a broken 1 m³ crate read 1.126 m³ between them, more than
+    /// the crate.
     ///
     /// A [`ColliderShape::Plane`] returns `f32::MAX`, not `INFINITY` — a finite sentinel,
     /// deliberately chosen so downstream arithmetic stays defined where `INFINITY` would
@@ -762,10 +768,19 @@ impl Collider {
                 std::f32::consts::PI * c.radius.powi(2) * (c.half_height * 2.0) / 3.0
             }
             ColliderShape::Plane(_) => f32::MAX, // Safe value instead of INFINITY for inertia calculations
+            ColliderShape::ConvexHull(h) => {
+                // Tetrahedra from an interior point (the vertices' mean) to each outward face.
+                let Some(&first) = h.vertices.first() else { return 0.0 };
+                let inside = h.vertices.iter().fold(Vec3::ZERO, |sum, &v| sum + (v - first)) / h.vertices.len() as f32 + first;
+                let six = h.faces.iter().fold(0.0f32, |sum, &[a, b, c]| {
+                    let corner = |i: u32| h.vertices.get(i as usize).copied().unwrap_or(inside) - inside;
+                    sum + corner(a).dot(corner(b).cross(corner(c)))
+                });
+                six.abs() / 6.0
+            }
+            ColliderShape::Compound(parts) => parts.iter().map(|(_, part)| Collider::from_shape((**part).clone()).volume()).sum(),
             ColliderShape::TriMesh(_)
-            | ColliderShape::Heightfield(_)
-            | ColliderShape::ConvexHull(_)
-            | ColliderShape::Compound(_) => {
+            | ColliderShape::Heightfield(_) => {
                 let aabb = self.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
                 let e = aabb.max - aabb.min;
                 e.x * e.y * e.z * 0.5 // Approximate volume from AABB
@@ -1745,6 +1760,28 @@ mod tests {
         assert!((cap - expected).abs() < 1e-3, "cap {cap}");
         // Plane returns a finite sentinel (not INF) so inertia math stays defined.
         assert_eq!(Collider::plane(Vec3::Y, 0.0).volume(), f32::MAX);
+    }
+
+    /// A hull's volume is its own, from its faces, and a compound's its parts': until 2026-11-23
+    /// both were half the local AABB, so the cube's hull below read 4 and the tetrahedron 0.0833.
+    #[test]
+    fn a_hulls_and_a_compounds_volume_is_their_own() {
+        let corners: Vec<Vec3> = [-1.0f32, 1.0]
+            .iter()
+            .flat_map(|&x| [-1.0f32, 1.0].iter().flat_map(move |&y| [-1.0f32, 1.0].iter().map(move |&z| Vec3::new(x, y, z))))
+            .collect();
+        let cube = Collider::convex_hull(&corners).volume();
+        assert!((cube - 8.0).abs() < 1e-4, "a cube's hull: {cube}");
+        let tetra = Collider::convex_hull(&[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z]).volume();
+        assert!((tetra - 1.0 / 6.0).abs() < 1e-5, "a corner tetrahedron's hull: {tetra}");
+        let flat = Collider::convex_hull(&[Vec3::ZERO, Vec3::X, Vec3::Z, Vec3::new(1.0, 0.0, 1.0)]).volume();
+        assert_eq!(flat, 0.0, "a flat hull has none");
+        let two = Collider::compound(vec![
+            (Transform::new(Vec3::new(-3.0, 0.0, 0.0)), Collider::box_collider(Vec3::ONE)),
+            (Transform::new(Vec3::new(3.0, 0.0, 0.0)), Collider::box_collider(Vec3::ONE)),
+        ])
+        .volume();
+        assert!((two - 16.0).abs() < 1e-4, "two 8 m³ boxes, apart: {two}");
     }
 
     #[test]

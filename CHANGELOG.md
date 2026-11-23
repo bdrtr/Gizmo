@@ -821,6 +821,18 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A body breaks into pieces that weigh what it did.** Each piece of a broken body weighed its
+  volume times its material's density, a relative scale with water at about 1, so a 600 kg crate
+  broke into ten pieces weighing 1.0 together and its momentum went with the mass. A body with a
+  mass of its own now shares it by volume between its pieces and the parts it lets go of. A
+  breakable with none (a pane, a wall) keeps the density.
+  `a_body_breaks_into_pieces_that_weigh_what_it_did` is red on the code before.
+- **A convex hull's volume is its own, and a compound's is its parts'.** `Collider::volume` read
+  both as half their local AABB: a box-shaped hull half its volume, which is half its water
+  displaced, and the wrong share of a compound body's mass for its neighbours. The ten hull pieces
+  of a broken 1 m³ crate read 1.126 m³ between them. A hull's volume now comes exactly from its
+  faces (zero for a flat one), a compound's is the sum of its parts', and mesh and heightfield keep
+  their documented approximation. `a_hulls_and_a_compounds_volume_is_their_own`.
 - **Rolling friction is the textbook coefficient, whatever the ball's size.** Behavioural. The
   solver bounded the resisting torque by `rolling_friction · N`, a force spent as a torque with no
   radius, as though every ball were a metre across. The resistance went as `1/r`:

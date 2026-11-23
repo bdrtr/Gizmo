@@ -1077,6 +1077,8 @@ pub fn fracture_step(world: &World, dt: f32) -> Vec<crate::components::BreakEven
                     breakable.current_health -= max_impulse;
                     if breakable.current_health <= 0.0 {
                         // Latch only if it really broke — see `shatter_entity`.
+                        let loose = loose_parts(world, entity_a, transform);
+                        let parts_volume: f32 = loose.parts.iter().map(|(_, _, c)| c.volume()).sum();
                         let pieces = shatter_entity(
                             &mut commands,
                             entity_a,
@@ -1085,12 +1087,14 @@ pub fn fracture_step(world: &World, dt: f32) -> Vec<crate::components::BreakEven
                             collider,
                             vel.copied().unwrap_or_default(),
                             body,
+                            parts_volume,
                             -impact_normal,
                         );
-                        if let Some(pieces) = pieces {
+                        if let Some((pieces, per_volume)) = pieces {
                             breakable.is_broken = true;
                             shattered.insert(event.entity_a.id());
-                            release_parts(world, &mut commands, entity_a, transform, vel.copied().unwrap_or_default(), body, breakable.debris_lifetime);
+                            let vel = vel.copied().unwrap_or_default();
+                            let_go(&mut commands, entity_a, loose, transform, vel, body, per_volume, breakable.debris_lifetime);
                             breaks.push(report_break(world, entity_a, &breakable, transform.position, impact_point, pieces));
                         }
                     }
@@ -1108,6 +1112,8 @@ pub fn fracture_step(world: &World, dt: f32) -> Vec<crate::components::BreakEven
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
                     if breakable.current_health <= 0.0 {
+                        let loose = loose_parts(world, entity_b, transform);
+                        let parts_volume: f32 = loose.parts.iter().map(|(_, _, c)| c.volume()).sum();
                         let pieces = shatter_entity(
                             &mut commands,
                             entity_b,
@@ -1116,12 +1122,14 @@ pub fn fracture_step(world: &World, dt: f32) -> Vec<crate::components::BreakEven
                             collider,
                             vel.copied().unwrap_or_default(),
                             body,
+                            parts_volume,
                             impact_normal,
                         );
-                        if let Some(pieces) = pieces {
+                        if let Some((pieces, per_volume)) = pieces {
                             breakable.is_broken = true;
                             shattered.insert(event.entity_b.id());
-                            release_parts(world, &mut commands, entity_b, transform, vel.copied().unwrap_or_default(), body, breakable.debris_lifetime);
+                            let vel = vel.copied().unwrap_or_default();
+                            let_go(&mut commands, entity_b, loose, transform, vel, body, per_volume, breakable.debris_lifetime);
                             breaks.push(report_break(world, entity_b, &breakable, transform.position, impact_point, pieces));
                         }
                     }
@@ -1249,8 +1257,9 @@ fn shatter_entity(
     collider: &Collider,
     vel: Velocity,
     body: Option<&RigidBody>,
+    parts_volume: f32,
     impact_direction: gizmo_math::Vec3,
-) -> Option<u32> {
+) -> Option<(u32, Option<f32>)> {
     use crate::fracture::voronoi_shatter;
 
     let (center, extents) = shatter_bounds(collider)?;
@@ -1263,6 +1272,16 @@ fn shatter_entity(
     // object still breaks the same way on every replay — see `shatter_seed`.
     let chunks = voronoi_shatter(extents, breakable.max_pieces, shatter_seed(entity.id()));
     let pieces = chunks.len() as u32;
+    // **The body's mass is its pieces'**, shared by volume with the parts it lets go of
+    // (`loose_parts`): a body made with a mass of its own breaks into pieces that weigh what it did.
+    // Until 2026-11-23 every piece weighed its volume times the material's density — a relative
+    // scale, water about 1 — so a 600 kg crate broke into ten pieces that weighed 1.0 together,
+    // and its momentum went with the mass. A breakable with no mass of its own (a pane, a wall:
+    // static geometry) keeps the density.
+    let per_volume = body.filter(|b| b.is_dynamic() && b.mass > 0.0).map(|b| {
+        let whole: f32 = chunks.iter().map(|c| c.volume).sum::<f32>() + parts_volume;
+        b.mass / whole.max(1e-9)
+    });
 
     for chunk in chunks {
         // Offset chunk center by parent's transform. `center` is where the shatter box sits in
@@ -1287,7 +1306,7 @@ fn shatter_entity(
         // spread 14 m, where hulls come to rest within four seconds and 3.3 m.
         let local = center_of_mass_frame(&chunk);
         let chunk_collider = Collider::convex_hull(&local).with_material(collider.material);
-        let mut rb = RigidBody::new(chunk.volume * collider.material.density, true);
+        let mut rb = RigidBody::new(chunk.volume * per_volume.unwrap_or(collider.material.density), true);
         rb.update_inertia_from_collider(&chunk_collider);
         keep_locks(&mut rb, body);
         commands
@@ -1306,7 +1325,7 @@ fn shatter_entity(
             });
     }
 
-    Some(pieces)
+    Some((pieces, per_volume))
 }
 
 /// A piece of a broken body keeps the body's axis locks: what broke in a plane (`RigidBody::planar_xy`,
@@ -1322,30 +1341,27 @@ fn keep_locks(piece: &mut RigidBody, broken: Option<&RigidBody>) {
     piece.lock_rotation_z = b.lock_rotation_z;
 }
 
-/// What a shattered body held besides its own shape, let go of: each part of its compound — a
-/// descendant with a solid collider and no body of its own — becomes a body of its own where it
-/// was, moving as that point of the body was (`v + ω × r`), its shape at the scale it had there,
-/// and ages as debris (`lifetime`); its own children stay with it. A descendant with a body of its
-/// own lives on. Triggers and visuals under the broken body go with it.
+/// What a shattered body held besides its own shape: the parts of its compound — each descendant
+/// with a solid collider and no body of its own, at its world pose, its shape at the scale it had
+/// there — and the descendants that go with the body: triggers and visuals. A descendant with a
+/// body of its own is neither: it lives on. See [`let_go`].
 ///
 /// Until 2026-11-23 the break despawned the body alone, and despawning a parent unparents its
 /// children: a lander's leg, parented one metre down and to the side, became static geometry at
 /// that LOCAL position read as a world one — beside the world's origin, half in the ground — and a
 /// mesh under the body was left drawn where the body had stood.
-fn release_parts(
-    world: &World,
-    commands: &mut gizmo_core::commands::Commands,
-    body: Entity,
-    transform: &Transform,
-    vel: Velocity,
-    broken: Option<&RigidBody>,
-    lifetime: f32,
-) {
-    use gizmo_core::component::{Children, Parent};
+struct Loose {
+    parts: Vec<(Entity, Transform, Collider)>,
+    gone: Vec<Entity>,
+}
+
+fn loose_parts(world: &World, body: Entity, transform: &Transform) -> Loose {
+    use gizmo_core::component::Children;
     let children_q = world.query::<&Children>();
     let trans_q = world.query::<&Transform>();
     let col_q = world.query::<&Collider>();
     let bodies = world.query::<&RigidBody>();
+    let mut loose = Loose { parts: Vec::new(), gone: Vec::new() };
     let mut visited = std::collections::HashSet::new();
     visited.insert(body);
     let mut stack = vec![(body, Relative { position: gizmo_math::Vec3::ZERO, rotation: gizmo_math::Quat::IDENTITY, scale: transform.scale })];
@@ -1358,7 +1374,7 @@ fn release_parts(
             let local = trans_q.get(child).copied().unwrap_or_default();
             let here = rel.then(&local);
             let Some(col) = col_q.get(child).filter(|c| !c.is_trigger) else {
-                commands.entity(child).despawn();
+                loose.gone.push(child);
                 stack.push((child, here));
                 continue;
             };
@@ -1367,26 +1383,53 @@ fn release_parts(
             part.shape = col.shape.scaled(above);
             let position = transform.position + transform.rotation * here.position;
             let pose = Transform::new(position).with_rotation(transform.rotation * here.rotation).with_scale(here.scale);
-            let moving = Velocity { linear: vel.linear + vel.angular.cross(position - transform.position), ..vel };
-            let mut rb = RigidBody::new((part.volume() * part.material.density).max(1e-3), true);
-            rb.update_inertia_from_collider(&part);
-            keep_locks(&mut rb, broken);
-            commands
-                .entity(child)
-                .remove::<Parent>()
-                .insert(pose)
-                .insert(part)
-                .insert(rb)
-                .insert(moving)
-                .insert(crate::components::Debris {
-                    source: body.id(),
-                    vertices: Vec::new(),
-                    normals: Vec::new(),
-                    indices: Vec::new(),
-                    age: 0.0,
-                    lifetime,
-                });
+            loose.parts.push((child, pose, part));
         }
+    }
+    loose
+}
+
+/// Lets go of what [`loose_parts`] found: each part becomes a body of its own where it was, moving
+/// as that point of the body was (`v + ω × r`), keeping the body's locks (`keep_locks`), its mass
+/// its volume at `per_volume` — the body's share, from [`shatter_entity`] — or at its material's
+/// density for a body without a mass of its own; and it ages as debris (`lifetime`). Its own
+/// children stay with it. What goes with the body is despawned.
+#[allow(clippy::too_many_arguments)]
+fn let_go(
+    commands: &mut gizmo_core::commands::Commands,
+    body: Entity,
+    loose: Loose,
+    transform: &Transform,
+    vel: Velocity,
+    broken: Option<&RigidBody>,
+    per_volume: Option<f32>,
+    lifetime: f32,
+) {
+    use gizmo_core::component::Parent;
+    for e in loose.gone {
+        commands.entity(e).despawn();
+    }
+    for (child, pose, part) in loose.parts {
+        let moving = Velocity { linear: vel.linear + vel.angular.cross(pose.position - transform.position), ..vel };
+        let mass = part.volume() * per_volume.unwrap_or(part.material.density);
+        let mut rb = RigidBody::new(mass.max(1e-3), true);
+        rb.update_inertia_from_collider(&part);
+        keep_locks(&mut rb, broken);
+        commands
+            .entity(child)
+            .remove::<Parent>()
+            .insert(pose)
+            .insert(part)
+            .insert(rb)
+            .insert(moving)
+            .insert(crate::components::Debris {
+                source: body.id(),
+                vertices: Vec::new(),
+                normals: Vec::new(),
+                indices: Vec::new(),
+                age: 0.0,
+                lifetime,
+            });
     }
 }
 
@@ -1533,11 +1576,13 @@ pub fn explosion_step(world: &World, dt: f32) -> Vec<crate::components::BreakEve
                             // original in the scene beside its own debris and, since every
                             // damage path is gated on `!is_broken` and nothing clears it,
                             // permanently undamageable.
-                            let pieces = shatter_entity(&mut commands, entity, &breakable, transform, collider, exp_vel, body, dir);
-                            if let Some(pieces) = pieces {
+                            let loose = loose_parts(world, entity, transform);
+                            let parts_volume: f32 = loose.parts.iter().map(|(_, _, c)| c.volume()).sum();
+                            let pieces = shatter_entity(&mut commands, entity, &breakable, transform, collider, exp_vel, body, parts_volume, dir);
+                            if let Some((pieces, per_volume)) = pieces {
                                 breakable.is_broken = true;
                                 shattered.insert(entity);
-                                release_parts(world, &mut commands, entity, transform, exp_vel, body, breakable.debris_lifetime);
+                                let_go(&mut commands, entity, loose, transform, exp_vel, body, per_volume, breakable.debris_lifetime);
                                 breaks.push(report_break(world, entity, &breakable, transform.position, *exp_pos, pieces));
                             }
                         }

@@ -250,3 +250,39 @@ fn a_blast_lets_go_of_a_bodys_parts() {
     let at = world.query::<&Transform>().get(lid).map(|t| t.position);
     assert_eq!(at, Some(Vec3::new(1.0, 0.4, 0.0)), "where the crate held it");
 }
+
+/// A body breaks into pieces that weigh what it did: its mass, shared by volume between its debris
+/// and the parts it lets go of. Red on the code before, where each piece weighed its volume times
+/// the material's relative density: a 600 kg crate's pieces weighed about 1.0 together.
+#[test]
+fn a_body_breaks_into_pieces_that_weigh_what_it_did() {
+    use gizmo_core::component::{Children, Parent};
+    let mut world = world_with_floor();
+    let crate_ = world.spawn();
+    world.add_component(crate_, Transform::new(Vec3::new(0.0, 3.0, 0.0)));
+    world.add_component(crate_, RigidBody::new(600.0, true));
+    world.add_component(crate_, Velocity::new(Vec3::new(0.0, -15.0, 0.0)));
+    world.add_component(crate_, Collider::box_collider(Vec3::splat(0.5)));
+    world.add_component(crate_, fragile());
+    let handle = world.spawn();
+    world.add_component(handle, Transform::new(Vec3::new(0.0, 0.6, 0.0)));
+    world.add_component(handle, Collider::box_collider(Vec3::new(0.3, 0.05, 0.05)));
+    world.add_component(handle, Parent(crate_));
+    world.add_component(crate_, Children(vec![handle]));
+    let mut broke = false;
+    for _ in 0..60 {
+        broke |= !step(&mut world).is_empty();
+    }
+    assert!(broke, "the crate broke");
+    let pieces = world.query::<(&Debris, &RigidBody, &Collider)>();
+    let total: f32 = pieces.iter().map(|(_, b, _)| b.mass).sum();
+    assert!((total - 600.0).abs() < 0.6, "the pieces and the handle weigh what the crate did: {total} kg");
+    // Shared by volume: every piece, the handle among them, at one mass per cubic metre.
+    let volume: f32 = pieces.iter().map(|(_, _, c)| c.volume()).sum();
+    let share = total / volume;
+    for (_, b, c) in pieces.iter() {
+        let density = b.mass / c.volume();
+        assert!((density - share).abs() < 0.02 * share, "every piece at the crate's {share} kg/m³: {density}");
+    }
+    assert!(world.query::<&RigidBody>().get(handle).is_some_and(|b| b.mass > 0.0), "the handle broke loose with its share");
+}

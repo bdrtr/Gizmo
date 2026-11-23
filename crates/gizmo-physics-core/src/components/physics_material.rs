@@ -153,8 +153,11 @@ pub struct PhysicsMaterial {
     ///
     /// It is inert for an ordinary body: nothing multiplies collider volume by it to produce
     /// a mass, and a rigid body is constructed with an explicit mass instead. The one place
-    /// the engine turns density into mass is fracture, where a chunk's mass is its volume
-    /// times this value — and therefore on the same relative scale, not in kilograms.
+    /// the engine turns density into mass is the fracture of a breakable with no mass of its
+    /// own (a pane, a wall: static geometry), where a piece's mass is its volume times this
+    /// value — and therefore on the same relative scale, not in kilograms. A body with a mass
+    /// shares it among its pieces by volume instead (2026-11-23; its pieces weighed their volume
+    /// times this before, so a 600 kg crate broke into pieces weighing 1.0 together).
     pub density: f32,
     /// Rule for merging both friction coefficients with a partner material's. Only one of the
     /// pair's two modes survives — the higher-priority one, see [`CombineMode`] — and it is
