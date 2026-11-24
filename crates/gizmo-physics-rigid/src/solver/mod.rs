@@ -618,6 +618,25 @@ impl ContactPair {
             com_b: com(idx_b),
         })
     }
+
+    /// [`of`](Self::of) for each of an island's manifolds, worked out once for every pass of its
+    /// solve: the approach speeds, the preparation, the warm start and the friction record each
+    /// worked it out again — two id lookups and two world inertia tensors a manifold, four times a
+    /// substep. The values are pure functions of the bodies and their transforms, which no solve
+    /// changes, so this is the same numbers.
+    pub(crate) fn all(
+        manifolds: &[ContactManifold],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        entity_index_map: &crate::world::EntityIndexMap,
+    ) -> Vec<Option<Self>> {
+        let of = |m: &ContactManifold| Self::of(m, rigid_bodies, transforms, entity_index_map);
+        if manifolds.len() >= tgs::PARALLEL_MANIFOLDS {
+            manifolds.par_iter().with_min_len(tgs::MANIFOLDS_PER_CHUNK).map(of).collect()
+        } else {
+            manifolds.iter().map(of).collect()
+        }
+    }
 }
 
 impl ConstraintSolver {
@@ -753,21 +772,21 @@ impl ConstraintSolver {
         }
 
         if self.use_tgs_soft && !has_ccd {
+            let pairs = ContactPair::all(manifolds, rigid_bodies, transforms, entity_index_map);
             self.solve_contacts_tgs(
                 manifolds,
+                &pairs,
                 rigid_bodies,
-                transforms,
                 velocities,
                 pos_corrections,
                 bounces,
-                entity_index_map,
                 island_bodies,
                 island_depth,
                 n_iterations,
                 dt,
                 between,
             );
-            self.record_sliding(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
+            self.record_sliding(manifolds, &pairs, velocities);
             return SolveStats {
                 island_depth,
                 iterations: n_iterations,
@@ -786,7 +805,8 @@ impl ConstraintSolver {
             dt,
             between,
         );
-        self.record_sliding(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
+        let pairs = ContactPair::all(manifolds, rigid_bodies, transforms, entity_index_map);
+        self.record_sliding(manifolds, &pairs, velocities);
         // The split-impulse path sweeps `self.iterations` (see the loop above) and has never
         // consumed the adaptive count, so reporting `n_iterations` here would be a lie about
         // work that was not done. An island reaches this path only by containing a CCD-enabled
@@ -801,16 +821,9 @@ impl ConstraintSolver {
     /// ([`friction_limit`](Self::friction_limit)): sliding when the bodies' points slip past each
     /// other faster than [`static_friction_velocity_threshold`](Self::static_friction_velocity_threshold)
     /// and the contact was sliding already or static friction gave all it had this step.
-    fn record_sliding(
-        &self,
-        manifolds: &mut [ContactManifold],
-        rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
-        velocities: &[Velocity],
-        entity_index_map: &crate::world::EntityIndexMap,
-    ) {
-        let record = |m: &mut ContactManifold| {
-            let Some(pair) = ContactPair::of(m, rigid_bodies, transforms, entity_index_map) else {
+    fn record_sliding(&self, manifolds: &mut [ContactManifold], pairs: &[Option<ContactPair>], velocities: &[Velocity]) {
+        let record = |(m, pair): (&mut ContactManifold, &Option<ContactPair>)| {
+            let Some(pair) = pair else {
                 return;
             };
             let (va, vb) = (&velocities[pair.idx_a], &velocities[pair.idx_b]);
@@ -828,9 +841,9 @@ impl ConstraintSolver {
         };
         // Each manifold's own points from read-only velocities: in parallel for a big island.
         if manifolds.len() >= tgs::PARALLEL_MANIFOLDS {
-            manifolds.par_iter_mut().with_min_len(tgs::MANIFOLDS_PER_CHUNK).for_each(record);
+            manifolds.par_iter_mut().zip(pairs).with_min_len(tgs::MANIFOLDS_PER_CHUNK).for_each(record);
         } else {
-            manifolds.iter_mut().for_each(record);
+            manifolds.iter_mut().zip(pairs).for_each(record);
         }
     }
 

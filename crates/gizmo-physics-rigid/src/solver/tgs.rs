@@ -1,7 +1,6 @@
 use super::ConstraintSolver;
 use crate::components::{RigidBody, Velocity};
 use gizmo_math::{Mat3, Vec3};
-use gizmo_physics_core::components::Transform;
 use gizmo_physics_core::ContactManifold;
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
@@ -281,17 +280,14 @@ impl ConstraintSolver {
     pub(super) fn solve_contacts_tgs(
         &self,
         manifolds: &mut [ContactManifold],
+        // Each manifold's two bodies (`ContactPair::all`), worked out once for the whole solve.
+        pairs: &[Option<super::ContactPair>],
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
         velocities: &mut [Velocity],
         pos_corrections: &mut [(Vec3, Vec3)],
         // What the relax sweeps changed for a body held only by speculative contacts, applied after
         // the position integration (see where it is filled).
         bounces: &mut [(Vec3, Vec3)],
-        // Bare `FxHashMap` and not the opaque `EntityIndexMap`: `pub(super)` keeps this off
-        // the public surface, so it is not a `rustc-hash` leak (docs/ENGINE.md §4). The
-        // public caller (`solve_contacts`) unwraps with the `pub(crate)` `raw()`.
-        entity_index_map: &crate::world::EntityIndexMap,
         // Distinct GLOBAL body indices referenced by THIS island's manifolds. All the
         // per-body scratch (dp) and loops are sized/iterated by this island-local set
         // instead of the full world, so cost is O(island_bodies·iters), not
@@ -311,8 +307,8 @@ impl ConstraintSolver {
         let inv_dt = if dt > 0.0 { 1.0 / dt } else { 0.0 };
 
         let coeffs = self.soft_coefficients(dt, inv_dt);
-        let (vn0_off, vn0) = Self::approach_speeds(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
-        let mut real_bodies = Self::real_contact_bodies(manifolds, entity_index_map);
+        let (vn0_off, vn0) = Self::approach_speeds(manifolds, pairs, velocities);
+        let mut real_bodies = Self::real_contact_bodies(manifolds, pairs);
         // A joint's bodies take the position integration too: its correction is made in the biased
         // sweeps and kept in the position, not in the velocity (`super::IslandJoints::bodies`).
         if let Some(joints) = &between {
@@ -325,7 +321,7 @@ impl ConstraintSolver {
             dt
         };
 
-        let mut prepared = Self::prepare_contacts(manifolds, rigid_bodies, transforms, entity_index_map, &vn0_off, &vn0);
+        let mut prepared = Self::prepare_contacts(manifolds, pairs, &vn0_off, &vn0);
         let block_groups = if self.block_solver { self.block_groups(&prepared) } else { Vec::new() };
 
         // ── Whole-chain DIRECT solve setup ──
@@ -356,7 +352,7 @@ impl ConstraintSolver {
         // otherwise. Nothing above reads a velocity but the approach speeds, which are taken
         // before it.
         if coloring.is_none() {
-            self.warm_start_tgs(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
+            self.warm_start_tgs(manifolds, pairs, velocities);
         }
         // The bodies whose position delta the biased sweeps integrate.
         let integrate: Vec<usize> = island_bodies
@@ -491,17 +487,9 @@ impl ConstraintSolver {
     #[allow(clippy::needless_range_loop)]
     fn approach_speeds(
         manifolds: &[ContactManifold],
-        rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        pairs: &[Option<super::ContactPair>],
         velocities: &[Velocity],
-        entity_index_map: &crate::world::EntityIndexMap,
     ) -> (Vec<usize>, Vec<f32>) {
-        let com_of = |idx: usize| -> Vec3 {
-            transforms[idx].position
-                + transforms[idx]
-                    .rotation
-                    .mul_vec3(rigid_bodies[idx].center_of_mass)
-        };
 
         // ── 0) Restitution için başlangıç yaklaşma hızı (warm-start ÖNCESİ) ──
         // Tek düz tampon + offset tablosu. Eskiden `map(|m| vec![0.0f32; m.contacts.len()])`
@@ -522,15 +510,9 @@ impl ConstraintSolver {
         }
         let mut vn0 = vec![0.0f32; vn0_total];
         let speeds = |mid: usize, out: &mut [f32]| {
-            let (idx_a, idx_b) = match (
-                entity_index_map.get(&manifolds[mid].entity_a.id()),
-                entity_index_map.get(&manifolds[mid].entity_b.id()),
-            ) {
-                (Some(&a), Some(&b)) => (a, b),
-                _ => return,
+            let Some(super::ContactPair { idx_a, idx_b, com_a, com_b, .. }) = pairs[mid] else {
+                return;
             };
-            let com_a = com_of(idx_a);
-            let com_b = com_of(idx_b);
             for cid in 0..manifolds[mid].contacts.len() {
                 let ct = manifolds[mid].contacts[cid];
                 let r_a = ct.point - com_a;
@@ -559,18 +541,9 @@ impl ConstraintSolver {
     }
 
     /// The TGS path's warm start: last step's impulses, scaled by `warm_start_factor`.
-    fn warm_start_tgs(
-        &self,
-        manifolds: &[ContactManifold],
-        rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
-        velocities: &mut [Velocity],
-        entity_index_map: &crate::world::EntityIndexMap,
-    ) {
-        for manifold in manifolds {
-            let Some(super::ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b }) =
-                super::ContactPair::of(manifold, rigid_bodies, transforms, entity_index_map)
-            else {
+    fn warm_start_tgs(&self, manifolds: &[ContactManifold], pairs: &[Option<super::ContactPair>], velocities: &mut [Velocity]) {
+        for (manifold, pair) in manifolds.iter().zip(pairs) {
+            let Some(super::ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b }) = *pair else {
                 continue;
             };
             for contact in &manifold.contacts {
@@ -592,7 +565,7 @@ impl ConstraintSolver {
 
     /// The bodies with a real (penetrating, `pen0 ≥ 0`) contact: only they take the TGS
     /// position delta.
-    fn real_contact_bodies(manifolds: &[ContactManifold], entity_index_map: &crate::world::EntityIndexMap) -> rustc_hash::FxHashSet<usize> {
+    fn real_contact_bodies(manifolds: &[ContactManifold], pairs: &[Option<super::ContactPair>]) -> rustc_hash::FxHashSet<usize> {
         // ── 2) GERÇEK (penetran, pen0≥0) teması olan gövdeler ──
         // Yalnız bunlar TGS pozisyon düzeltmesi (dp) alır. Sadece SPECULATIVE (gap, pen0<0)
         // teması olan gövdeler (ör. CCD mermisi) eski yolu kullanır: biased clamp velocity +
@@ -601,14 +574,11 @@ impl ConstraintSolver {
         // `island_bodies` zaten tam olarak o küme. `has_real` da full-world bit-vektörü yerine
         // ada-boyutu küçük bir kümedir.
         let mut real_bodies: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
-        for m in manifolds.iter() {
+        for (m, pair) in manifolds.iter().zip(pairs) {
             if m.contacts.iter().any(|c| c.penetration >= 0.0) {
-                if let (Some(&a), Some(&b)) = (
-                    entity_index_map.get(&m.entity_a.id()),
-                    entity_index_map.get(&m.entity_b.id()),
-                ) {
-                    real_bodies.insert(a);
-                    real_bodies.insert(b);
+                if let Some(pair) = pair {
+                    real_bodies.insert(pair.idx_a);
+                    real_bodies.insert(pair.idx_b);
                 }
             }
         }
@@ -620,9 +590,7 @@ impl ConstraintSolver {
     #[allow(clippy::needless_range_loop)]
     fn prepare_contacts(
         manifolds: &[ContactManifold],
-        rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
-        entity_index_map: &crate::world::EntityIndexMap,
+        pairs: &[Option<super::ContactPair>],
         vn0_off: &[usize],
         vn0: &[f32],
     ) -> Vec<Prepared> {
@@ -637,9 +605,7 @@ impl ConstraintSolver {
         let _prep = crate::profile::Scope::new(&crate::profile::PHASES.prepare);
         let fill = |mids: std::ops::Range<usize>, prepared: &mut Vec<Prepared>| {
         for mid in mids {
-            let Some(super::ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b }) =
-                super::ContactPair::of(&manifolds[mid], rigid_bodies, transforms, entity_index_map)
-            else {
+            let Some(super::ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b }) = pairs[mid] else {
                 continue;
             };
             if !dyn_a && !dyn_b {
