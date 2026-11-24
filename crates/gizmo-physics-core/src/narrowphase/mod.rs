@@ -269,54 +269,37 @@ impl NarrowPhase {
 
     // ── Box–Box SAT ───────────────────────────────────────────────────────
 
-    /// The candidate separating axes for two oriented boxes: each box's three face normals plus
-    /// the nine edge–edge cross products, built on the stack so the sweep allocates nothing.
-    ///
-    /// Returns `(a_axes, b_axes, candidates, count)` — the count is below 15 whenever an edge
-    /// pair is parallel, since a near-zero cross product is not an axis and normalising it would
-    /// be a division by ~0.
-    ///
-    /// Shared by [`NarrowPhase::box_box`] and [`NarrowPhase::box_box_overlap`]: the second exists
-    /// because a fighting game's hit detection wants the *answer*, not a manifold, and two copies
-    /// of a fifteen-axis sweep is the kind of duplicate that drifts.
-    fn box_separating_axes(rot_a: Quat, rot_b: Quat) -> ([Vec3; 3], [Vec3; 3], [Vec3; 15], usize) {
-        let ax = [
-            rot_a.mul_vec3(Vec3::X),
-            rot_a.mul_vec3(Vec3::Y),
-            rot_a.mul_vec3(Vec3::Z),
-        ];
-        let bx = [
-            rot_b.mul_vec3(Vec3::X),
-            rot_b.mul_vec3(Vec3::Y),
-            rot_b.mul_vec3(Vec3::Z),
-        ];
-
-        // Layout: [ax0, ax1, ax2,  bx0, bx1, bx2,  9 cross products]
-        let mut axes = [Vec3::ZERO; 15];
-        let mut n_axes = 0usize;
-
-        for &a in &ax {
-            axes[n_axes] = a;
-            n_axes += 1;
+    /// The SAT's axes for two boxes, in the order they are tried: A's three faces, B's three, then
+    /// the nine edge crosses that are not degenerate, normalised — each handed to `test` with its
+    /// index, until `test` says to stop (`false`). Returns whether it stopped. The edge crosses are
+    /// only worked out once all six faces have been tried: most candidate pairs are apart along a
+    /// face, and the crosses with their square roots were most of what a separated pair cost.
+    fn for_each_separating_axis(ax: &[Vec3; 3], bx: &[Vec3; 3], mut test: impl FnMut(usize, Vec3) -> bool) -> bool {
+        let mut index = 0usize;
+        for &axis in ax.iter().chain(bx.iter()) {
+            if !test(index, axis) {
+                return true;
+            }
+            index += 1;
         }
-        for &b in &bx {
-            axes[n_axes] = b;
-            n_axes += 1;
-        }
-
-        for &a in &ax {
-            for &b in &bx {
+        for &a in ax {
+            for &b in bx {
                 let c = a.cross(b);
                 let len_sq = c.length_squared();
                 if len_sq > 1e-6 {
-                    // Normalise only valid edge–edge axes.
-                    axes[n_axes] = c * len_sq.sqrt().recip();
-                    n_axes += 1;
+                    if !test(index, c * len_sq.sqrt().recip()) {
+                        return true;
+                    }
+                    index += 1;
                 }
             }
         }
+        false
+    }
 
-        (ax, bx, axes, n_axes)
+    /// A box's three axes in the world.
+    fn box_frame(rot: Quat) -> [Vec3; 3] {
+        [rot.mul_vec3(Vec3::X), rot.mul_vec3(Vec3::Y), rot.mul_vec3(Vec3::Z)]
     }
 
     /// Do two oriented boxes overlap? The same fifteen-axis SAT sweep as
@@ -335,17 +318,13 @@ impl NarrowPhase {
         rot_b: Quat,
         hb: Vec3,
     ) -> bool {
-        let (ax, bx, axes, n_axes) = Self::box_separating_axes(rot_a, rot_b);
+        let (ax, bx) = (Self::box_frame(rot_a), Self::box_frame(rot_b));
         let ha_ = [ha.x, ha.y, ha.z];
         let hb_ = [hb.x, hb.y, hb.z];
         let t = pos_b - pos_a;
 
-        for &axis in &axes[..n_axes] {
-            if sat_penetration(&axis, &ax, &ha_, &bx, &hb_, t) < 0.0 {
-                return false;
-            }
-        }
-        true
+        let separated = Self::for_each_separating_axis(&ax, &bx, |_, axis| sat_penetration(&axis, &ax, &ha_, &bx, &hb_, t) >= 0.0);
+        !separated
     }
 
     /// Box–Box via the Separating Axis Theorem (15 axes) followed by
@@ -360,31 +339,31 @@ impl NarrowPhase {
         rot_b: Quat,
         hb: Vec3,
     ) -> Vec<ContactPoint> {
-        let (ax, bx, axes, n_axes) = Self::box_separating_axes(rot_a, rot_b);
+        let (ax, bx) = (Self::box_frame(rot_a), Self::box_frame(rot_b));
         let ha_ = [ha.x, ha.y, ha.z];
         let hb_ = [hb.x, hb.y, hb.z];
         let t = pos_b - pos_a; // centre-to-centre offset
 
-        // SAT sweep — find minimum penetration axis.
+        // Least penetration over the axes, tried in order: the first separating one ends it.
         let mut min_pen = f32::MAX;
         let mut best_axis = Vec3::Y;
-        // Where the best axis came from: `axes` is A's three face axes, then B's, then the edge
-        // crosses (`box_separating_axes`).
         let mut best_index = 0usize;
         let mut flip = false;
-
-        for (index, &axis) in axes[..n_axes].iter().enumerate() {
+        let separated = Self::for_each_separating_axis(&ax, &bx, |index, axis| {
             let pen = sat_penetration(&axis, &ax, &ha_, &bx, &hb_, t);
             if pen < 0.0 {
-                return vec![]; // Separating axis found — no overlap.
+                return false; // Separating axis found — no overlap.
             }
             if pen < min_pen {
                 min_pen = pen;
                 best_axis = axis;
                 best_index = index;
-                // Ensure normal points from A toward B.
                 flip = t.dot(axis) < 0.0;
             }
+            true
+        });
+        if separated {
+            return vec![];
         }
 
         let normal = if flip { -best_axis } else { best_axis };
