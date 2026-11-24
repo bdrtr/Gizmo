@@ -50,6 +50,7 @@ impl PhysicsWorld {
             //    restore requires to be unchanged anyway.
             spatial_hash: _,
             settled_bounds: _,
+            body_bounds: _,
             body_revision: _,
             moved_asleep: _,
             stepped_gravity: _,

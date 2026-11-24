@@ -465,6 +465,12 @@ pub struct PhysicsWorld {
     /// bodies, three of the four substeps of a 60 Hz frame paid that for nothing.
     #[serde(skip)]
     pub(crate) settled_bounds: Vec<Option<(u32, gizmo_math::Vec3, gizmo_math::Quat)>>,
+    /// Each body's bounds as the broad phase worked them out this substep: at its pose now, and at
+    /// the pose its velocity takes it to by the substep's end. The narrow phase reads them for every
+    /// candidate pair that does not touch (`closes_fast`, `near_contacts`), which worked out the
+    /// same four boxes again, pair by pair. Kept by the same rule as `settled_bounds`.
+    #[serde(skip)]
+    pub(crate) body_bounds: Vec<(gizmo_physics_core::Aabb, gizmo_physics_core::Aabb)>,
     /// Bumped by everything that changes the body set or its rows from outside a step's own
     /// work: `add_body`, `remove_body_at`, `clear_bodies`, `sync_bodies`, `restore_snapshot`.
     /// The ECS bridge reads only what changed since its last step, and a revision it did not

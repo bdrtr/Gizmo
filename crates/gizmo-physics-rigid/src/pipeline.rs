@@ -284,31 +284,35 @@ impl PhysicsWorld {
         // makes this safe: the island solve does not depend on the order pairs come out in, and
         // a tree built incrementally emits them in a different order than a freshly rebuilt one.
 
-        // Rigid bodies — sequential because `spatial_hash` needs `&mut self`.
+        // Rigid bodies: each one's bounds worked out — on several threads for a big world, the
+        // swept boxes of a moving pile being most of the step's broad phase — then put in the tree
+        // in index order, which only `&mut self` can do. The same boxes in the same order.
         self.settled_bounds.resize(self.entities.len(), None);
-        for i in 0..self.entities.len() {
-            let entity = self.entities[i];
-            let rb = &self.rigid_bodies[i];
-            let transform = &self.transforms[i];
-            let vel = &self.velocities[i];
-            let collider = &self.colliders[i];
+        let (entities, rigid_bodies, transforms, velocities, colliders) =
+            (&self.entities, &self.rigid_bodies, &self.transforms, &self.velocities, &self.colliders);
+        let (settled_bounds, spatial_hash) = (&self.settled_bounds, &self.spatial_hash);
+        let plan = |i: usize| -> Option<Planned> {
+            let entity = entities[i];
+            let rb = &rigid_bodies[i];
+            let transform = &transforms[i];
+            let vel = &velocities[i];
+            let collider = &colliders[i];
 
             // Static or asleep, and where it was when its bounds were last refreshed this step:
             // nothing to do (see `settled_bounds`). The id is compared too, so a body added or
             // removed mid-step — which moves others to new indices — is refreshed, not trusted.
             let settled = rb.is_static() || rb.is_sleeping;
             let pose = (entity.id(), transform.position, transform.rotation);
-            if settled && self.settled_bounds[i] == Some(pose) {
+            if settled && settled_bounds[i] == Some(pose) {
                 // What the skip relies on, checked wherever tests run (debug): the refresh it
                 // saves would have found the body inside its box and changed nothing.
                 debug_assert!(
-                    self.spatial_hash.holds(entity, &collider.compute_aabb(transform.position, transform.rotation)),
+                    spatial_hash.holds(entity, &collider.compute_aabb(transform.position, transform.rotation)),
                     "body {} skipped by the broadphase is not inside the box the tree holds for it",
                     entity.id()
                 );
-                continue;
+                return None;
             }
-            self.settled_bounds[i] = settled.then_some(pose);
 
             let base_aabb = collider.compute_aabb(transform.position, transform.rotation);
 
@@ -322,6 +326,16 @@ impl PhysicsWorld {
             // Any other body that moves is swept to where this substep takes it, so a pair it can
             // close in the substep reaches the narrow phase (`near_contacts`).
             let moving = !rb.is_static() && !rb.is_sleeping && (vel.linear != Vec3::ZERO || vel.angular != Vec3::ZERO);
+            // Its bounds where this substep takes it (`body_bounds`): the narrow phase's end pose.
+            let at_end = |aabb_now: gizmo_physics_core::Aabb| {
+                if rb.is_static() || rb.is_sleeping {
+                    aabb_now
+                } else {
+                    let (position, rotation) = advanced(transform, vel, dt);
+                    collider.compute_aabb(position, rotation)
+                }
+            };
+            let mut end_aabb = None;
             let aabb = if (rb.ccd_enabled && !rb.is_static() && !rb.is_sleeping) || fast {
                 let sweep_dt = if vel.linear.length() > 100.0 {
                     // High-speed: guarantee at least one full 60 Hz frame is covered.
@@ -333,19 +347,40 @@ impl PhysicsWorld {
                 let swept_aabb = collider.compute_aabb(swept_pos, transform.rotation);
                 base_aabb.merge(swept_aabb)
             } else if moving {
-                let (position, rotation) = advanced(transform, vel, dt);
-                base_aabb.merge(collider.compute_aabb(position, rotation))
+                let end = at_end(base_aabb);
+                end_aabb = Some(end);
+                base_aabb.merge(end)
             } else {
                 base_aabb
             };
+            let bounds = (base_aabb, end_aabb.unwrap_or_else(|| at_end(base_aabb)));
 
-            if rb.is_static() {
-                self.spatial_hash.insert_static(entity, aabb);
+            let put = if rb.is_static() {
+                Put::Static
             } else if moving {
-                // Its leaf, when it has to be remade, reaches ahead along the way it is going.
-                self.spatial_hash.insert_moving(entity, aabb, vel.linear * dt);
+                Put::Moving(vel.linear * dt)
             } else {
-                self.spatial_hash.insert(entity, aabb);
+                Put::Still
+            };
+            Some(Planned { settled: settled.then_some(pose), aabb, put, bounds })
+        };
+        let plans: Vec<Option<Planned>> = if worth_parallel(&self.rigid_bodies) {
+            (0..self.entities.len()).into_par_iter().map(plan).collect()
+        } else {
+            (0..self.entities.len()).map(plan).collect()
+        };
+        let empty = gizmo_physics_core::Aabb { min: gizmo_math::Vec3A::ZERO, max: gizmo_math::Vec3A::ZERO };
+        self.body_bounds.resize(self.entities.len(), (empty, empty));
+        for (i, planned) in plans.into_iter().enumerate() {
+            let Some(Planned { settled, aabb, put, bounds }) = planned else { continue };
+            self.settled_bounds[i] = settled;
+            self.body_bounds[i] = bounds;
+            let entity = self.entities[i];
+            match put {
+                Put::Static => self.spatial_hash.insert_static(entity, aabb),
+                // Its leaf, when it has to be remade, reaches ahead along the way it is going.
+                Put::Moving(displacement) => self.spatial_hash.insert_moving(entity, aabb, displacement),
+                Put::Still => self.spatial_hash.insert(entity, aabb),
             }
         }
 
@@ -570,8 +605,8 @@ impl PhysicsWorld {
             let fast = (moving(rb_a) || moving(rb_b))
                 && closes_fast(
                     (vel_a.linear - vel_b.linear).length() * dt,
-                    thickness(collider_a, transform_a),
-                    thickness(collider_b, transform_b),
+                    thickness(collider_a, &self.body_bounds[idx_a].0),
+                    thickness(collider_b, &self.body_bounds[idx_b].0),
                 );
             // What this substep's motion can close although nothing touches yet: real points, with the
             // lever arms the contact will have (`near_contacts`). A pair closing faster than its size
@@ -1806,13 +1841,10 @@ pub(crate) fn closes_fast(travel: f32, thickness_a: f32, thickness_b: f32) -> bo
 
 /// A collider's smallest half-extent in the world, as far as passing through it goes: a triangle mesh
 /// or a heightfield is a surface, as thin as a wall can be, whatever its bounds.
-fn thickness(collider: &Collider, t: &Transform) -> f32 {
+fn thickness(collider: &Collider, aabb: &gizmo_physics_core::Aabb) -> f32 {
     match collider.shape {
         gizmo_physics_core::ColliderShape::TriMesh(_) | gizmo_physics_core::ColliderShape::Heightfield(_) => 0.0,
-        _ => {
-            let aabb = collider.compute_aabb(t.position, t.rotation);
-            ((aabb.max - aabb.min) * 0.5).min_element()
-        }
+        _ => ((aabb.max - aabb.min) * 0.5).min_element(),
     }
 }
 
@@ -1853,7 +1885,7 @@ impl PhysicsWorld {
         // tolerance (a millimetre at most): no point to find, and no full test to run. Most of a
         // pile's candidate pairs are near without touching, and each paid a second narrow-phase
         // test here.
-        let (box_a, box_b) = (self.colliders[idx_a].compute_aabb(pa, qa), self.colliders[idx_b].compute_aabb(pb, qb));
+        let (box_a, box_b) = (self.body_bounds[idx_a].1, self.body_bounds[idx_b].1);
         let spare = gizmo_math::Vec3A::splat(0.01);
         if (box_a.min - spare).cmpgt(box_b.max).any() || (box_b.min - spare).cmpgt(box_a.max).any() {
             return Vec::new();
@@ -1891,6 +1923,24 @@ impl PhysicsWorld {
         }
         found
     }
+}
+
+
+/// What the broad phase does with one body this substep (`broadphase_step`): the bounds it is put in
+/// the tree with, how, and what it records as the pose it is settled at.
+struct Planned {
+    settled: Option<(u32, Vec3, gizmo_math::Quat)>,
+    aabb: gizmo_physics_core::Aabb,
+    put: Put,
+    /// Its `body_bounds`.
+    bounds: (gizmo_physics_core::Aabb, gizmo_physics_core::Aabb),
+}
+
+/// How a body goes in the broad phase's tree: see `Planned`.
+enum Put {
+    Static,
+    Moving(Vec3),
+    Still,
 }
 
 #[cfg(test)]

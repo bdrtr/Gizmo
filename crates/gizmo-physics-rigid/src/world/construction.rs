@@ -27,6 +27,7 @@ impl PhysicsWorld {
             solver: ConstraintSolver::default(),
             spatial_hash: SpatialHash::new(10.0),
             settled_bounds: Vec::new(),
+            body_bounds: Vec::new(),
             body_revision: 0,
             moved_asleep: Vec::new(),
             stepped_gravity: None,
