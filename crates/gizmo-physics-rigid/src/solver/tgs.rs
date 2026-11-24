@@ -3,6 +3,18 @@ use crate::components::{RigidBody, Velocity};
 use gizmo_math::{Mat3, Vec3};
 use gizmo_physics_core::components::Transform;
 use gizmo_physics_core::ContactManifold;
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use crate::parallel_compat::*;
+
+/// Manifolds in an island from which its per-contact preparation runs on several threads
+/// (`prepare_contacts`, `approach_speeds`, `record_sliding`): a 4000-sphere pile's one island
+/// holds 5800, and these passes were a fifth of its solve, on one thread, on the step's critical
+/// path. Below this the work is less than handing it out.
+pub(super) const PARALLEL_MANIFOLDS: usize = 1024;
+/// Manifolds a thread takes at a time in those passes.
+pub(super) const MANIFOLDS_PER_CHUNK: usize = 256;
 
 /// Per-contact quantities that are INVARIANT across all 24 TGS sweeps (the biased
 /// iterations + relax passes) — hoisted out of the sweep and computed exactly once.
@@ -376,13 +388,13 @@ impl ConstraintSolver {
             vn0_off.push(vn0_total);
         }
         let mut vn0 = vec![0.0f32; vn0_total];
-        for mid in 0..manifolds.len() {
+        let speeds = |mid: usize, out: &mut [f32]| {
             let (idx_a, idx_b) = match (
                 entity_index_map.get(&manifolds[mid].entity_a.id()),
                 entity_index_map.get(&manifolds[mid].entity_b.id()),
             ) {
                 (Some(&a), Some(&b)) => (a, b),
-                _ => continue,
+                _ => return,
             };
             let com_a = com_of(idx_a);
             let com_b = com_of(idx_b);
@@ -392,7 +404,22 @@ impl ConstraintSolver {
                 let r_b = ct.point - com_b;
                 let va = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
                 let vb = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
-                vn0[vn0_off[mid] + cid] = (vb - va).dot(ct.normal);
+                out[cid] = (vb - va).dot(ct.normal);
+            }
+        };
+        // In parallel for a big island, each manifold into its own stretch of `vn0`.
+        if manifolds.len() >= PARALLEL_MANIFOLDS {
+            let mut stretches: Vec<(usize, &mut [f32])> = Vec::with_capacity(manifolds.len());
+            let mut rest: &mut [f32] = &mut vn0;
+            for mid in 0..manifolds.len() {
+                let (this, tail) = std::mem::take(&mut rest).split_at_mut(vn0_off[mid + 1] - vn0_off[mid]);
+                stretches.push((mid, this));
+                rest = tail;
+            }
+            stretches.par_iter_mut().with_min_len(MANIFOLDS_PER_CHUNK).for_each(|(mid, out)| speeds(*mid, out));
+        } else {
+            for mid in 0..manifolds.len() {
+                speeds(mid, &mut vn0[vn0_off[mid]..vn0_off[mid + 1]]);
             }
         }
         (vn0_off, vn0)
@@ -475,8 +502,8 @@ impl ConstraintSolver {
         // her sweep'te atlanmış olurlar. Impulse birikimcileri (acc_n/acc_t) manifold'dan
         // tohumlanır, sweep'lerde yerinde güncellenir, sonda geri yazılır.
         let _prep = crate::profile::Scope::new(&crate::profile::PHASES.prepare);
-        let mut prepared: Vec<Prepared> = Vec::with_capacity(manifolds.len());
-        for mid in 0..manifolds.len() {
+        let fill = |mids: std::ops::Range<usize>, prepared: &mut Vec<Prepared>| {
+        for mid in mids {
             let Some(super::ContactPair { idx_a, idx_b, inv_m_a, inv_m_b, inv_i_a, inv_i_b, dyn_a, dyn_b, com_a, com_b }) =
                 super::ContactPair::of(&manifolds[mid], rigid_bodies, transforms, entity_index_map)
             else {
@@ -558,6 +585,26 @@ impl ConstraintSolver {
                     acc_r: Vec3::ZERO,
                 });
             }
+        }
+        };
+        // A big island's contacts are prepared in parallel, in chunks of manifolds whose results
+        // are joined in order: the same rows, the same arithmetic, on as many threads as there are.
+        let mut prepared: Vec<Prepared> = Vec::with_capacity(manifolds.len());
+        if manifolds.len() >= PARALLEL_MANIFOLDS {
+            let parts: Vec<Vec<Prepared>> = (0..manifolds.len().div_ceil(MANIFOLDS_PER_CHUNK))
+                .into_par_iter()
+                .map(|c| {
+                    let mids = c * MANIFOLDS_PER_CHUNK..((c + 1) * MANIFOLDS_PER_CHUNK).min(manifolds.len());
+                    let mut part = Vec::with_capacity(mids.len() * 2);
+                    fill(mids, &mut part);
+                    part
+                })
+                .collect();
+            for part in parts {
+                prepared.extend(part);
+            }
+        } else {
+            fill(0..manifolds.len(), &mut prepared);
         }
         prepared
     }

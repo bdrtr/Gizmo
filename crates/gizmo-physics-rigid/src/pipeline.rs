@@ -1016,10 +1016,15 @@ impl PhysicsWorld {
 
         let mut total_wakes = 0usize;
         let mut total_fractures = 0usize;
+        let mut retired: Vec<Vec<ContactManifold>> = Vec::with_capacity(island_count);
         for result in results {
-            let (wakes, fractures) = self.write_back_island(result, &event_index, in_island, bounces, island_sleep);
+            let (wakes, fractures) = self.write_back_island(result, &event_index, in_island, bounces, island_sleep, &mut retired);
             total_wakes += wakes;
             total_fractures += fractures;
+        }
+        // The islands' contact buffers, freed by as many hands as there are islands of them.
+        if worth_parallel_jobs(retired.iter().map(Vec::len).sum(), PARALLEL_MIN_MANIFOLDS) {
+            retired.into_par_iter().flatten().for_each(drop);
         }
 
         // AGGREGATE: island solve outcome for this substep. island_count feeds the
@@ -1312,6 +1317,7 @@ impl PhysicsWorld {
         in_island: &mut FxHashSet<u32>,
         bounces: &mut Vec<(BodyHandle, Vec3, Vec3)>,
         island_sleep: &mut Vec<(bool, Vec<usize>)>,
+        retired: &mut Vec<Vec<ContactManifold>>,
     ) -> (usize, usize) {
         let entity_map = &self.entity_index_map;
         let IslandResult {
@@ -1397,11 +1403,13 @@ impl PhysicsWorld {
         self.fracture_events.extend(local_fractures);
 
         // Update solved contact points on the matching collision event.
-        for manifold in island_manifolds {
-            let solved: ContactPoints =
-                manifold.contacts.iter().copied().take(4).collect();
-
-            // Try both orderings (broadphase may report either).
+        // The cache already holds these contacts — `record_solid_contact` copied them in, into a
+        // buffer it keeps from step to step — and what the solve changed in them is the impulses and
+        // the friction state. Those are copied over; the solved manifold itself goes back to the
+        // caller, which frees the island's buffers off this thread. Moving it into the cache freed
+        // the cached copy here instead, one buffer per contact pair per substep, each allocated on
+        // another thread: 0.9–1.8 ms of a 4000-sphere pile's 60 Hz step, on its critical path.
+        for manifold in &island_manifolds {
             let key_ab = (manifold.entity_a, manifold.entity_b);
             let key_ba = (manifold.entity_b, manifold.entity_a);
 
@@ -1409,16 +1417,27 @@ impl PhysicsWorld {
                 .get(&key_ab)
                 .or_else(|| event_index.get(&key_ba))
             {
-                self.collision_events[idx].contact_points = solved;
+                self.collision_events[idx].contact_points = manifold.contacts.iter().copied().take(4).collect();
             }
 
-            // WARM-START FIX: Save the solved manifold back to the cache!
-            if let Some(entry) = self.contact_cache.get_mut(&key_ab) {
-                entry.1 = Some(manifold);
-            } else if let Some(entry) = self.contact_cache.get_mut(&key_ba) {
-                entry.1 = Some(manifold);
+            let cached = match self.contact_cache.get_mut(&key_ab) {
+                Some(entry) => Some(entry),
+                None => self.contact_cache.get_mut(&key_ba),
+            };
+            if let Some((_, Some(cached))) = cached {
+                if cached.contacts.len() == manifold.contacts.len() {
+                    for (into, solved) in cached.contacts.iter_mut().zip(&manifold.contacts) {
+                        into.normal_impulse = solved.normal_impulse;
+                        into.tangent_impulse = solved.tangent_impulse;
+                        into.sliding = solved.sliding;
+                    }
+                } else {
+                    cached.contacts.clear();
+                    cached.contacts.extend_from_slice(&manifold.contacts);
+                }
             }
         }
+        retired.push(island_manifolds);
         counts
     }
 

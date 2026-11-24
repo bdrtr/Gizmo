@@ -15,6 +15,10 @@ mod block;
 mod parallel;
 mod standalone;
 mod tgs;
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use crate::parallel_compat::*;
 
 /// The lever a contact's rolling resistance acts through: how far the rolling body's centre of
 /// mass stands off the contact along its normal — a ball's radius, a wheel's — averaged over the
@@ -784,9 +788,9 @@ impl ConstraintSolver {
         velocities: &[Velocity],
         entity_index_map: &crate::world::EntityIndexMap,
     ) {
-        for m in manifolds.iter_mut() {
+        let record = |m: &mut ContactManifold| {
             let Some(pair) = ContactPair::of(m, rigid_bodies, transforms, entity_index_map) else {
-                continue;
+                return;
             };
             let (va, vb) = (&velocities[pair.idx_a], &velocities[pair.idx_b]);
             for c in m.contacts.iter_mut() {
@@ -800,6 +804,12 @@ impl ConstraintSolver {
                 let gave_all = c.tangent_impulse.length() >= 0.99 * m.static_friction * c.normal_impulse.max(0.0);
                 c.sliding = slip.length() > self.static_friction_velocity_threshold && (c.sliding || gave_all);
             }
+        };
+        // Each manifold's own points from read-only velocities: in parallel for a big island.
+        if manifolds.len() >= tgs::PARALLEL_MANIFOLDS {
+            manifolds.par_iter_mut().with_min_len(tgs::MANIFOLDS_PER_CHUNK).for_each(record);
+        } else {
+            manifolds.iter_mut().for_each(record);
         }
     }
 
