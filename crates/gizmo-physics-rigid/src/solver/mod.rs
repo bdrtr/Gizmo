@@ -131,7 +131,10 @@ pub(super) fn rolling_row(
 /// The buffers never shrink: a scratch buffer's whole job is to keep the high-water mark.
 #[derive(Default)]
 struct OrderScratch {
-    local: rustc_hash::FxHashMap<usize, u32>,
+    /// A body's local index by its index in the world, `u32::MAX` for none: reset after each use
+    /// for the bodies in `global` alone.
+    local: Vec<u32>,
+    keys: Vec<(u32, u32, u32, u32)>,
     global: Vec<usize>,
     is_anchor: Vec<bool>,
     medges: Vec<Option<(u32, u32)>>,
@@ -168,7 +171,9 @@ fn support_order_manifolds(
     let global = &mut sc.global;
     let is_anchor = &mut sc.is_anchor;
     let medges = &mut sc.medges;
-    local.clear();
+    if local.len() < rigid_bodies.len() {
+        local.resize(rigid_bodies.len(), u32::MAX);
+    }
     global.clear();
     is_anchor.clear();
     medges.clear();
@@ -187,21 +192,25 @@ fn support_order_manifolds(
         };
         let mut ends = [0u32; 2];
         for (slot, &gidx) in ends.iter_mut().zip([ga, gb].iter()) {
-            *slot = match local.get(&gidx) {
-                Some(&li) => li,
-                None => {
+            *slot = match local[gidx] {
+                u32::MAX => {
                     let li = global.len() as u32;
-                    local.insert(gidx, li);
+                    local[gidx] = li;
                     global.push(gidx);
                     is_anchor.push(!rigid_bodies[gidx].is_dynamic());
                     li
                 }
+                li => li,
             };
         }
         medges.push(Some((ends[0], ends[1])));
     }
 
     let v = global.len();
+    // `local` back to all-unset for the next island, touching only what this one set.
+    for &g in global.iter() {
+        local[g] = u32::MAX;
+    }
     // Dış vektör asla küçültülmez ve iç vektörler `clear` edilir: kapasiteleri korunur,
     // yani kalıcı durumda düğüm başına tahsis sıfır.
     let adj = &mut sc.adj;
@@ -278,10 +287,15 @@ fn support_order_manifolds(
             None => (INF, INF, ida, idb),
         }
     };
+    // The keys worked out once, not on every comparison of the sort: the same comparisons, so the
+    // same order.
+    let keys = &mut sc.keys;
+    keys.clear();
+    keys.extend((0..n).map(key_of));
     let order = &mut sc.order;
     order.clear();
     order.extend(0..n);
-    order.sort_unstable_by_key(|&i| key_of(i));
+    order.sort_unstable_by_key(|&i| keys[i]);
 
     // ── 4) Apply the permutation to `manifolds` in place (no clone of the Vec-bearing
     // ContactManifold). `pos[orig] = destination slot`; cycle-swap into place. ──
