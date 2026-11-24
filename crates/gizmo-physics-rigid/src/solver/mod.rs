@@ -109,14 +109,6 @@ pub(super) fn rolling_row(
 // and the blow-up is chaotic (not monotonic) in iteration count — the instability is a
 // metastable normal-channel resonance, not under-convergence. See the root-cause note
 // in crates/gizmo-physics-rigid/tests/soak_and_golden.rs. Hence default OFF.
-/// Returns the island's maximum support depth (graph distance in contacts from the
-/// nearest anchor) — used to scale the block solver's iteration count so a tall stack
-/// gets enough sweeps for support to propagate up the column. When `reorder` is true,
-/// also permutes `manifolds` into support order in place.
-// The bare `FxHashMap` here is deliberate and is NOT a leak: this fn is private to the
-// module, so `rustc-hash` never reaches the public surface through it (docs/ENGINE.md §4).
-// `ConstraintSolver::solve_contacts` is the public entry point and takes the opaque
-// `EntityIndexMap`, unwrapping it with the `pub(crate)` `raw()` on the way in.
 /// Scratch buffers for [`support_order_manifolds`], kept per thread.
 ///
 /// The function allocated **one `Vec` per body in the island, plus seven** on every call —
@@ -146,15 +138,23 @@ struct OrderScratch {
     pos: Vec<usize>,
 }
 
+/// A manifold end whose body the world does not hold, in a list of manifold ends by row.
+pub(crate) const NO_ROW: u32 = u32::MAX;
+
 thread_local! {
     static ORDER_SCRATCH: std::cell::RefCell<OrderScratch> =
         std::cell::RefCell::new(OrderScratch::default());
 }
 
+/// Returns the island's maximum support depth (graph distance in contacts from the
+/// nearest anchor) — used to scale the block solver's iteration count so a tall stack
+/// gets enough sweeps for support to propagate up the column. When `reorder` is true,
+/// also permutes `manifolds` into support order in place, and `ends` (each manifold's bodies'
+/// rows, which it reads instead of looking ids up) with them.
 fn support_order_manifolds(
     manifolds: &mut [ContactManifold],
+    ends: &mut [[u32; 2]],
     rigid_bodies: &[RigidBody],
-    entity_index_map: &rustc_hash::FxHashMap<u32, usize>,
     reorder: bool,
 ) -> u32 {
     let n = manifolds.len();
@@ -180,17 +180,12 @@ fn support_order_manifolds(
     medges.clear();
     medges.reserve(n);
 
-    for m in manifolds.iter() {
-        let (ga, gb) = match (
-            entity_index_map.get(&m.entity_a.id()),
-            entity_index_map.get(&m.entity_b.id()),
-        ) {
-            (Some(&a), Some(&b)) => (a, b),
-            _ => {
-                medges.push(None);
-                continue;
-            }
-        };
+    for &[a, b] in ends.iter() {
+        if a == NO_ROW || b == NO_ROW {
+            medges.push(None);
+            continue;
+        }
+        let (ga, gb) = (a as usize, b as usize);
         let mut ends = [0u32; 2];
         for (slot, &gidx) in ends.iter_mut().zip([ga, gb].iter()) {
             *slot = match local[gidx] {
@@ -296,7 +291,13 @@ fn support_order_manifolds(
     let order = &mut sc.order;
     order.clear();
     order.extend(0..n);
-    order.sort_unstable_by_key(|&i| keys[i]);
+    // A pair is in the island once, so no two keys are equal and any sort leaves one order: on
+    // several threads for a big island.
+    if n >= tgs::PARALLEL_MANIFOLDS {
+        order.par_sort_unstable_by_key(|&i| keys[i]);
+    } else {
+        order.sort_unstable_by_key(|&i| keys[i]);
+    }
 
     // ── 4) Apply the permutation to `manifolds` in place (no clone of the Vec-bearing
     // ContactManifold). `pos[orig] = destination slot`; cycle-swap into place. ──
@@ -310,6 +311,7 @@ fn support_order_manifolds(
         while pos[i] != i {
             let target = pos[i];
             manifolds.swap(i, target);
+            ends.swap(i, target);
             pos.swap(i, target);
         }
     }
@@ -604,8 +606,13 @@ impl ContactPair {
     ) -> Option<Self> {
         let idx_a = *entity_index_map.get(&manifold.entity_a.id())?;
         let idx_b = *entity_index_map.get(&manifold.entity_b.id())?;
+        Some(Self::of_rows(idx_a, idx_b, rigid_bodies, transforms))
+    }
+
+    /// [`of`](Self::of) for two bodies known by their rows.
+    fn of_rows(idx_a: usize, idx_b: usize, rigid_bodies: &[RigidBody], transforms: &[Transform]) -> Self {
         let com = |i: usize| transforms[i].position + transforms[i].rotation.mul_vec3(rigid_bodies[i].center_of_mass);
-        Some(Self {
+        Self {
             idx_a,
             idx_b,
             inv_m_a: rigid_bodies[idx_a].inv_contact_mass(),
@@ -616,7 +623,7 @@ impl ContactPair {
             dyn_b: rigid_bodies[idx_b].responds_to_contacts(),
             com_a: com(idx_a),
             com_b: com(idx_b),
-        })
+        }
     }
 
     /// [`of`](Self::of) for each of an island's manifolds, worked out once for every pass of its
@@ -624,17 +631,12 @@ impl ContactPair {
     /// worked it out again — two id lookups and two world inertia tensors a manifold, four times a
     /// substep. The values are pure functions of the bodies and their transforms, which no solve
     /// changes, so this is the same numbers.
-    pub(crate) fn all(
-        manifolds: &[ContactManifold],
-        rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
-        entity_index_map: &crate::world::EntityIndexMap,
-    ) -> Vec<Option<Self>> {
-        let of = |m: &ContactManifold| Self::of(m, rigid_bodies, transforms, entity_index_map);
-        if manifolds.len() >= tgs::PARALLEL_MANIFOLDS {
-            manifolds.par_iter().with_min_len(tgs::MANIFOLDS_PER_CHUNK).map(of).collect()
+    pub(crate) fn all(ends: &[[u32; 2]], rigid_bodies: &[RigidBody], transforms: &[Transform]) -> Vec<Option<Self>> {
+        let of = |&[a, b]: &[u32; 2]| (a != NO_ROW && b != NO_ROW).then(|| Self::of_rows(a as usize, b as usize, rigid_bodies, transforms));
+        if ends.len() >= tgs::PARALLEL_MANIFOLDS {
+            ends.par_iter().with_min_len(tgs::MANIFOLDS_PER_CHUNK).map(of).collect()
         } else {
-            manifolds.iter().map(of).collect()
+            ends.iter().map(of).collect()
         }
     }
 }
@@ -721,7 +723,9 @@ impl ConstraintSolver {
         island_bodies: &[usize],
         dt: f32,
     ) -> SolveStats {
-        self.solve_contacts_with(manifolds, rigid_bodies, transforms, velocities, pos_corrections, bounces, entity_index_map, island_bodies, dt, None)
+        let row = |e: gizmo_physics_core::BodyHandle| entity_index_map.get(&e.id()).map_or(NO_ROW, |&i| i as u32);
+        let mut ends: Vec<[u32; 2]> = manifolds.iter().map(|m| [row(m.entity_a), row(m.entity_b)]).collect();
+        self.solve_contacts_with(manifolds, &mut ends, rigid_bodies, transforms, velocities, pos_corrections, bounces, entity_index_map, island_bodies, dt, None)
     }
 
     /// [`solve_contacts`](Self::solve_contacts), running `between` before each of its sweeps: an
@@ -730,6 +734,9 @@ impl ConstraintSolver {
     pub(crate) fn solve_contacts_with(
         &self,
         manifolds: &mut [ContactManifold],
+        // Each manifold's bodies' rows (`NO_ROW` for a body the world does not hold), kept in step
+        // with `manifolds` as the support ordering moves them.
+        ends: &mut [[u32; 2]],
         rigid_bodies: &[RigidBody],
         transforms: &[Transform],
         velocities: &mut [Velocity],
@@ -750,9 +757,9 @@ impl ConstraintSolver {
             return SolveStats::default();
         }
 
-        let island_depth = self.island_depth(manifolds, rigid_bodies, entity_index_map);
+        let island_depth = self.island_depth(manifolds, ends, rigid_bodies);
         let n_iterations = self.sweep_count(island_depth);
-        let has_ccd = Self::island_has_ccd(manifolds, rigid_bodies, entity_index_map);
+        let has_ccd = Self::island_has_ccd(ends, rigid_bodies);
 
         // Tall, bucklable stacks (support-depth ≥ 5) are the historically unstable case
         // (resting-stack instability). Only these deep islands reach this branch, so a
@@ -772,7 +779,7 @@ impl ConstraintSolver {
         }
 
         if self.use_tgs_soft && !has_ccd {
-            let pairs = ContactPair::all(manifolds, rigid_bodies, transforms, entity_index_map);
+            let pairs = ContactPair::all(ends, rigid_bodies, transforms);
             self.solve_contacts_tgs(
                 manifolds,
                 &pairs,
@@ -805,7 +812,7 @@ impl ConstraintSolver {
             dt,
             between,
         );
-        let pairs = ContactPair::all(manifolds, rigid_bodies, transforms, entity_index_map);
+        let pairs = ContactPair::all(ends, rigid_bodies, transforms);
         self.record_sliding(manifolds, &pairs, velocities);
         // The split-impulse path sweeps `self.iterations` (see the loop above) and has never
         // consumed the adaptive count, so reporting `n_iterations` here would be a lie about
@@ -848,7 +855,7 @@ impl ConstraintSolver {
     }
 
     /// The island's support depth, its contacts support-ordered on the way when that is on.
-    fn island_depth(&self, manifolds: &mut [ContactManifold], rigid_bodies: &[RigidBody], entity_index_map: &crate::world::EntityIndexMap) -> u32 {
+    fn island_depth(&self, manifolds: &mut [ContactManifold], ends: &mut [[u32; 2]], rigid_bodies: &[RigidBody]) -> u32 {
         // ── Support order + island depth ──
         // Support-order the island's contacts (bottom-up from anchors) when enabled — a
         // deterministic, pair-emission-invariant total order that lets the block solver's
@@ -858,12 +865,7 @@ impl ConstraintSolver {
         // count with depth (short piles keep the base count → no perf cost).
         if self.support_ordering || self.block_solver {
             let _t = crate::profile::Scope::new(&crate::profile::PHASES.order);
-            support_order_manifolds(
-                manifolds,
-                rigid_bodies,
-                entity_index_map.raw(),
-                self.support_ordering,
-            )
+            support_order_manifolds(manifolds, ends, rigid_bodies, self.support_ordering)
         } else {
             0
         }
@@ -932,7 +934,7 @@ impl ConstraintSolver {
     }
 
     /// Whether a body of the island has CCD on, which keeps the island off the TGS path.
-    fn island_has_ccd(manifolds: &[ContactManifold], rigid_bodies: &[RigidBody], entity_index_map: &crate::world::EntityIndexMap) -> bool {
+    fn island_has_ccd(ends: &[[u32; 2]], rigid_bodies: &[RigidBody]) -> bool {
         // TGS Soft yolu (modern çözücü): soft constraint + relax pass.
         // İSTİSNA: CCD-etkin gövde içeren island'lar eski (split-impulse) yolu kullanır.
         // CCD speculative temasları ince ayarlıdır; TGS'in dp/relax akışı yüksek-hızlı
@@ -954,13 +956,7 @@ impl ConstraintSolver {
         // yazılmış bir karşı örnek (sevkiyattaki çözücü onu geçiyor, dolayısıyla bedava ek
         // kapsam), hatırlanan bir cümle değil. Öbür yol — split-impulse yolunda speculative
         // temaslara restitution — 2026-11-15'te açıldı: aşağıdaki "Restitution pass".
-        manifolds.iter().any(|m| {
-            [m.entity_a, m.entity_b].iter().any(|e| {
-                entity_index_map
-                    .get(&e.id())
-                    .is_some_and(|&i| rigid_bodies[i].ccd_enabled)
-            })
-        })
+        ends.iter().flatten().any(|&i| i != NO_ROW && rigid_bodies[i as usize].ccd_enabled)
     }
 
     /// The split-impulse sequential-impulse solve, for an island with a CCD body or with
@@ -1600,6 +1596,16 @@ mod support_order_tests {
         ContactManifold::new(BodyHandle::from_id(a), BodyHandle::from_id(b))
     }
 
+    /// The support ordering of `ms`, their ends looked up by id; checks the ends went with them.
+    fn order_by_ids(ms: &mut [ContactManifold], rigid_bodies: &[RigidBody], entity_index_map: &rustc_hash::FxHashMap<u32, usize>) {
+        let row = |e: gizmo_physics_core::BodyHandle| entity_index_map.get(&e.id()).map_or(NO_ROW, |&i| i as u32);
+        let mut ends: Vec<[u32; 2]> = ms.iter().map(|m| [row(m.entity_a), row(m.entity_b)]).collect();
+        support_order_manifolds(ms, &mut ends, rigid_bodies, true);
+        for (m, end) in ms.iter().zip(&ends) {
+            assert_eq!(*end, [row(m.entity_a), row(m.entity_b)], "a manifold's ends did not move with it");
+        }
+    }
+
     fn id_pairs(ms: &[ContactManifold]) -> Vec<(u32, u32)> {
         ms.iter().map(|m| (m.entity_a.id(), m.entity_b.id())).collect()
     }
@@ -1629,7 +1635,7 @@ mod support_order_tests {
         let mut results = Vec::new();
         for order in &orders {
             let mut ms: Vec<ContactManifold> = order.iter().map(|&(a, b)| manifold(a, b)).collect();
-            support_order_manifolds(&mut ms, &rigid_bodies, &entity_index_map, true);
+            order_by_ids(&mut ms, &rigid_bodies, &entity_index_map);
             results.push(id_pairs(&ms));
         }
 
@@ -1663,8 +1669,8 @@ mod support_order_tests {
 
         let mut ma: Vec<ContactManifold> = a.iter().map(|&(x, y)| manifold(x, y)).collect();
         let mut mb: Vec<ContactManifold> = b.iter().map(|&(x, y)| manifold(x, y)).collect();
-        support_order_manifolds(&mut ma, &rigid_bodies, &entity_index_map, true);
-        support_order_manifolds(&mut mb, &rigid_bodies, &entity_index_map, true);
+        order_by_ids(&mut ma, &rigid_bodies, &entity_index_map);
+        order_by_ids(&mut mb, &rigid_bodies, &entity_index_map);
         assert_eq!(id_pairs(&ma), id_pairs(&mb), "anchor-free order must be emission-invariant");
     }
 }

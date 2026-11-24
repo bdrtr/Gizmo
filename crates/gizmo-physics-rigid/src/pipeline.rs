@@ -1048,7 +1048,7 @@ impl PhysicsWorld {
         }
 
         let solve_island = |((island_manifolds, island_ends), island_joints): ((Vec<ContactManifold>, Vec<[u32; 2]>), Vec<&mut Joint>)| {
-            self.solve_island(island_manifolds, &island_ends, island_joints, dt)
+            self.solve_island(island_manifolds, island_ends, island_joints, dt)
         };
         // On the calling thread when there are few islands (`worth_parallel_jobs`); order is kept.
         let results: Vec<IslandResult> = if island_groups.len() > 1
@@ -1098,7 +1098,7 @@ impl PhysicsWorld {
     /// One island's solve, on whichever worker drew it: whether it is solved at all and whether it
     /// wakes its sleepers, the contact solve itself (`solve_island_contacts`), the fractures it
     /// caused, and whether the island as a whole may sleep.
-    fn solve_island(&self, mut island_manifolds: Vec<ContactManifold>, ends: &[[u32; 2]], mut joints: Vec<&mut Joint>, dt: f32) -> IslandResult {
+    fn solve_island(&self, mut island_manifolds: Vec<ContactManifold>, mut ends: Vec<[u32; 2]>, mut joints: Vec<&mut Joint>, dt: f32) -> IslandResult {
         let entity_map = &self.entity_index_map;
         let rigid_bodies = &self.rigid_bodies;
         let velocities = &self.velocities;
@@ -1163,7 +1163,7 @@ impl PhysicsWorld {
             position_corrections: Vec::with_capacity(island_indices.len()),
             ..IslandResult::default()
         };
-        let stats = self.solve_island_contacts(&mut island_manifolds, &mut joints, &island_indices, &mut result, dt);
+        let stats = self.solve_island_contacts(&mut island_manifolds, &mut ends, &mut joints, &island_indices, &mut result, dt);
         result.stats = stats;
 
         // Fracture detection. Its own function: it is a question about the solved
@@ -1209,6 +1209,7 @@ impl PhysicsWorld {
     fn solve_island_contacts(
         &self,
         island_manifolds: &mut [ContactManifold],
+        ends: &mut [[u32; 2]],
         joints: &mut [&mut Joint],
         island_indices: &[usize],
         out: &mut IslandResult,
@@ -1302,6 +1303,7 @@ impl PhysicsWorld {
                 let between: crate::solver::BetweenSweeps<'_> = has_joints.then_some(crate::solver::IslandJoints { bodies: &held, sweep: &mut sweep_joints });
                 let stats = solver.solve_contacts_with(
                     island_manifolds,
+                    ends,
                     rigid_bodies,
                     transforms,
                     &mut buf,

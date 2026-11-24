@@ -122,18 +122,6 @@ use rustc_hash::FxHashMap;
 /// let world = gizmo_physics_rigid::PhysicsWorld::new();
 /// let _: &std::collections::HashMap<u32, usize, _> = world.entity_index_map.as_ref();
 /// ```
-///
-/// Nor through `raw()`, the `pub(crate)` hatch the crate's own solver paths use.
-/// This fence exists because widening that one method to `pub` is by far the likeliest way
-/// the seal gets undone later, and **none of the four above would catch it**: `insert`
-/// stays private, `iter` stays absent, and the wrapper still would not coerce. Its
-/// diagnostic is a privacy error on `raw`, read off the signature rather than observed by
-/// hand like the four above:
-///
-/// ```compile_fail
-/// let world = gizmo_physics_rigid::PhysicsWorld::new();
-/// let _ = world.entity_index_map.raw();
-/// ```
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 // `transparent`: the wrapper must serialize exactly as the bare map did, because
 // `PhysicsWorld` is `Serialize`/`Deserialize` and `trigger_snapshot` writes this field
@@ -189,17 +177,6 @@ impl EntityIndexMap {
     #[inline]
     pub(crate) fn clear(&mut self) {
         self.map.clear();
-    }
-
-    /// The wrapped map, for the crate-internal solver paths that still take a bare
-    /// `FxHashMap` (`support_order_manifolds`, `solve_contacts_tgs` — both private, so
-    /// neither is on the public surface).
-    ///
-    /// `pub(crate)` is what makes this not a leak: an accessor of any wider visibility
-    /// would hand the hasher straight back out and undo the seal.
-    #[inline]
-    pub(crate) fn raw(&self) -> &FxHashMap<u32, usize> {
-        &self.map
     }
 }
 

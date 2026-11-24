@@ -2112,7 +2112,9 @@ its precision, and a section that silently rewrites itself cannot be checked.
   `raw()` did not exist before it, so those two are forward guards only. The `raw()` fence was
   added by the review pass afterwards: `raw()` is `pub(crate)` and widening it to `pub` is the
   likeliest future regression, and none of the other four fire on it — `insert` stays private,
-  `iter` stays absent, and the wrapper still does not coerce.
+  `iter` stays absent, and the wrapper still does not coerce. (2026-11-25: `raw()` is gone, and its
+  fence with it — the solver now reads each manifold's bodies' rows as the narrow phase found them
+  and has no use for the bare map. Four fences remain.)
   `gizmo-physics-core` uses `FxHashMap` too but only behind `pub(crate)`
   (`broadphase/aabb_tree.rs:59`), and the transitive path through
   `PhysicsWorld::spatial_hash` → `SpatialHash` → `DynamicAabbTree::entity_map` was re-checked
