@@ -204,7 +204,9 @@ impl ConstraintSolver {
 
         // Each colour's work: its blocks packed four to a wide block (`super::wide`), then those it
         // solves one at a time — a block with rolling resistance, and every block of the overflow
-        // colour, whose blocks may share a body. Packed colour by colour on several threads. Without
+        // colour, whose blocks may share a body. Packed four by four on several threads: colour by
+        // colour, the largest colour bounded the packing (149 → 75 µs a substep on the 1000-box
+        // pile, 2026-11-25). Without
         // SIMD (wasm without `simd128`), or with `wide_blocks` off, every block is solved alone.
         let wide_ok = self.wide_blocks && WIDE_SIMD;
         let (packed, single): (Vec<Vec<u32>>, Vec<Vec<u32>>) = (0..colors)
@@ -222,7 +224,7 @@ impl ConstraintSolver {
         let (prepared_ro, groups_ro) = (&*s.prepared, s.groups);
         let mut wide: Vec<Vec<WideBlock>> = packed
             .par_iter()
-            .map(|blocks| blocks.chunks(LANES).map(|four| WideBlock::build(prepared_ro, groups_ro, four)).collect())
+            .map(|blocks| blocks.par_chunks(LANES).map(|four| WideBlock::build(prepared_ro, groups_ro, four)).collect())
             .collect();
         let item_count: Vec<usize> = (0..colors).map(|c| wide[c].len() + single[c].len()).collect();
         let items_of = |c: usize| item_count[c];

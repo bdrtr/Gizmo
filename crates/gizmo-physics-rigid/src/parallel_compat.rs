@@ -13,16 +13,21 @@
 //! this is behaviour- and determinism-neutral relative to the native path.
 #![allow(dead_code)]
 
-/// `[T]::par_iter` / `par_iter_mut` → `iter` / `iter_mut`.
+/// `[T]::par_iter` / `par_iter_mut` / `par_chunks` → `iter` / `iter_mut` / `chunks`.
 pub trait ParSliceIter<T> {
     fn par_iter(&self) -> core::slice::Iter<'_, T>;
     fn par_iter_mut(&mut self) -> core::slice::IterMut<'_, T>;
+    fn par_chunks(&self, size: usize) -> core::slice::Chunks<'_, T>;
 }
 
 impl<T> ParSliceIter<T> for [T] {
     #[inline]
     fn par_iter(&self) -> core::slice::Iter<'_, T> {
         self.iter()
+    }
+    #[inline]
+    fn par_chunks(&self, size: usize) -> core::slice::Chunks<'_, T> {
+        self.chunks(size)
     }
     #[inline]
     fn par_iter_mut(&mut self) -> core::slice::IterMut<'_, T> {
