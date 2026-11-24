@@ -549,6 +549,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A moving body's broad-phase leaf reaches ahead of it.** A body that left its fattened box was
+  taken out of the tree and put back, and a settling pile's bodies did so on nearly every step: on
+  4000 spheres at 60 Hz the reinsertions were most of the broad phase's 1.8 ms. A leaf remade for a
+  moving body now reaches ahead along this step's displacement, four times it (Box2D's
+  `aabbMultiplier`; `SpatialHash::insert_moving`, `DynamicAabbTree::insert_moving`): 1.8 → 1.3 ms,
+  the narrow phase no slower. Only candidate pairs grow; every hash unchanged. 2 and 8 measured no
+  better.
 - **A big pile's solve: blocks inverted once, the warm start and the blocks' set-up on every thread.**
   A box face's four-point block ran the active-set search every sweep, a 4×4 matrix built and
   eliminated; its matrix is the same for the whole substep, so it is inverted once

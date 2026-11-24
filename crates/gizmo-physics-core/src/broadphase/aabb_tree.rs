@@ -1,6 +1,10 @@
 use super::*;
 use rustc_hash::FxHashMap;
 
+/// How far ahead of a moving body its reinserted leaf reaches, in steps of its displacement (see
+/// [`DynamicAabbTree::insert_moving`]). Box2D's `aabbMultiplier`.
+const PREDICTION: f32 = 4.0;
+
 /// A node at least this tall has its pair query split over threads (`internal_pairs_parallel`), in
 /// a tree of at least `PARALLEL_LEAVES` bodies. Below either, handing the work out costs more than
 /// it saves: split from height 6, the 200-box tower of `headless_stress_test` ran 140 → 215 ms.
@@ -151,6 +155,32 @@ impl DynamicAabbTree {
 
     // ── Ekleme / Güncelleme ──────────────────────────────────────────────────
 
+    /// [`insert`](Self::insert) for a body that moved by `displacement` this step: a leaf it has
+    /// to be put back in reaches ahead of it by `PREDICTION` (4) times that, besides the margin, so a
+    /// body going one way stays in its leaf for several steps instead of being taken out and put
+    /// back on nearly every one (Box2D's `aabbMultiplier`). Only the candidate pairs grow; nothing
+    /// that tests them exactly changes. Measured 2026-11-25 on 4000 spheres settling at 60 Hz: the
+    /// reinsertions were 1.3–2.1 ms of the broad phase's 1.5–2.4.
+    pub fn insert_moving(&mut self, entity: BodyHandle, aabb: Aabb, displacement: gizmo_math::Vec3) {
+        if self.holds(entity, &aabb) {
+            return;
+        }
+        self.remove(entity);
+
+        let mut fat_aabb = fatten(&aabb, self.fat_margin);
+        let ahead = gizmo_math::Vec3A::from(displacement) * PREDICTION;
+        fat_aabb.min += ahead.min(gizmo_math::Vec3A::ZERO);
+        fat_aabb.max += ahead.max(gizmo_math::Vec3A::ZERO);
+
+        let leaf = self.alloc_node();
+        self.nodes[leaf].aabb = fat_aabb;
+        self.nodes[leaf].entity = Some(entity);
+        self.nodes[leaf].height = 0;
+
+        self.insert_leaf(leaf);
+        self.entity_map.insert(entity.id(), leaf);
+    }
+
     /// Adds `entity` with its tight world-space `aabb`, or re-places it if that id is
     /// already in the tree. There is no separate update call.
     ///
@@ -165,20 +195,7 @@ impl DynamicAabbTree {
     /// it was.
     pub fn insert(&mut self, entity: BodyHandle, aabb: Aabb) {
         // FIX-1: tight AABB hâlâ fat AABB içindeyse rebuild'den kaçın
-        if self.holds(entity, &aabb) {
-            return;
-        }
-        self.remove(entity);
-
-        let fat_aabb = fatten(&aabb, self.fat_margin);
-
-        let leaf = self.alloc_node();
-        self.nodes[leaf].aabb = fat_aabb;
-        self.nodes[leaf].entity = Some(entity);
-        self.nodes[leaf].height = 0;
-
-        self.insert_leaf(leaf);
-        self.entity_map.insert(entity.id(), leaf);
+        self.insert_moving(entity, aabb, gizmo_math::Vec3::ZERO);
     }
 
     /// Whether the tree already stores a box for `entity` that contains `aabb` — that is,

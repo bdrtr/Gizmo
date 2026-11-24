@@ -341,6 +341,9 @@ impl PhysicsWorld {
 
             if rb.is_static() {
                 self.spatial_hash.insert_static(entity, aabb);
+            } else if moving {
+                // Its leaf, when it has to be remade, reaches ahead along the way it is going.
+                self.spatial_hash.insert_moving(entity, aabb, vel.linear * dt);
             } else {
                 self.spatial_hash.insert(entity, aabb);
             }

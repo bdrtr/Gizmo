@@ -64,11 +64,17 @@ impl SpatialHash {
     /// Forwards to [`DynamicAabbTree::insert`], including its early-out for a body
     /// that has not left the box already stored for it.
     pub fn insert(&mut self, entity: BodyHandle, aabb: Aabb) {
+        self.insert_moving(entity, aabb, gizmo_math::Vec3::ZERO);
+    }
+
+    /// [`insert`](Self::insert) for a body that moved by `displacement` this step: forwards to
+    /// [`DynamicAabbTree::insert_moving`], whose leaf reaches ahead along the motion.
+    pub fn insert_moving(&mut self, entity: BodyHandle, aabb: Aabb, displacement: gizmo_math::Vec3) {
         if self.tree.holds(entity, &aabb) {
             return;
         }
         self.fixed.remove(entity);
-        self.tree.insert(entity, aabb);
+        self.tree.insert_moving(entity, aabb, displacement);
     }
 
     /// [`insert`](Self::insert) for a body that never moves: it goes in the static tree, which
