@@ -363,8 +363,8 @@ impl PhysicsWorld {
         let departed: Vec<(BodyHandle, BodyHandle)> =
             self.contact_cache.keys().filter(|(a, b)| *a == entity || *b == entity).copied().collect();
         for pair in departed {
-            if let Some((is_trigger, _)) = self.contact_cache.remove(&pair) {
-                self.departed_contacts.push((pair, is_trigger));
+            if let Some(entry) = self.contact_cache.remove(&pair) {
+                self.departed_contacts.push((pair, entry.is_trigger));
             }
         }
 

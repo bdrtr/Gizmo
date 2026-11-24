@@ -557,8 +557,10 @@ pub struct PhysicsWorld {
     /// Liquid volumes applying buoyancy and drag; see [`FluidZone`].
     pub fluid_zones: Vec<FluidZone>,
 
+    /// Every pair the narrow phase found, or kept as dormant, by its pair: kept from substep to
+    /// substep and updated in place (see [`CachedPair`]).
     #[serde(skip)]
-    pub(crate) contact_cache: FxHashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>,
+    pub(crate) contact_cache: FxHashMap<(BodyHandle, BodyHandle), CachedPair>,
 
     /// The substep rate, in hertz ([`substep_rate`](Self::substep_rate)), chosen when the world
     /// is built ([`with_substep_rate`](Self::with_substep_rate)) and otherwise changed only by
@@ -727,7 +729,7 @@ pub struct WorldSnapshot {
     transforms: Vec<Transform>,
     velocities: Vec<crate::components::Velocity>,
     rigid_bodies: Vec<crate::components::RigidBody>,
-    contact_cache: FxHashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>,
+    contact_cache: FxHashMap<(BodyHandle, BodyHandle), CachedPair>,
     accumulator: f32,
     // The rate the accumulator, the contacts' warm-start impulses and the sleep counters above are
     // in: CARRIED, like `weather` below — a restore puts the world back at the rate those were
@@ -759,4 +761,19 @@ pub struct WorldSnapshot {
     // yukarıdaki ekleme kuralının tam olarak kapsadığı şey. Rollback penceresi içinde hava
     // değişirse re-simülasyon, çoktan geri alınmış bir havanın tutuşuyla koşuyordu.
     weather: Weather,
+}
+
+/// One pair's entry in [`PhysicsWorld`]'s contact cache: a trigger's overlap, or a solid contact's
+/// manifold as the last solve left it (its impulses are the next step's warm start).
+///
+/// The cache is one map kept from substep to substep. Until 2026-11-25 every substep built a new
+/// one and moved each pair over from the last, three hash operations a pair and a map allocated and
+/// freed a substep; a pair is now looked up once and updated where it is.
+#[derive(Debug, Clone)]
+pub(crate) struct CachedPair {
+    pub(crate) is_trigger: bool,
+    pub(crate) manifold: Option<ContactManifold>,
+    /// Found by this substep's narrow phase, or kept as a dormant pair's. Cleared by the sweep at
+    /// the narrow phase's end, which takes out the entries without it: false between substeps.
+    pub(crate) seen: bool,
 }

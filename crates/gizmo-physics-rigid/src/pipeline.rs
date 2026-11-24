@@ -12,6 +12,7 @@ use crate::{
 use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactManifold, ContactPoints, TriggerEvent};
 use gizmo_physics_core::narrowphase::NarrowPhase;
+use crate::world::CachedPair;
 use gizmo_physics_core::BodyHandle;
 use crate::joints::Joint;
 use gizmo_math::Vec3;
@@ -396,26 +397,31 @@ impl PhysicsWorld {
         // ~log2(N) grow-and-rehash reallocations the map/vec otherwise do every frame while
         // filling to tens of thousands of entries.
         let mut manifolds = Vec::with_capacity(narrowphase_results.len());
-        let mut current_cache =
-            FxHashMap::with_capacity_and_hasher(self.contact_cache.len(), Default::default());
         let _mani = crate::profile::Scope::new(&crate::profile::PHASES.manifold);
         for found in narrowphase_results {
             if found.is_trigger_a || found.is_trigger_b {
-                self.record_trigger(&found, &mut current_cache);
+                self.record_trigger(&found);
             } else {
-                manifolds.push(self.record_solid_contact(found, &mut current_cache));
+                manifolds.push(self.record_solid_contact(found));
             }
         }
 
-        self.keep_dormant_cache(&dormant_pairs, &mut current_cache);
+        self.keep_dormant_cache(&dormant_pairs);
 
         // ── Ended collisions ──────────────────────────────────────────────
         // What the last step's cache holds and this step's does not.
-        let previous = std::mem::replace(&mut self.contact_cache, current_cache);
-        for (pair, &(is_trigger, _)) in &previous {
-            if !self.contact_cache.contains_key(pair) {
-                self.end_contact(*pair, is_trigger);
+        // What was in the cache and was not found again has ended; what was found is unmarked for
+        // the next substep.
+        let mut ended: Vec<((BodyHandle, BodyHandle), bool)> = Vec::new();
+        self.contact_cache.retain(|pair, entry| {
+            let seen = std::mem::take(&mut entry.seen);
+            if !seen {
+                ended.push((*pair, entry.is_trigger));
             }
+            seen
+        });
+        for (pair, is_trigger) in ended {
+            self.end_contact(pair, is_trigger);
         }
 
         // AGGREGATE: narrowphase outcome for this substep. `dormant_skipped` shows how many
@@ -617,7 +623,7 @@ impl PhysicsWorld {
         let mut carried = 0u64;
         if !collider_a.is_trigger && !collider_b.is_trigger {
             if let Some((_, Some(old_manifold))) =
-                self.contact_cache.get(&(entity_a, entity_b))
+                self.contact_cache.get(&(entity_a, entity_b)).map(|e| (e.is_trigger, e.manifold.as_ref()))
             {
                 warm = Some(old_manifold.lifetime + 1);
                 let ws_tol_sq =
@@ -696,13 +702,13 @@ impl PhysicsWorld {
     }
 
     /// A trigger overlap: cached without a manifold, and its event.
-    fn record_trigger(&mut self, found: &PairContacts, current_cache: &mut FxHashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>) {
+    fn record_trigger(&mut self, found: &PairContacts) {
         let PairContacts { entity_a, entity_b, is_trigger_a, .. } = *found;
         let pair = (entity_a, entity_b);
         // ── Trigger ───────────────────────────────────────────────
-        current_cache.insert(pair, (true, None));
+        let existed = self.contact_cache.insert(pair, CachedPair { is_trigger: true, manifold: None, seen: true }).is_some();
 
-        let event_type = if self.contact_cache.contains_key(&pair) {
+        let event_type = if existed {
             CollisionEventType::Persisting
         } else {
             CollisionEventType::Started
@@ -716,7 +722,7 @@ impl PhysicsWorld {
 
     /// A solid contact: its manifold with the pair's combined material and warm start, the cache's
     /// entry for the next step, and its event.
-    fn record_solid_contact(&mut self, found: PairContacts, current_cache: &mut FxHashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>) -> ContactManifold {
+    fn record_solid_contact(&mut self, found: PairContacts) -> ContactManifold {
         let PairContacts { entity_a, entity_b, contacts, material_a: mat_a, material_b: mat_b, warm, .. } = found;
         let pair = (entity_a, entity_b);
         // ── Solid contact ─────────────────────────────────────────
@@ -769,25 +775,33 @@ impl PhysicsWorld {
         // aynı çiftler devam ettiği sürece tahsisatçıya hiç inilmez. Kopyalanan
         // veri birebir aynı; değişen yalnız belleğin nereden geldiği.
         //
-        // `remove` ÖNCE yapılamaz: aşağıdaki olay türü kararı önbellekte girdi
-        // olup olmadığına bakıyor, o yüzden varlık burada yakalanır.
-        let existed = self.contact_cache.contains_key(&pair);
-        let mut cached = match self.contact_cache.remove(&pair) {
-            Some((_, Some(mut old))) => {
-                old.contacts.clear();
-                old.contacts.extend_from_slice(&manifold.contacts);
-                old
+        // The entry is updated where it stands, and whether there was one is what decides the
+        // event below (`Persisting` or `Started`).
+        let existed = match self.contact_cache.get_mut(&pair) {
+            Some(entry) => {
+                match &mut entry.manifold {
+                    Some(old) => {
+                        old.contacts.clear();
+                        old.contacts.extend_from_slice(&manifold.contacts);
+                        old.entity_a = manifold.entity_a;
+                        old.entity_b = manifold.entity_b;
+                        old.friction = manifold.friction;
+                        old.static_friction = manifold.static_friction;
+                        old.restitution = manifold.restitution;
+                        old.rolling_friction = manifold.rolling_friction;
+                        old.lifetime = manifold.lifetime;
+                    }
+                    none => *none = Some(manifold.clone()),
+                }
+                entry.is_trigger = false;
+                entry.seen = true;
+                true
             }
-            _ => manifold.clone(),
+            None => {
+                self.contact_cache.insert(pair, CachedPair { is_trigger: false, manifold: Some(manifold.clone()), seen: true });
+                false
+            }
         };
-        cached.entity_a = manifold.entity_a;
-        cached.entity_b = manifold.entity_b;
-        cached.friction = manifold.friction;
-        cached.static_friction = manifold.static_friction;
-        cached.restitution = manifold.restitution;
-        cached.rolling_friction = manifold.rolling_friction;
-        cached.lifetime = manifold.lifetime;
-        current_cache.insert(pair, (false, Some(cached)));
 
         let event_type = if existed {
             CollisionEventType::Persisting
@@ -805,31 +819,19 @@ impl PhysicsWorld {
     }
 
     /// Keeps the dormant pairs' cache entries. The narrowphase skipped them (both bodies are
-    /// dormant), so their previous entries move to `current_cache`; otherwise the ended-collision
-    /// loop would take them for ended and WAKE them. No manifold goes to the solver (both bodies
+    /// dormant), so their entries are marked found; otherwise the ended-collision sweep would take
+    /// them for ended and WAKE them. No manifold goes to the solver (both bodies
     /// are dormant, so the island is not solved anyway): this is the contact cache's continuity
     /// only. Once a body wakes, the pair is active again and the narrowphase tests it.
-    fn keep_dormant_cache(&mut self, dormant_pairs: &[(BodyHandle, BodyHandle)], current_cache: &mut FxHashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>) {
+    fn keep_dormant_cache(&mut self, dormant_pairs: &[(BodyHandle, BodyHandle)]) {
+        // Marked as found, so the sweep at the narrow phase's end keeps them: nothing else about a
+        // dormant pair changes. (When the cache was rebuilt every substep, each dormant pair's entry
+        // was moved across — and most of a settled pile's pairs are dormant.)
         for &pair in dormant_pairs {
-            if current_cache.contains_key(&pair) {
-                continue;
-            }
-            // **Taşı, kopyalama.** Girdi buradan değiştirilmeden ileri geçiyor ve
-            // `self.contact_cache` birkaç satır aşağıda tümden `current_cache` ile
-            // değiştiriliyor — yani kopyanın ömrü zaten bu blok kadar. `ContactManifold`
-            // bir `Vec<ContactPoint>` sahibi olduğundan her `clone()` bir heap tahsisiydi:
-            // dormant çift başına, ALT-ADIM başına. Oturmuş bir yığında çiftlerin neredeyse
-            // tamamı dormant olduğu için temas yolundaki tahsislerin çoğu buradan geliyordu
-            // (ölçüm: 8.160/kare, temassız taban çizgisi 20/kare).
-            //
-            // Aşağıdaki "biten çarpışma" döngüsü `self.contact_cache`'i tarayıp
-            // `current_cache`'te olmayanları "bitti" sayar; buradan çıkardığımız her girdi
-            // aynı anda `current_cache`'e girdiğinden o döngü onları zaten atlıyordu.
-            // Kaldırmak sonucu değiştirmez.
-            if let Some(entry) = self.contact_cache.remove(&pair) {
-                current_cache.insert(pair, entry);
-            } else if let Some(entry) = self.contact_cache.remove(&(pair.1, pair.0)) {
-                current_cache.insert((pair.1, pair.0), entry);
+            if let Some(entry) = self.contact_cache.get_mut(&pair) {
+                entry.seen = true;
+            } else if let Some(entry) = self.contact_cache.get_mut(&(pair.1, pair.0)) {
+                entry.seen = true;
             }
         }
     }
@@ -1424,7 +1426,7 @@ impl PhysicsWorld {
                 Some(entry) => Some(entry),
                 None => self.contact_cache.get_mut(&key_ba),
             };
-            if let Some((_, Some(cached))) = cached {
+            if let Some(CachedPair { manifold: Some(cached), .. }) = cached {
                 if cached.contacts.len() == manifold.contacts.len() {
                     for (into, solved) in cached.contacts.iter_mut().zip(&manifold.contacts) {
                         into.normal_impulse = solved.normal_impulse;
