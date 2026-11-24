@@ -64,7 +64,7 @@ fn a_kinematic_push_keeps_the_box_it_pushes_awake_and_in_step() {
         let idx = *pw.entity_index_map.get(&b.id()).expect("the box's row");
         let (body, vel) = (pw.rigid_bodies[idx], pw.velocities[idx]);
         assert!(
-            !body.is_sleeping || body.sleep_eligible(),
+            !body.is_sleeping || body.sleep_eligible(pw.sleep_steps()),
             "step {i}: the box is asleep without having been still (counter {})",
             body.sleep_counter
         );

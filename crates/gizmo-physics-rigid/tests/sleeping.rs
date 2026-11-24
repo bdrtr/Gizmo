@@ -173,3 +173,39 @@ fn dropped_box_wakes_and_rests_on_sleeping_stack() {
         "yığın sırası bozuldu: y1={y1} y2={y2} y3={y3}"
     );
 }
+
+/// **A body at rest under a stronger gravity falls asleep.** Sleep was counted on the velocity a
+/// substep had before its contacts were solved, which still held that substep's gravity: `g·dt`
+/// against the 0.05 m/s threshold, 0.041 under Earth's gravity at 240 Hz — through by 9 mm/s —
+/// and 0.0625 under the −15 m/s² of the `platformer` demo, so a box resting there never slept.
+/// Counted on the velocity a substep ends with, a box at rest reads (nearly) zero under any gravity.
+#[test]
+fn a_box_at_rest_under_a_stronger_gravity_falls_asleep() {
+    for g in [-9.81f32, -15.0, -20.0, -40.0] {
+        let mut world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, g, 0.0));
+        add_ground(&mut world);
+        add_box(&mut world, 1, Vec3::new(0.0, 0.5, 0.0));
+        let mut asleep_at = None;
+        for frame in 0..240 {
+            world.step(1.0 / 60.0).expect("step");
+            if world.rigid_bodies[1].is_sleeping {
+                asleep_at = Some(frame);
+                break;
+            }
+        }
+        let frame = asleep_at.unwrap_or_else(|| panic!("g = {g}: the box never slept in 4 s (|v| = {})", world.velocities[1].linear.length()));
+        // `SLEEP_TIME` after it came to rest: it starts resting, so well inside a second.
+        assert!(frame < 60, "g = {g}: asleep only at frame {frame}");
+    }
+}
+
+/// **How long a body must be still before it sleeps is a time, not a count of substeps.** 60
+/// substeps at the world's 240 Hz, the quarter second it always was; 15 at 60 Hz.
+#[test]
+fn the_time_to_fall_asleep_is_a_duration() {
+    assert_eq!(RigidBody::sleep_steps(1.0 / 240.0), 60);
+    assert_eq!(RigidBody::sleep_steps(1.0 / 120.0), 30);
+    assert_eq!(RigidBody::sleep_steps(1.0 / 60.0), 15);
+    assert_eq!(RigidBody::sleep_steps(1.0), 1, "never less than one step");
+    assert_eq!(PhysicsWorld::new().sleep_steps(), 60, "the default world keeps its quarter second");
+}

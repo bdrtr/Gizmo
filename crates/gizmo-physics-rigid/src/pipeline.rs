@@ -124,8 +124,11 @@ struct IslandResult {
     bounces: Vec<(BodyHandle, Vec3, Vec3)>,
     /// The adaptive sweep count and the support depth.
     stats: crate::solver::SolveStats,
-    /// Every dynamic member is eligible to sleep.
-    can_sleep: bool,
+    /// A real mover was in the island at the start of the substep: nothing in it may sleep.
+    has_mover: bool,
+    /// The island's dynamic members, by index — whom the island's sleep decides about, after the
+    /// substep's solve (`PhysicsWorld::constraint_solve_step`).
+    members: Vec<usize>,
     /// What contacts gave kinematic bodies with a contact mass.
     kinematic_responses: Vec<(usize, Vec3)>,
 }
@@ -780,6 +783,9 @@ impl PhysicsWorld {
         // at all — a pair of bodies joined only by a joint has no island and must still be able
         // to sleep.
         let mut in_island: FxHashSet<u32> = FxHashSet::default();
+        // Each solved island's (had a mover, dynamic members), for the sleep decision after the
+        // solve and the joints.
+        let mut island_sleep: Vec<(bool, Vec<usize>)> = Vec::new();
 
         // The joints' pass opens before the contacts: a joint whose body is in a contact island is
         // solved there, in the island's own sweeps (`solve_island_contacts`); `coupled` marks those.
@@ -789,7 +795,7 @@ impl PhysicsWorld {
         let coupled = if manifolds.is_empty() {
             Vec::new()
         } else {
-            self.solve_islands(manifolds, dt, &mut in_island, &mut bounces, joints_open)
+            self.solve_islands(manifolds, dt, &mut in_island, &mut bounces, &mut island_sleep, joints_open)
         };
 
         // ── Joints ────────────────────────────────────────────────────────
@@ -820,6 +826,29 @@ impl PhysicsWorld {
             );
         }
 
+        // ── Sleep counters, on the velocity the substep ends with ─────────
+        // After the contacts and the joints, so a body at rest reads the rest the solve gave it.
+        // Until 2026-11-24 the counters advanced in the velocity integration, before the solve,
+        // on a velocity still holding the substep's gravity: `g·dt` against a 0.05 m/s threshold
+        // is 0.041 at 240 Hz under Earth's gravity and passed only by that margin — under the
+        // −15 m/s² of `platformer` (0.0625) or a world at 120 Hz (0.082) nothing ever slept.
+        let required = self.sleep_steps();
+        for (rb, vel) in self.rigid_bodies.iter_mut().zip(&self.velocities) {
+            if rb.is_dynamic() && !rb.is_sleeping {
+                rb.advance_sleep_counter(vel, required);
+            }
+        }
+
+        // ── Sleep, island by island ───────────────────────────────────────
+        // A whole island or none of it (see `solve_island`), and never one that had a mover.
+        for (has_mover, members) in island_sleep {
+            if !has_mover && members.iter().all(|&i| self.rigid_bodies[i].sleep_eligible(required)) {
+                for i in members {
+                    self.rigid_bodies[i].is_sleeping = true;
+                }
+            }
+        }
+
         // ── Sleep, for everything the island rule did not decide ──────────
         // A dynamic body with no contacts this substep belongs to no island, so the island rule
         // never reaches it. It sleeps on its own counter, exactly as it always did: the
@@ -832,7 +861,7 @@ impl PhysicsWorld {
         for i in 0..self.rigid_bodies.len() {
             let id = self.entities[i].id();
             let rb = &mut self.rigid_bodies[i];
-            if rb.is_dynamic() && !rb.is_sleeping && rb.sleep_eligible() && !in_island.contains(&id) {
+            if rb.is_dynamic() && !rb.is_sleeping && rb.sleep_eligible(required) && !in_island.contains(&id) {
                 rb.is_sleeping = true;
             }
         }
@@ -858,6 +887,7 @@ impl PhysicsWorld {
         dt: f32,
         in_island: &mut FxHashSet<u32>,
         bounces: &mut Vec<(BodyHandle, Vec3, Vec3)>,
+        island_sleep: &mut Vec<(bool, Vec<usize>)>,
         with_joints: bool,
     ) -> Vec<bool> {
         let entity_map = &self.entity_index_map;
@@ -918,7 +948,7 @@ impl PhysicsWorld {
         let mut total_wakes = 0usize;
         let mut total_fractures = 0usize;
         for result in results {
-            let (wakes, fractures) = self.write_back_island(result, &event_index, in_island, bounces);
+            let (wakes, fractures) = self.write_back_island(result, &event_index, in_island, bounces, island_sleep);
             total_wakes += wakes;
             total_fractures += fractures;
         }
@@ -982,10 +1012,12 @@ impl PhysicsWorld {
         let island_has_mover = members.iter().any(|&e| {
             entity_map.get(&e.id()).is_some_and(|&i| {
                 let rb = &rigid_bodies[i];
-                (rb.is_dynamic()
-                    && !rb.is_sleeping
-                    && !rb.can_sleep(&velocities[i]))
-                    || kinematic_moving(i)
+                // On the velocity the last substep ended with (`pre_*`, cached before this
+                // substep's gravity): the integrated one still holds `g·dt`, which alone is over
+                // the threshold below about 200 Hz, and would make a body at rest a mover.
+                let v = &velocities[i];
+                let ended = Velocity { linear: v.pre_linear, angular: v.pre_angular, ..*v };
+                (rb.is_dynamic() && !rb.is_sleeping && !rb.can_sleep(&ended)) || kinematic_moving(i)
             })
         });
 
@@ -1029,8 +1061,10 @@ impl PhysicsWorld {
         // the contact solver reads its mass and exchanges impulses with it — so a
         // partially-asleep island stops conserving momentum across the interfaces
         // that touch the sleepers. Requiring the whole island keeps that from
-        // arising. Eligibility itself is still per body and still counted in
-        // `advance_sleep_counter`.
+        // arising. Eligibility itself is still per body, counted in
+        // `advance_sleep_counter` — after the solve, on the velocity the substep ends
+        // with, so the decision is taken there (`constraint_solve_step`); the island
+        // hands over its members and whether it had a mover.
         //
         // **And not while anything in it moves.** The counters say only what the dynamic members
         // did, and a dynamic mover's was just reset — but a kinematic one has none. An island of a
@@ -1040,15 +1074,14 @@ impl PhysicsWorld {
         // which the ECS mirror was never told about. On screen the box lagged a step behind the
         // physics; in a debug build the step's own check panicked ("neither brought over nor
         // written back", `system.rs`). 2026-11-23.
-        let island_can_sleep = !island_has_mover
-            && island_indices.iter().all(|&idx| {
-                !rigid_bodies[idx].is_dynamic() || rigid_bodies[idx].sleep_eligible()
-            });
+        let mut members: Vec<usize> = island_indices.iter().copied().filter(|&idx| rigid_bodies[idx].is_dynamic()).collect();
+        members.sort_unstable();
 
         result.manifolds = island_manifolds;
         result.wake_ups = wake_updates;
         result.fractures = fractures;
-        result.can_sleep = island_can_sleep;
+        result.has_mover = island_has_mover;
+        result.members = members;
         result
     }
 
@@ -1190,6 +1223,7 @@ impl PhysicsWorld {
         event_index: &FxHashMap<(BodyHandle, BodyHandle), usize>,
         in_island: &mut FxHashSet<u32>,
         bounces: &mut Vec<(BodyHandle, Vec3, Vec3)>,
+        island_sleep: &mut Vec<(bool, Vec<usize>)>,
     ) -> (usize, usize) {
         let entity_map = &self.entity_index_map;
         let IslandResult {
@@ -1200,9 +1234,11 @@ impl PhysicsWorld {
             position_corrections: pos_corrections,
             bounces: island_bounces,
             stats,
-            can_sleep: island_can_sleep,
+            has_mover,
+            members,
             kinematic_responses,
         } = result;
+        island_sleep.push((has_mover, members));
         let counts = (wake_ups.len(), local_fractures.len());
         // A kinematic body touching several islands took a share in each. It moves by it
         // for the rest of the step, as a body of its contact mass would — a later substep
@@ -1212,13 +1248,6 @@ impl PhysicsWorld {
             self.velocities[idx].linear += dv;
         }
         bounces.extend(island_bounces);
-        // Captured before `island_vels` is consumed below; empty unless the whole island
-        // qualifies, so this allocates only on the substep a pile actually settles.
-        let sleepers: Vec<BodyHandle> = if island_can_sleep {
-            island_vels.iter().map(|(e, _)| *e).collect()
-        } else {
-            Vec::new()
-        };
         // Effective sweep count, summed over islands (and, by the caller's accumulation,
         // over substeps): the number that says whether the adaptive policy was engaged
         // at all on this scene. Depth is a max, not a sum — it is a property of the
@@ -1275,13 +1304,6 @@ impl PhysicsWorld {
                     t.rotation = (gizmo_math::Quat::from_scaled_axis(dang) * t.rotation).normalize();
                 }
                 t.update_local_matrix();
-            }
-        }
-        // After the wake pass, so the two can never fight: an island with a mover is
-        // by construction not all-eligible, since a mover's counter was just reset.
-        for entity in sleepers {
-            if let Some(&idx) = entity_map.get(&entity.id()) {
-                self.rigid_bodies[idx].is_sleeping = true;
             }
         }
         self.fracture_events.extend(local_fractures);

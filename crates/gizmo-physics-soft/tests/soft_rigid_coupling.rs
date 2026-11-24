@@ -996,7 +996,7 @@ mod ecs {
         let mut rb = RigidBody::new(mass, false); // gravity off: this test is about the impulse
         rb.update_inertia_from_collider(&Collider::box_collider(Vec3::splat(0.5)));
         rb.is_sleeping = true;
-        rb.sleep_counter = RigidBody::SLEEP_FRAMES_REQUIRED + 12;
+        rb.sleep_counter = gizmo_physics_rigid::PhysicsWorld::new().sleep_steps() + 12;
         rb
     }
 

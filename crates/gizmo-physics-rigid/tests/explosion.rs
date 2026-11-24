@@ -51,10 +51,9 @@ fn spawn_blast(world: &mut World) {
 fn sleeping_box(mass: f32) -> RigidBody {
     let mut rb = RigidBody::new(mass, true);
     rb.update_inertia_from_collider(&Collider::box_collider(Vec3::splat(0.5)));
-    // What `update_sleep_state` would have left after a quiet run — see
-    // `RigidBody::SLEEP_FRAMES_REQUIRED`.
+    // What a quiet run leaves — past `RigidBody::SLEEP_TIME` of the default world's substeps.
     rb.is_sleeping = true;
-    rb.sleep_counter = RigidBody::SLEEP_FRAMES_REQUIRED + 40;
+    rb.sleep_counter = gizmo_physics_rigid::PhysicsWorld::new().sleep_steps() + 40;
     rb
 }
 

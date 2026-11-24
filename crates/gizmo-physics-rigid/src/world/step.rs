@@ -291,6 +291,12 @@ impl PhysicsWorld {
         Ok(())
     }
 
+    /// The consecutive quiet substeps a body needs before it may sleep:
+    /// [`RigidBody::SLEEP_TIME`](crate::RigidBody::SLEEP_TIME) of this world's substep.
+    pub fn sleep_steps(&self) -> u32 {
+        crate::RigidBody::sleep_steps(FIXED_DT)
+    }
+
     /// Get collision events from last step
     pub fn collision_events(&self) -> &[CollisionEvent] {
         &self.collision_events

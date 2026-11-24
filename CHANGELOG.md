@@ -549,6 +549,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A body at rest falls asleep under any gravity, and after a time rather than a count.** Sleep
+  was counted on the velocity a substep had before its contacts were solved, which still held that
+  substep's gravity: `g·dt` against the 0.05 m/s threshold is 0.041 under Earth's gravity at the
+  world's 240 Hz — through by 9 mm/s — and 0.0625 under the −15 m/s² of `platformer`, where a box
+  at rest never slept (nor would anything at any rate below about 200 Hz). The counters now advance
+  after the contacts and the joints, on the velocity the substep ends with, and an island's sleep
+  is decided after them; whether an island had a mover is judged on the velocity the last substep
+  ended with. And the requirement is a duration, `RigidBody::SLEEP_TIME` (0.25 s, what 60 substeps
+  were at 240 Hz): `RigidBody::sleep_steps(dt)`, `PhysicsWorld::sleep_steps()`;
+  `advance_sleep_counter`, `sleep_eligible` and `update_sleep_state` take the step's count or
+  length, and `SLEEP_FRAMES_REQUIRED` is gone. Over eight thousand-box piles a default-material pile
+  sleeps at a median frame 825 against 900. `headless_stress_test` hash `93AAB528F6249F8B` (was
+  `762BF756B589DE11`). `a_box_at_rest_under_a_stronger_gravity_falls_asleep` (red with the old order
+  at −15), `the_time_to_fall_asleep_is_a_duration`. Found mapping what assumes the 240 Hz substep.
 - **A bloom of 0 costs nothing.** The chain was drawn whatever its strength and then multiplied by
   it: 0.33 ms a frame at 1080p on an integrated GPU for a game that had turned bloom off. Skipped now
   when the strength written for the frame is 0 and there is no lens flare (which is drawn from the

@@ -110,8 +110,9 @@ pub struct RigidBody {
     /// effect and the write is not consumed either — call [`wake_up`](Self::wake_up)
     /// first (that is why the world's impulse helpers take `&mut RigidBody`).
     ///
-    /// Set by [`update_sleep_state`](Self::update_sleep_state) after a run of quiet
-    /// steps and cleared by it the moment the body moves again.
+    /// Set after [`SLEEP_TIME`](Self::SLEEP_TIME) of quiet steps (by the world, per contact
+    /// island; by [`update_sleep_state`](Self::update_sleep_state) for a caller driving a body
+    /// itself) and cleared the moment the body moves again.
     /// [`new_static`](Self::new_static) starts it `true`, since a static body is
     /// permanently "asleep".
     pub is_sleeping: bool,
@@ -175,16 +176,12 @@ pub struct RigidBody {
     /// [`lock_translation_x`](Self::lock_translation_x); combined with locked X/Y
     /// rotation it is the usual 2.5-D constraint, confining motion to the world XY plane.
     pub lock_translation_z: bool,
-    /// Number of consecutive integration steps in which [`can_sleep`](Self::can_sleep)
-    /// held. [`update_sleep_state`](Self::update_sleep_state) increments it and sets
-    /// [`is_sleeping`](Self::is_sleeping) once it reaches 60; any step that fails the
-    /// test resets it to 0, as does [`wake_up`](Self::wake_up).
-    ///
-    /// The unit is *physics steps*, not rendered frames or seconds: a world that runs
-    /// several fixed sub-steps per frame advances this several times per frame and
-    /// therefore falls asleep proportionally sooner in wall-clock terms. It also stops
-    /// advancing while the body sleeps, since a sleeping body is never integrated.
-    pub sleep_counter: u32, // Frames below sleep threshold
+    /// Number of consecutive physics steps, each judged on the velocity the step *ended*
+    /// with, in which [`can_sleep`](Self::can_sleep) held. A body may sleep once it reaches
+    /// [`sleep_steps`](Self::sleep_steps) of the step length — [`SLEEP_TIME`](Self::SLEEP_TIME)
+    /// of stillness, whatever the rate. Any step that fails the test resets it to 0, as does
+    /// [`wake_up`](Self::wake_up). It stops advancing while the body sleeps.
+    pub sleep_counter: u32,
     /// Centre of mass as an offset from the transform's origin, in the **body-local**
     /// frame, metres. `Vec3::ZERO` (the default) means the origin *is* the centre of
     /// mass.
@@ -483,8 +480,10 @@ impl RigidBody {
     /// Whether the body is quiet enough *this step* to count towards falling asleep.
     ///
     /// A pure predicate — it mutates nothing and a `true` does not mean the body is
-    /// asleep; [`update_sleep_state`](Self::update_sleep_state) still requires 60
-    /// consecutive `true`s. Kinematic bodies always answer `false` (user-driven motion
+    /// asleep; falling asleep takes [`SLEEP_TIME`](Self::SLEEP_TIME) of consecutive `true`s.
+    /// Ask it of the velocity a step ended with: one taken before the contacts are solved
+    /// still holds that step's gravity, `g·dt`, which is 0.041 m/s at 240 Hz and 0.16 at
+    /// 60 — a body at rest would never qualify. Kinematic bodies always answer `false` (user-driven motion
     /// must never be skipped) and static bodies always `true`, both without looking at
     /// `velocity` at all. A dynamic body qualifies when its linear speed is below
     /// 0.05 m/s *and* its angular speed below 0.05 rad/s — fixed thresholds, not
@@ -504,30 +503,45 @@ impl RigidBody {
             && velocity.angular.length_squared() < SLEEP_ANGULAR_THRESHOLD * SLEEP_ANGULAR_THRESHOLD
     }
 
-    /// Advances the sleep state machine by one step, given this step's `velocity`.
+    /// Advances the sleep state machine by one step of `dt` seconds, given the velocity the
+    /// step ended with.
     ///
     /// Falling asleep is delayed, waking is immediate: while [`can_sleep`](Self::can_sleep)
-    /// holds the counter grows and [`is_sleeping`](Self::is_sleeping) is set on reaching
-    /// 60 consecutive qualifying steps, but a single failing step resets the counter and
-    /// clears the flag at once.
+    /// holds the counter grows and [`is_sleeping`](Self::is_sleeping) is set once it has
+    /// held for [`SLEEP_TIME`](Self::SLEEP_TIME), but a single failing step resets the counter
+    /// and clears the flag at once.
     ///
-    /// The 60 is a step count, not a duration — it is one second only at a 60 Hz step
-    /// rate and correspondingly shorter for a world that sub-steps faster.
-    ///
-    /// **The engine's own pipeline no longer calls this.** It advances the counter with
+    /// **The engine's own pipeline does not call this.** It advances the counter with
     /// [`advance_sleep_counter`](Self::advance_sleep_counter) and then decides whether to
     /// actually sleep a body per contact ISLAND rather than per body, because a stack that
     /// sleeps only partway is solved inconsistently — see that method. This one is kept
     /// because it is public API and is the right thing for a caller driving bodies that are
     /// not in contact with anything.
-    pub fn update_sleep_state(&mut self, velocity: &Velocity) {
-        if self.advance_sleep_counter(velocity) {
+    pub fn update_sleep_state(&mut self, velocity: &Velocity, dt: f32) {
+        if self.advance_sleep_counter(velocity, Self::sleep_steps(dt)) {
             self.is_sleeping = true;
         }
     }
 
-    /// Number of consecutive qualifying steps before a body is allowed to sleep.
-    pub const SLEEP_FRAMES_REQUIRED: u32 = 60; // ~1 second at 60fps
+    /// How long a body must stay below the sleep thresholds before it may sleep, in seconds.
+    ///
+    /// A duration, so the world's rate does not change it. It was a count of 60 steps until
+    /// 2026-11-24, which made it 0.25 s at the world's 240 Hz — the value kept here — and
+    /// would have made it a second at 60 Hz.
+    pub const SLEEP_TIME: f32 = 0.25;
+
+    /// The consecutive quiet steps of `dt` seconds that make [`SLEEP_TIME`](Self::SLEEP_TIME):
+    /// rounded to the nearest whole step, at least one. 60 at 240 Hz, 15 at 60 Hz.
+    ///
+    /// A count rather than a sum of `dt`s, because the sum drifts: sixty f32 steps of 1/240 add
+    /// to 0.2499…, one step short of the quarter-second they make.
+    pub fn sleep_steps(dt: f32) -> u32 {
+        if dt > 0.0 && dt.is_finite() {
+            ((Self::SLEEP_TIME / dt).round() as u32).max(1)
+        } else {
+            1
+        }
+    }
 
     /// Advance the sleep counter by one step and report whether this body is now *eligible* to
     /// sleep — without putting it to sleep.
@@ -541,10 +555,12 @@ impl RigidBody {
     /// is still solved against — the contact solver reads its mass and exchanges impulses with
     /// it — but is never integrated, so it takes no share of the reaction and the interface
     /// stops conserving momentum. Letting only whole islands sleep keeps that from arising.
-    pub fn advance_sleep_counter(&mut self, velocity: &Velocity) -> bool {
+    ///
+    /// `required` is [`sleep_steps`](Self::sleep_steps) of the step's length.
+    pub fn advance_sleep_counter(&mut self, velocity: &Velocity, required: u32) -> bool {
         if self.can_sleep(velocity) {
-            self.sleep_counter += 1;
-            self.sleep_counter >= Self::SLEEP_FRAMES_REQUIRED
+            self.sleep_counter = self.sleep_counter.saturating_add(1);
+            self.sleep_counter >= required
         } else {
             self.sleep_counter = 0;
             self.is_sleeping = false;
@@ -552,11 +568,12 @@ impl RigidBody {
         }
     }
 
-    /// Whether this body has been slow for long enough to be allowed to sleep, without
-    /// advancing anything. See [`advance_sleep_counter`](Self::advance_sleep_counter).
+    /// Whether this body has been slow for long enough to be allowed to sleep — `required`
+    /// quiet steps, [`sleep_steps`](Self::sleep_steps) of the step length — without advancing
+    /// anything. See [`advance_sleep_counter`](Self::advance_sleep_counter).
     #[inline]
-    pub fn sleep_eligible(&self) -> bool {
-        self.sleep_counter >= Self::SLEEP_FRAMES_REQUIRED
+    pub fn sleep_eligible(&self, required: u32) -> bool {
+        self.sleep_counter >= required
     }
 
     /// `true` only for [`BodyType::Dynamic`].

@@ -169,13 +169,9 @@ impl Integrator {
             );
         }
 
-        // ── Sleep bookkeeping ─────────────────────────────────────────────
-        // Only the counter advances here, and waking still happens immediately. Whether the body
-        // actually goes to sleep is decided per contact ISLAND, after the solve — a stack that
-        // sleeps only partway is solved inconsistently, because the solver keeps exchanging
-        // impulses with a body the integrator has stopped moving. See
-        // `RigidBody::advance_sleep_counter` and the island pass in `pipeline.rs`.
-        rb.advance_sleep_counter(vel);
+        // No sleep bookkeeping here: this velocity still holds the step's gravity, `g·dt`, which
+        // the contacts are about to take back out. The counters advance on the velocity the step
+        // ends with, after the solve (`PhysicsWorld::constraint_solve_step`).
 
         Ok(())
     }
