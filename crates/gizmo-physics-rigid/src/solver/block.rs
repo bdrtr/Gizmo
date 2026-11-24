@@ -94,6 +94,18 @@ pub(super) fn solve_normal_block(
     acc: &[f32; 4],
 ) -> [f32; 4] {
     debug_assert!((1..=4).contains(&n));
+    // One contact — every sphere's: the active-set search below, worked through for n = 1, with its
+    // arithmetic kept to the bit. `solve_dense` gives up on a pivot under 1e-12 (the fallback then
+    // keeps `acc`, clamped); else Δ = rhs/a₀₀, and a λ below −1e-7 leaves the set empty: zero.
+    if n == 1 {
+        let a00 = a[0][0];
+        if a00.abs() < 1e-12 {
+            let d = if a00 > 1e-12 { rhs_in[0] / a00 } else { 0.0 };
+            return [(acc[0] + d).max(0.0), 0.0, 0.0, 0.0];
+        }
+        let lambda = acc[0] + rhs_in[0] / a00;
+        return if lambda < -1e-7 { [0.0; 4] } else { [lambda, 0.0, 0.0, 0.0] };
+    }
     let mut active = [true; 4];
 
     // At most n drops, plus a hard guard.
