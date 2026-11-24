@@ -251,6 +251,41 @@ mod tests {
         assert!(!has_13, "e1-e3 yanlış çifti var: {:?}", pairs);
     }
 
+    /// A tree tall enough that its pair query is split over threads (`internal_pairs_parallel`)
+    /// finds exactly the overlapping pairs, each once, as checking every pair by hand does: 3000
+    /// boxes packed close, 0.3 m to 0.6 m across, in a 10 m cube.
+    #[test]
+    fn a_tall_tree_finds_every_overlapping_pair_once() {
+        // No fattening, so "overlapping" means the boxes given.
+        let mut tree = DynamicAabbTree::new().with_fat_margin(0.0);
+        let mut seed = 0x9e37_79b9_u32;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as f32 / u32::MAX as f32
+        };
+        let boxes: Vec<(BodyHandle, Aabb)> = (1..=3000)
+            .map(|i| (make_entity(i), make_aabb(next() * 10.0, next() * 10.0, next() * 10.0, 0.15 + next() * 0.15)))
+            .collect();
+        for &(e, aabb) in &boxes {
+            tree.insert(e, aabb);
+        }
+        let mut found: Vec<(u32, u32)> = tree.query_pairs().iter().map(|(a, b)| (a.id(), b.id())).collect();
+        found.sort_unstable();
+        let mut expected = Vec::new();
+        for (i, (ea, a)) in boxes.iter().enumerate() {
+            for (eb, b) in &boxes[i + 1..] {
+                if a.min.x <= b.max.x && b.min.x <= a.max.x && a.min.y <= b.max.y && b.min.y <= a.max.y && a.min.z <= b.max.z && b.min.z <= a.max.z {
+                    expected.push((ea.id().min(eb.id()), ea.id().max(eb.id())));
+                }
+            }
+        }
+        expected.sort_unstable();
+        assert!(expected.len() > 1000, "the boxes must overlap a good deal: {}", expected.len());
+        assert_eq!(found, expected);
+    }
+
     #[test]
     fn test_no_self_pair() {
         let mut tree = DynamicAabbTree::new();

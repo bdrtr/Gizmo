@@ -549,6 +549,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A big pile's narrow phase: one contact cache kept in place, the pair query on every thread.**
+  The contact cache was rebuilt every substep (three hash operations a pair, a map allocated and
+  freed); it is one map now, each pair updated where it stands and a sweep at the end taking out the
+  pairs not found again (`CachedPair`). And the broad phase's pair query on a tree of 1024 bodies or
+  more splits its subtrees over rayon (`internal_pairs_parallel`; native only, the same pairs in
+  another order, sorted after). 4000 spheres at 60 Hz: the narrow phase 3.46 → about 2.4 ms. Every
+  hash unchanged. Split below that size it cost more than it saved: the 200-box tower ran
+  140 → 215 ms, hence the gate.
 - **A big pile solves faster: its per-contact passes on every thread, its rows' angular terms worked
   out once.** Profiled on `gizmo-godot-bench`'s 4000 spheres at 60 Hz, where one island holds 5800 of
   6500 manifolds and its solve is the whole solve: about half of it ran on one thread. The write-back

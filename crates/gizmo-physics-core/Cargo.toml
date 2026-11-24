@@ -40,5 +40,10 @@ rustc-hash = "2"
 tracing = "0.1.44"
 bevy_reflect = { version = "0.19", features = ["glam"], optional = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The broad phase's pair query splits a big tree over threads; native only (no OS threads on wasm,
+# where the same query runs on the calling thread). Never in a public signature.
+rayon = "1.11.0"
+
 [dev-dependencies]
 proptest = { workspace = true }

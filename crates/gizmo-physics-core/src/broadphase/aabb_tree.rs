@@ -1,6 +1,15 @@
 use super::*;
 use rustc_hash::FxHashMap;
 
+/// A node at least this tall has its pair query split over threads (`internal_pairs_parallel`), in
+/// a tree of at least `PARALLEL_LEAVES` bodies. Below either, handing the work out costs more than
+/// it saves: split from height 6, the 200-box tower of `headless_stress_test` ran 140 → 215 ms.
+#[cfg(not(target_arch = "wasm32"))]
+const PARALLEL_HEIGHT: i32 = 8;
+/// See [`PARALLEL_HEIGHT`].
+#[cfg(not(target_arch = "wasm32"))]
+const PARALLEL_LEAVES: usize = 1024;
+
 #[derive(Clone)]
 struct Node {
     aabb: Aabb,
@@ -473,6 +482,85 @@ impl DynamicAabbTree {
 
     // ── Sorgular ─────────────────────────────────────────────────────────────
 
+    /// `collect_internal_pairs_from(node)` over threads: a tall node's two subtrees and the pairs
+    /// between them are three pieces of work that share nothing. The same pairs, in another order.
+    /// Measured on a 4000-sphere pile: the query was a millisecond of a 60 Hz step, on one thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn internal_pairs_parallel(&self, node: usize, pairs: &mut Vec<(BodyHandle, BodyHandle)>) {
+        let n = &self.nodes[node];
+        if n.is_leaf() {
+            return;
+        }
+        if n.height < PARALLEL_HEIGHT {
+            self.collect_internal_pairs_from(node, pairs);
+            return;
+        }
+        let (l, r) = (n.left, n.right);
+        let (mut left, (mut right, mut across)) = rayon::join(
+            || {
+                let mut found = Vec::new();
+                self.internal_pairs_parallel(l, &mut found);
+                found
+            },
+            || {
+                rayon::join(
+                    || {
+                        let mut found = Vec::new();
+                        self.internal_pairs_parallel(r, &mut found);
+                        found
+                    },
+                    || {
+                        let mut found = Vec::new();
+                        self.descent_pair_parallel(l, r, &mut found);
+                        found
+                    },
+                )
+            },
+        );
+        pairs.append(&mut left);
+        pairs.append(&mut right);
+        pairs.append(&mut across);
+    }
+
+    /// `descent_pair(a, b)` over threads while the node it splits is tall; the same split.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn descent_pair_parallel(&self, a: usize, b: usize, pairs: &mut Vec<(BodyHandle, BodyHandle)>) {
+        if a == NULL || b == NULL || !aabb_overlaps(&self.nodes[a].aabb, &self.nodes[b].aabb) {
+            return;
+        }
+        let (na, nb) = (&self.nodes[a], &self.nodes[b]);
+        // The node `descent_pair` would split: the internal one, or the one with more surface.
+        let split_a = match (na.is_leaf(), nb.is_leaf()) {
+            (true, true) => {
+                self.descent_pair(a, b, pairs);
+                return;
+            }
+            (true, false) => false,
+            (false, true) => true,
+            (false, false) => surface_area(&na.aabb) >= surface_area(&nb.aabb),
+        };
+        let split = if split_a { na } else { nb };
+        if split.height < PARALLEL_HEIGHT {
+            self.descent_pair(a, b, pairs);
+            return;
+        }
+        let (x, y) = if split_a { ((split.left, b), (split.right, b)) } else { ((a, split.left), (a, split.right)) };
+        let (mut first, mut second) = rayon::join(
+            || {
+                let mut found = Vec::new();
+                self.descent_pair_parallel(x.0, x.1, &mut found);
+                found
+            },
+            || {
+                let mut found = Vec::new();
+                self.descent_pair_parallel(y.0, y.1, &mut found);
+                found
+            },
+        );
+        pairs.append(&mut first);
+        pairs.append(&mut second);
+    }
+
     /// Return all possible collision pairs.
     /// FIX-2: guaranteed duplicate-free with dual-tree descent, no self-pair.
     /// Algorithm: for every internal node, test the left and right subtrees against each other.
@@ -562,7 +650,18 @@ impl DynamicAabbTree {
         if self.root == NULL {
             return;
         }
-        let mut stack = vec![self.root];
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.entity_map.len() >= PARALLEL_LEAVES {
+            self.internal_pairs_parallel(self.root, pairs);
+            return;
+        }
+        self.collect_internal_pairs_from(self.root, pairs);
+    }
+
+    /// The pairs within the subtree at `start`: for each internal node, its left subtree against
+    /// its right (`descent_pair`).
+    fn collect_internal_pairs_from(&self, start: usize, pairs: &mut Vec<(BodyHandle, BodyHandle)>) {
+        let mut stack = vec![start];
         while let Some(idx) = stack.pop() {
             if self.nodes[idx].is_leaf() {
                 continue;

@@ -2918,6 +2918,7 @@ dependencies = [
  "gizmo-core",
  "gizmo-math",
  "proptest",
+ "rayon",
  "rustc-hash 2.1.3",
  "serde",
  "tracing",
