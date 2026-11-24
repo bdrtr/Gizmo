@@ -1849,6 +1849,15 @@ impl PhysicsWorld {
             }
         };
         let ((pa, qa), (pb, qb)) = (pose(idx_a), pose(idx_b));
+        // Bounds apart at the substep's end, with a centimetre to spare over every narrow-phase
+        // tolerance (a millimetre at most): no point to find, and no full test to run. Most of a
+        // pile's candidate pairs are near without touching, and each paid a second narrow-phase
+        // test here.
+        let (box_a, box_b) = (self.colliders[idx_a].compute_aabb(pa, qa), self.colliders[idx_b].compute_aabb(pb, qb));
+        let spare = gizmo_math::Vec3A::splat(0.01);
+        if (box_a.min - spare).cmpgt(box_b.max).any() || (box_b.min - spare).cmpgt(box_a.max).any() {
+            return Vec::new();
+        }
         let mut found = NarrowPhase::test_collision_manifold(&self.colliders[idx_a].shape, pa, qa, &self.colliders[idx_b].shape, pb, qb);
         if found.is_empty() {
             return found;
