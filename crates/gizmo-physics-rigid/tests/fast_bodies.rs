@@ -33,15 +33,14 @@ fn ball(world: &mut PhysicsWorld, id: u32, x: f32, r: f32, vx: f32) {
     );
 }
 
-/// `cradle_passthrough`'s row of touching 0.5 m spheres, the first arriving at up to 320 m/s, no CCD.
-///
-/// Two laws, at every rate. **The striking ball never passes the one it strikes**: it moves fast
-/// before the step, so the pair closes fast for its size and has a speculative contact (`closes_fast`). **The struck balls
-/// keep their order while one substep's travel stays under 4/3 m** — the margin the 240 Hz design had
-/// at 320 m/s: a ball set moving in the solve has no speculative contact with the next one yet, so it
-/// is caught by overlap on the next substep, and past that travel it is beyond it. At 60 Hz that is
-/// 80 m/s; a contact distance (contacts for pairs near but not touching, with real points) would lift
-/// it and is its own piece of work.
+/// `cradle_passthrough`'s row of touching 0.5 m spheres, the first arriving at up to 320 m/s, no
+/// CCD. The striking ball never passes the struck one, at any rate: it closes faster than their size
+/// allows and has a speculative contact (`closes_fast`). The struck balls keep their order while a
+/// substep's travel stays within 8/3 m, five diameters (160 m/s at 60 Hz): a ball set moving in the
+/// substep's solve reaches the next one in the next substep, as a body held only by speculative
+/// contacts moves up to what it meets before its bounce is added (the bounce channel). The 240 Hz
+/// design held to 4/3 m — 80 m/s at 60 Hz — until 2026-11-24. At 320 m/s and 60 Hz (5.3 m a substep)
+/// two struck balls still end up in one place; not understood yet.
 #[test]
 fn a_touching_row_keeps_its_order_at_any_rate() {
     for hz in RATES {
@@ -52,7 +51,7 @@ fn a_touching_row_keeps_its_order_at_any_rate() {
             for i in 1..5 {
                 ball(&mut w, i, (i as f32 - 1.0) * spacing, 0.5, 0.0);
             }
-            let chain_holds = v / hz as f32 <= 4.0 / 3.0 + 1e-4;
+            let chain_holds = v / hz as f32 <= 8.0 / 3.0 + 1e-4;
             for _ in 0..120 {
                 w.step(1.0 / 60.0).expect("step");
                 let gap = w.transforms[1].position.x - w.transforms[0].position.x;

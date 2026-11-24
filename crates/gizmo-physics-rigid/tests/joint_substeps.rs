@@ -5,6 +5,8 @@
 //!
 //! Measured 2026-11-24, before: at 60 Hz a chain of eight 1 kg links ending in 50 kg came apart by
 //! 2.24 m (7.6 mm at 240 Hz); a falling chain folding onto itself opened 33 mm (6 mm).
+//!
+//! The landing of a heavy chain is the contact's as much as the joints': see `landing.rs`.
 
 use gizmo_math::Vec3;
 use gizmo_physics_core::{BodyHandle, Collider, Transform};
@@ -92,14 +94,14 @@ fn a_chain_folding_onto_itself_holds_at_every_rate() {
     }
 }
 
-/// A chain hung from 2 m whose 50 kg end lands and lies on the ground: once it has settled its
-/// joints are as closed at every rate as a few millimetres (5.4 at 60 Hz before). Its landing is
-/// not asserted: at 60 Hz the heavy end sinks a substep's travel into the ground, 6 cm, which
-/// opens the joints for a frame — a contact found a substep late, not a joint solved loosely.
+/// A chain hung from 2 m whose 50 kg end lands and lies on the ground: its joints hold through the
+/// landing and lie closed at rest, at every rate. At 60 Hz they opened 3.6 cm as the heavy end sank
+/// 6 cm before the ground pushed it out (1.1 cm now), and stood 5.4 mm open at rest.
 #[test]
-fn a_heavy_chain_lying_on_the_ground_holds_at_every_rate() {
+fn a_heavy_chain_landing_on_the_ground_holds_at_every_rate() {
     for hz in RATES {
-        let (_, last) = run(&mut chain(hz, 8, 50.0, 2.0));
+        let (worst, last) = run(&mut chain(hz, 8, 50.0, 2.0));
+        assert!(worst < 0.015, "{hz} Hz: a joint opened {worst} m");
         assert!(last < 0.003, "{hz} Hz: a joint is open {last} m at rest");
     }
 }

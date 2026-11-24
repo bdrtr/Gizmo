@@ -25,6 +25,7 @@ use gizmo::simple::{sync_transforms, FixedPhysics, HeadlessFrames, SimpleAppExt,
 const PHYSICS_HZ: u32 = 240;
 const BALLS: usize = 24;
 const BALL_R: f32 = 0.15;
+const PEG_R: f32 = 0.08;
 const RELEASE_EVERY: f32 = 0.4;
 /// Çerçevenin ızgarası: 17 × 24 hücre, hücre yarım metre.
 const COLS: u32 = 17;
@@ -91,13 +92,20 @@ fn build_board(world: &mut World) {
         let shift = if row % 2 == 0 { 0.0 } else { 0.5 };
         let mut x = -3.5 + shift;
         while x < inner_wall() - 0.2 {
+            // Not where it would leave the wall a gap no ball goes through: such a gap is a pocket a
+            // ball comes to rest in, held by the peg and the wall with no friction needed. The edge
+            // pegs of the even rows stood 0.17 m from the walls, under a 0.3 m ball.
+            if inner_wall() - x.abs() - PEG_R < 2.0 * BALL_R {
+                x += 1.0;
+                continue;
+            }
             world.spawn_bundle((
-                Transform::new(Vec3::new(x, y, 0.0)).with_scale(Vec3::new(0.08, 0.08, DEPTH / 2.0)),
+                Transform::new(Vec3::new(x, y, 0.0)).with_scale(Vec3::new(PEG_R, PEG_R, DEPTH / 2.0)),
                 GlobalTransform::default(),
                 MeshSource("standard_cube".into()),
                 MaterialDesc::new().with_pbr(brass, 0.3, 0.8),
                 MeshRenderer::new(),
-                Collider::circle_2d(0.08),
+                Collider::circle_2d(PEG_R),
             ));
             x += 1.0;
         }

@@ -318,6 +318,9 @@ impl PhysicsWorld {
             // A dynamic body moving a fair part of its own size in one substep is swept too (and
             // given speculative contacts, `pair_contacts`), CCD or not: see `moves_fast`.
             let fast = rb.is_dynamic() && !rb.is_sleeping && moves_fast(vel.linear.length() * dt, &base_aabb);
+            // Any other body that moves is swept to where this substep takes it, so a pair it can
+            // close in the substep reaches the narrow phase (`near_contacts`).
+            let moving = !rb.is_static() && !rb.is_sleeping && (vel.linear != Vec3::ZERO || vel.angular != Vec3::ZERO);
             let aabb = if (rb.ccd_enabled && !rb.is_static() && !rb.is_sleeping) || fast {
                 let sweep_dt = if vel.linear.length() > 100.0 {
                     // High-speed: guarantee at least one full 60 Hz frame is covered.
@@ -328,6 +331,9 @@ impl PhysicsWorld {
                 let swept_pos = transform.position + vel.linear * sweep_dt;
                 let swept_aabb = collider.compute_aabb(swept_pos, transform.rotation);
                 base_aabb.merge(swept_aabb)
+            } else if moving {
+                let (position, rotation) = advanced(transform, vel, dt);
+                base_aabb.merge(collider.compute_aabb(position, rotation))
             } else {
                 base_aabb
             };
@@ -558,7 +564,14 @@ impl PhysicsWorld {
                     thickness(collider_a, transform_a),
                     thickness(collider_b, transform_b),
                 );
-            if rb_a.ccd_enabled || rb_b.ccd_enabled || fast {
+            // What this substep's motion can close although nothing touches yet: real points, with the
+            // lever arms the contact will have (`near_contacts`). A pair closing faster than its size
+            // allows could be past each other by the end of the substep, so it takes the swept
+            // contact below instead.
+            if !fast && (moving(rb_a) || moving(rb_b)) && !collider_a.is_trigger && !collider_b.is_trigger {
+                contacts = self.near_contacts((idx_a, idx_b), dt);
+            }
+            if contacts.is_empty() && (rb_a.ccd_enabled || rb_b.ccd_enabled || fast) {
                 if let Some(sc) = gizmo_physics_core::Gjk::speculative_contact(
                     &collider_a.shape,
                     transform_a.position,
@@ -1774,6 +1787,74 @@ fn thickness(collider: &Collider, t: &Transform) -> f32 {
             let aabb = collider.compute_aabb(t.position, t.rotation);
             ((aabb.max - aabb.min) * 0.5).min_element()
         }
+    }
+}
+
+
+/// Where a body's velocity takes its pose in `dt`: the pose a pair is tested at for `near_contacts`.
+fn advanced(t: &Transform, v: &Velocity, dt: f32) -> (Vec3, gizmo_math::Quat) {
+    let rotation = if v.angular.length_squared() > 1e-12 {
+        (gizmo_math::Quat::from_scaled_axis(v.angular * dt) * t.rotation).normalize()
+    } else {
+        t.rotation
+    };
+    (t.position + v.linear * dt, rotation)
+}
+
+
+impl PhysicsWorld {
+    /// The contacts this substep's motion closes between two bodies that do not touch yet: the pair
+    /// tested where their velocities take them by the substep's end, each point brought back to now
+    /// with its separation — the share of the motion along its normal taken off its depth there.
+    /// The solve lets each close by exactly its separation (a speculative contact), so a body lands
+    /// on a surface instead of a substep's travel into it, with the points and lever arms of the
+    /// contact it is about to have.
+    ///
+    /// At 60 Hz a 50 kg box falling 2 m landed 6 cm deep into the ground and was pushed out, opening
+    /// the joints that held it; at 240 Hz a box dropped from 5 m came to rest 1.35 mm deep
+    /// (2026-11-24). Now 2.7 mm and 0.05.
+    fn near_contacts(&self, (idx_a, idx_b): (usize, usize), dt: f32) -> Vec<gizmo_physics_core::ContactPoint> {
+        let pose = |i: usize| {
+            let (t, v, rb) = (&self.transforms[i], &self.velocities[i], &self.rigid_bodies[i]);
+            if rb.is_static() || rb.is_sleeping {
+                (t.position, t.rotation)
+            } else {
+                advanced(t, v, dt)
+            }
+        };
+        let ((pa, qa), (pb, qb)) = (pose(idx_a), pose(idx_b));
+        let mut found = NarrowPhase::test_collision_manifold(&self.colliders[idx_a].shape, pa, qa, &self.colliders[idx_b].shape, pb, qb);
+        if found.is_empty() {
+            return found;
+        }
+        // How far the material point at `p` (at the substep's end) moved to get there.
+        let travel = |i: usize, end: Vec3, p: Vec3| {
+            let (v, rb) = (&self.velocities[i], &self.rigid_bodies[i]);
+            if rb.is_static() || rb.is_sleeping {
+                return Vec3::ZERO;
+            }
+            (v.linear + v.angular.cross(p - end)) * dt
+        };
+        let (now_a, now_b) = (self.transforms[idx_a].position, self.transforms[idx_b].position);
+        // Brought back with the bodies, each by its share of the inverse mass: onto the moving body's
+        // surface where the other is fixed — a ball's underside, not the floor under where it is
+        // going, which put the lever arm a share of the slide behind it and lifted a rolling ball.
+        let (wa, wb) = (self.rigid_bodies[idx_a].inv_mass(), self.rigid_bodies[idx_b].inv_mass());
+        let total = wa + wb;
+        // Only what closes by more than the solver lets a resting contact sink (`slop`): a body at
+        // rest or rolling on a surface touches it within that and is the narrow phase's as before;
+        // an impact would sink a substep's travel.
+        let slop = self.solver.slop;
+        found.retain(|c| (travel(idx_a, pa, c.point) - travel(idx_b, pb, c.point)).dot(c.normal) > slop);
+        for c in &mut found {
+            let (da, db) = (travel(idx_a, pa, c.point), travel(idx_b, pb, c.point));
+            // The normal points from A to B: A moving along it deepens the contact.
+            c.penetration = (c.penetration - (da - db).dot(c.normal)).min(-f32::EPSILON);
+            c.point -= if total > 0.0 { (da * wa + db * wb) / total } else { (da + db) * 0.5 };
+            c.local_point_a = c.point - now_a;
+            c.local_point_b = c.point - now_b;
+        }
+        found
     }
 }
 

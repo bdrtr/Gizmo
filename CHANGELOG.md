@@ -549,6 +549,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A body lands on what it falls onto, at any substep rate; a speculative contact bounces once it has
+  got there.** The narrow phase found a contact only once two shapes overlapped, so a body landed a
+  substep's travel deep and was pushed back out: at 60 Hz a 50 kg box falling 2 m sank 6 cm, at 240 Hz
+  a box dropped from 5 m came to rest 1.35 mm deep. A pair this substep's motion closes by more than the
+  solver lets a resting contact sink (`slop`) now has its contacts before it touches: the two shapes
+  tested where their velocities take them by the substep's end, each point brought back with its
+  separation (`pipeline::near_contacts`; it works for every shape pair, trimeshes included), and the
+  broad phase sweeps every moving body to where the substep takes it so the pair reaches it. Now
+  2.7 mm and 0.05 mm (`golden_box_settling_on_the_ground`: 0.49865088 → 0.4999534, a change meant).
+  Three things in the solve that only a CCD bullet's one-point contact had met: a bounce on a
+  speculative contact had the gap still open taken out of it (a ball with e = 0.9 came back at 1.4 m/s
+  of 5.4) — a bounce is now its whole target, as Box2D's restitution pass; a body held only by
+  speculative contacts moved by its bounce over the whole substep, back from where it began, so a ball
+  struck in a row gave its speed away without moving and the struck one passed the next — what the
+  relax sweeps change is now added after it has got there (`bounces`, as the split-impulse path does);
+  and the split-impulse bounce took one pass over a manifold's points, which for a box face's four
+  overshot (two cars parted at 7.2 m/s where e = 0.3 gives 4.5) — it is swept until it settles.
+  `landing.rs`; `joint_substeps.rs` asserts a heavy chain's landing (1.1 cm at 60 Hz, 3.6 before);
+  `fast_bodies.rs`' row keeps order to five diameters a substep (160 m/s at 60 Hz, 80 before). Each
+  piece red with it taken out. **Not closed:** at 320 m/s and 60 Hz (5.3 m a substep) two struck balls
+  can end up in one place — not understood yet. The stress hash moves (a change meant).
 - **Joints hold at any substep rate: they are solved at 240 Hz whatever the world's.** At 60 Hz a
   chain of eight 1 kg links ending in 50 kg came apart by 2.24 m (7.6 mm at 240), and a chain folding
   onto itself opened 33 mm (6). A joint no contact island holds is now stepped through the world's
@@ -562,7 +583,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   piece taken out. At 240 Hz nothing changes (`headless_stress_test` unchanged). **Not closed:** a
   heavy body landing sinks a substep's travel into the ground before it is pushed out — 6 cm from
   2 m at 60 Hz, 4 mm at 240 — and opens the joints holding it for that frame; a contact found a
-  substep late, which a contact distance would close.
+  substep late. (Closed by the entry above: 1.1 cm.)
 - **A fast body does not tunnel, at any substep rate, CCD or not.** Discrete detection only kept up
   because the world ran at 240 Hz: at 60 Hz a 0.5 m sphere struck at 320 m/s passed the one it struck.
   A pair now closing more than half the sum of its two smallest half-extents in one substep
@@ -577,6 +598,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with the next until the step after, so it keeps order only while a substep's travel stays under
   4/3 m (80 m/s at 60 Hz, what 240 Hz gave at 320); closing it is a contact distance with real
   manifold points, a narrow-phase piece of its own. At 240 Hz `headless_stress_test` is unchanged.
+  (Raised to 8/3 m by the landing entry above.)
 - **A convex hull comes to rest, and sleeps.** A hull against a box or another hull went to GJK/EPA,
   which gives one contact point a step: a hull resting on a face had one support at a time, wandering
   between its corners, and rocked for ever. Six debris-shaped hulls dropped on a floor: none slept in

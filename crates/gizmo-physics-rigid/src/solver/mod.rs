@@ -734,6 +734,7 @@ impl ConstraintSolver {
                 transforms,
                 velocities,
                 pos_corrections,
+                bounces,
                 entity_index_map,
                 island_bodies,
                 island_depth,
@@ -1309,10 +1310,20 @@ impl ConstraintSolver {
         let speculative = spec_vn0.iter().any(|v| !v.is_nan());
         let before: Vec<(usize, Velocity)> =
             if speculative { island_bodies.iter().map(|&i| (i, velocities[i])).collect() } else { Vec::new() };
+        // Each point's impulse over the pass, starting from what the sweeps left: a manifold of
+        // several points is solved over several sweeps, as the sweeps solve it. One pass, one point
+        // at a time, was enough for the one point of a CCD bullet; a box face's four, coupled through
+        // the rotation, overshot (two 1200 kg cars parted at 7.2 m/s where e = 0.3 gives 4.5).
+        let mut acc: Vec<f32> = manifolds.iter().flat_map(|m| m.contacts.iter().map(|c| c.normal_impulse)).collect();
+        // Swept until no point changes by more than a millinewton-second per kilogram it moves, or
+        // `MAX_BOUNCE_SWEEPS`: the two cars above take about twenty.
+        const MAX_BOUNCE_SWEEPS: usize = 32;
+        let mut sweep = 0;
+        let mut changed = speculative;
+        while changed && sweep < MAX_BOUNCE_SWEEPS {
+            sweep += 1;
+            changed = false;
         for mid in 0..manifolds.len() {
-            if !speculative {
-                break;
-            }
             let e = manifolds[mid].restitution;
             if e <= 0.0 {
                 continue;
@@ -1349,7 +1360,7 @@ impl ConstraintSolver {
                 if !impact {
                     continue;
                 }
-                let acc_n = manifolds[mid].contacts[cid].normal_impulse;
+                let acc_n = acc[spec_off[mid] + cid];
                 let c = &manifolds[mid].contacts[cid];
                 let (normal, r_a, r_b) = (c.normal, c.point - com_a, c.point - com_b);
                 let va = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
@@ -1365,6 +1376,8 @@ impl ConstraintSolver {
                 // pushed again at the start of every step after — a golf ball rolling over the
                 // terrain's facets hopped 8 cm at each crease and ran off the course.
                 let new_acc = (acc_n - (vn + e * vn0) / k_n).max(0.0);
+                acc[spec_off[mid] + cid] = new_acc;
+                changed |= (new_acc - acc_n).abs() * (inv_m_a + inv_m_b) > 1e-3;
                 let imp_n = normal * (new_acc - acc_n);
                 if dyn_a {
                     velocities[idx_a].linear -= imp_n * inv_m_a;
@@ -1375,6 +1388,7 @@ impl ConstraintSolver {
                     velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_n));
                 }
             }
+        }
         }
         for (i, kept) in before {
             bounces[i] = (velocities[i].linear - kept.linear, velocities[i].angular - kept.angular);

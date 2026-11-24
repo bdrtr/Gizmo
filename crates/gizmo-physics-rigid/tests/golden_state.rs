@@ -106,7 +106,7 @@ fn golden_box_settling_on_the_ground() {
         w.step(1.0 / 60.0).expect("step");
     }
 
-    lock("settle y", w.transforms[1].position.y, 0.498_650_88);
+    lock("settle y", w.transforms[1].position.y, 0.499_953_4);
     // A settled box holds NO residual velocity. This was `-0.040_873_3` until 2026-08-06 —
     // exactly one substep of gravity, 9.81/240, which the contact had not yet cancelled. That
     // number was a fingerprint of a defect rather than of the substep rate: a body used to fall

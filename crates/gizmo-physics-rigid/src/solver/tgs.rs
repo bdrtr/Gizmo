@@ -146,6 +146,9 @@ impl ConstraintSolver {
         transforms: &[Transform],
         velocities: &mut [Velocity],
         pos_corrections: &mut [(Vec3, Vec3)],
+        // What the relax sweeps changed for a body held only by speculative contacts, applied after
+        // the position integration (see where it is filled).
+        bounces: &mut [(Vec3, Vec3)],
         // Bare `FxHashMap` and not the opaque `EntityIndexMap`: `pub(super)` keeps this off
         // the public surface, so it is not a `rustc-hash` leak (docs/ENGINE.md §4). The
         // public caller (`solve_contacts`) unwraps with the `pub(crate)` `raw()`.
@@ -272,6 +275,18 @@ impl ConstraintSolver {
 
             // ── 4) RELAX (bias=0) — soft bias hızını temizle + restitution ──
             drop(_sweep);
+            // A dynamic body held only by speculative contacts takes no TGS position delta: it moves
+            // by its velocity, over the whole substep. That must be the velocity the biased sweeps
+            // left — the one that brings it up to what it is about to meet — and what the relax
+            // sweeps change, the bounce above all, is handed back for after it has got there
+            // (`bounces`), as the split-impulse path does. A bounce taken into the velocity sent it
+            // back from where it began the substep: a ball struck in a row gave all its speed away
+            // without moving, and the one it struck went through the next in the same substep.
+            let speculative_only: Vec<(usize, Velocity)> = island_bodies
+                .iter()
+                .filter(|&&i| rigid_bodies[i].is_dynamic() && !real_bodies.contains(&i))
+                .map(|&i| (i, velocities[i]))
+                .collect();
             let _relax = crate::profile::Scope::new(&crate::profile::PHASES.relax);
             for iter in 0..if coloring.is_some() { 0 } else { self.relax_iterations } {
                 if let Some(between) = between.as_mut() {
@@ -287,6 +302,10 @@ impl ConstraintSolver {
             // (resting jitter yok, uyuyabilir). Restitution relax içinde uygulandığından
             // sekme hızı `velocities`'tedir; çıkarılması sekme yer-değişimini bu kareye değil
             // SONRAKİ kareye taşır (kararlı). Yalnız aktif dinamik gövdelere uygulanır.
+            for (i, swept) in speculative_only {
+                bounces[i] = (velocities[i].linear - swept.linear, velocities[i].angular - swept.angular);
+                velocities[i] = swept;
+            }
             for &i in island_bodies {
                 if real_bodies.contains(&i) && rigid_bodies[i].is_dynamic() {
                     let dlin = dp[i].0 - velocities[i].linear * dt;
@@ -733,17 +752,6 @@ impl ConstraintSolver {
             let vb = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(rb);
             let vel_norm = (vb - va).dot(p.normal);
 
-            // Soft bias: penetrasyonda yay-damper gibi ayır; speculative boşlukta
-            // (penetration<0) kapanmayı boşluk/dt ile sınırla; aksi halde bias yok.
-            let (bias, m_scale, i_scale) = if penetration < 0.0 {
-                (penetration * inv_dt, 1.0, 0.0)
-            } else if use_bias && penetration > self.slop {
-                let b = (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity);
-                (b, mass_scale, impulse_scale)
-            } else {
-                (0.0, 1.0, 0.0)
-            };
-
             // Restitution hedef-hızı: yalnız RELAX aşamasında, GERÇEK temasta
             // (pen0≥0, speculative değil), eşiği aşan çarpmada — sönümlü/clamp'li.
             let target_vn = if apply_restitution
@@ -754,6 +762,22 @@ impl ConstraintSolver {
                 -p.restitution * p.vn0
             } else {
                 0.0
+            };
+
+            // Soft bias: penetrasyonda yay-damper gibi ayır; speculative boşlukta
+            // (penetration<0) kapanmayı boşluk/dt ile sınırla; aksi halde bias yok.
+            // A bounce is the whole target: a speculative contact that stopped a body short of the
+            // surface would otherwise take the gap still open out of the bounce (Box2D applies
+            // restitution in a pass of its own, without the separation).
+            let (bias, m_scale, i_scale) = if target_vn > 0.0 {
+                (0.0, 1.0, 0.0)
+            } else if penetration < 0.0 {
+                (penetration * inv_dt, 1.0, 0.0)
+            } else if use_bias && penetration > self.slop {
+                let b = (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity);
+                (b, mass_scale, impulse_scale)
+            } else {
+                (0.0, 1.0, 0.0)
             };
             // `i_scale·acc_n` is NOT divided by `k_n`. It is a relaxation of the ACCUMULATED
             // impulse, not a velocity error to be converted into one, so it carries no mass
@@ -902,19 +926,22 @@ impl ConstraintSolver {
             // Softening the block with mass_scale<1 measurably weakens the tall-stack
             // fix, so it is deliberately NOT applied here. Speculative gaps (pen<0)
             // limit approach; otherwise bias only when use_bias.
-            let bias = if penetration < 0.0 {
-                penetration * inv_dt
-            } else if use_bias && penetration > self.slop {
-                (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity)
-            } else {
-                0.0
-            };
             let tvn = if apply_restitution
                 && p.restitution > 0.0
                 && (p.pen0 >= 0.0 || p.acc_n > 0.0)
                 && p.vn0 < -self.restitution_velocity_threshold
             {
                 -p.restitution * p.vn0
+            } else {
+                0.0
+            };
+            // A bounce is the whole target (see `tgs_sweep_prepared`).
+            let bias = if tvn > 0.0 {
+                0.0
+            } else if penetration < 0.0 {
+                penetration * inv_dt
+            } else if use_bias && penetration > self.slop {
+                (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity)
             } else {
                 0.0
             };
@@ -1024,19 +1051,22 @@ impl ConstraintSolver {
             let va = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(p.r_a);
             let vb = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(p.r_b);
             let vn = (vb - va).dot(p.normal);
-            let bias = if penetration < 0.0 {
-                penetration * inv_dt
-            } else if use_bias && penetration > self.slop {
-                (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity)
-            } else {
-                0.0
-            };
             let tvn = if apply_restitution
                 && p.restitution > 0.0
                 && (p.pen0 >= 0.0 || p.acc_n > 0.0)
                 && p.vn0 < -self.restitution_velocity_threshold
             {
                 -p.restitution * p.vn0
+            } else {
+                0.0
+            };
+            // A bounce is the whole target (see `tgs_sweep_prepared`).
+            let bias = if tvn > 0.0 {
+                0.0
+            } else if penetration < 0.0 {
+                penetration * inv_dt
+            } else if use_bias && penetration > self.slop {
+                (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity)
             } else {
                 0.0
             };
