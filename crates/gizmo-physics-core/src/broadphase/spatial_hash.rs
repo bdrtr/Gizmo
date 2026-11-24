@@ -94,6 +94,21 @@ impl SpatialHash {
         self.tree.holds(entity, aabb) || self.fixed.holds(entity, aabb)
     }
 
+    /// Whether [`insert`](Self::insert) and [`insert_moving`](Self::insert_moving) would change
+    /// nothing for `entity` with `aabb`: the moving tree already stores a box for it that contains
+    /// `aabb`. Only the entity's own leaf is read, which no other entity's insertion or removal
+    /// changes, so a caller may ask this for many entities at once — on several threads — and then
+    /// insert only those it said no for, in any order.
+    pub fn holds_moving(&self, entity: BodyHandle, aabb: &Aabb) -> bool {
+        self.tree.holds(entity, aabb)
+    }
+
+    /// [`holds_moving`](Self::holds_moving) for [`insert_static`](Self::insert_static): the static
+    /// tree's box.
+    pub fn holds_static(&self, entity: BodyHandle, aabb: &Aabb) -> bool {
+        self.fixed.holds(entity, aabb)
+    }
+
     /// Refreshes an entity's bounds. Identical to [`insert`](Self::insert) — it is
     /// the same call underneath, and it inserts entities that are not present yet.
     pub fn update(&mut self, entity: BodyHandle, aabb: Aabb) {
@@ -162,3 +177,44 @@ impl SpatialHash {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo_math::Vec3;
+
+    fn cube(x: f32, half: f32) -> Aabb {
+        Aabb::from_center_half_extents(Vec3::new(x, 0.0, 0.0), Vec3::splat(half))
+    }
+
+    /// `holds_moving` and `holds_static` answer for their own tree, and a body's answer is not
+    /// changed by other bodies going in and out — which is what lets the broad phase ask them on
+    /// every thread before inserting on one.
+    #[test]
+    fn whether_a_box_is_held_does_not_depend_on_the_other_bodies() {
+        let mut hash = SpatialHash::new(1.0);
+        let (mover, wall) = (BodyHandle::from_id(1), BodyHandle::from_id(2));
+        hash.insert_moving(mover, cube(0.0, 0.5), Vec3::new(0.1, 0.0, 0.0));
+        hash.insert_static(wall, cube(3.0, 0.5));
+
+        assert!(hash.holds_moving(mover, &cube(0.0, 0.5)));
+        assert!(!hash.holds_moving(mover, &cube(2.0, 0.5)), "a box well outside the leaf is not held");
+        assert!(!hash.holds_static(mover, &cube(0.0, 0.5)), "the mover is not in the static tree");
+        assert!(hash.holds_static(wall, &cube(3.0, 0.5)));
+        assert!(!hash.holds_moving(wall, &cube(3.0, 0.5)), "the wall is not in the moving tree");
+
+        let asked: Vec<bool> = [0.0, 0.3, 0.6, 2.0].iter().map(|&x| hash.holds_moving(mover, &cube(x, 0.5))).collect();
+        for i in 10..60 {
+            hash.insert_moving(BodyHandle::from_id(i), cube(i as f32 * 0.37 - 9.0, 0.4), Vec3::new(0.0, 0.2, 0.0));
+        }
+        for i in (10..60).step_by(3) {
+            hash.remove(BodyHandle::from_id(i));
+        }
+        for i in 10..30 {
+            hash.insert_moving(BodyHandle::from_id(i), cube(i as f32 * -0.41 + 4.0, 0.4), Vec3::ZERO);
+        }
+        let again: Vec<bool> = [0.0, 0.3, 0.6, 2.0].iter().map(|&x| hash.holds_moving(mover, &cube(x, 0.5))).collect();
+        assert_eq!(asked, again);
+        assert!(hash.holds_static(wall, &cube(3.0, 0.5)));
+    }
+}

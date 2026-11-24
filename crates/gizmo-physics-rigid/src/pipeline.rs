@@ -109,20 +109,22 @@ struct PairContacts {
 }
 
 /// One island's solve, handed back from its worker for the sequential write-back
-/// (`PhysicsWorld::write_back_island`).
+/// (`PhysicsWorld::write_back_island`). Bodies are named by their index in the world's rows, which
+/// nothing changes during a step: the write-back looked each one up by id, a hash lookup a body on
+/// the one thread every island waits for.
 #[derive(Default)]
 struct IslandResult {
     /// The dynamic members' solved velocities.
-    velocities: Vec<(BodyHandle, Velocity)>,
+    velocities: Vec<(usize, Velocity)>,
     /// The solved manifolds: the warm-start data, and the collision events' points.
     manifolds: Vec<ContactManifold>,
     /// The sleeping members a real mover in the island wakes.
-    wake_ups: Vec<BodyHandle>,
+    wake_ups: Vec<usize>,
     fractures: Vec<gizmo_physics_core::FractureEvent>,
     /// Split-impulse position corrections (Δlinear, Δscaled-axis).
-    position_corrections: Vec<(BodyHandle, Vec3, Vec3)>,
+    position_corrections: Vec<(usize, Vec3, Vec3)>,
     /// Speculative contacts' bounces, for after position integration.
-    bounces: Vec<(BodyHandle, Vec3, Vec3)>,
+    bounces: Vec<(usize, Vec3, Vec3)>,
     /// The adaptive sweep count and the support depth.
     stats: crate::solver::SolveStats,
     /// A real mover was in the island at the start of the substep: nothing in it may sleep.
@@ -355,8 +357,12 @@ impl PhysicsWorld {
             };
             let bounds = (base_aabb, end_aabb.unwrap_or_else(|| at_end(base_aabb)));
 
+            // Whether the tree already holds the box — most bodies on most substeps — is asked here,
+            // on every thread, rather than by the insertion on this one.
             let put = if rb.is_static() {
-                Put::Static
+                if spatial_hash.holds_static(entity, &aabb) { Put::Held } else { Put::Static }
+            } else if spatial_hash.holds_moving(entity, &aabb) {
+                Put::Held
             } else if moving {
                 Put::Moving(vel.linear * dt)
             } else {
@@ -381,6 +387,7 @@ impl PhysicsWorld {
                 // Its leaf, when it has to be remade, reaches ahead along the way it is going.
                 Put::Moving(displacement) => self.spatial_hash.insert_moving(entity, aabb, displacement),
                 Put::Still => self.spatial_hash.insert(entity, aabb),
+                Put::Held => {}
             }
         }
 
@@ -811,36 +818,22 @@ impl PhysicsWorld {
         // and its count is deliberately uncapped.
         manifold.contacts = contacts;
 
-        // **Kalıcı tampon.** Bu çiftin bir önceki girdisi hâlâ elimizde; onun
-        // `Vec<ContactPoint>`'ini geri kullanmak, `manifold.clone()`'un her
-        // alt-adımda yaptığı tahsisi kalıcı durumda tamamen ortadan kaldırır —
-        // aynı çiftler devam ettiği sürece tahsisatçıya hiç inilmez. Kopyalanan
-        // veri birebir aynı; değişen yalnız belleğin nereden geldiği.
+        // The pair's cache entry is marked found, or made. The manifold itself goes into it after
+        // the solve (`write_back_island`), moved rather than copied: nothing reads the cached
+        // manifold between here and there — the narrow phase's warm start has already read it —
+        // and the solve changes only the impulses and the friction state, which the cache needs.
+        // This copied the contacts into the entry's buffer, and the write-back copied the solved
+        // impulses over them again: two passes over memory scattered across the whole cache.
         //
-        // The entry is updated where it stands, and whether there was one is what decides the
-        // event below (`Persisting` or `Started`).
+        // Whether there was an entry is what decides the event below (`Persisting` or `Started`).
         let existed = match self.contact_cache.get_mut(&pair) {
             Some(entry) => {
-                match &mut entry.manifold {
-                    Some(old) => {
-                        old.contacts.clear();
-                        old.contacts.extend_from_slice(&manifold.contacts);
-                        old.entity_a = manifold.entity_a;
-                        old.entity_b = manifold.entity_b;
-                        old.friction = manifold.friction;
-                        old.static_friction = manifold.static_friction;
-                        old.restitution = manifold.restitution;
-                        old.rolling_friction = manifold.rolling_friction;
-                        old.lifetime = manifold.lifetime;
-                    }
-                    none => *none = Some(manifold.clone()),
-                }
                 entry.is_trigger = false;
                 entry.seen = true;
                 true
             }
             None => {
-                self.contact_cache.insert(pair, CachedPair { is_trigger: false, manifold: Some(manifold.clone()), seen: true });
+                self.contact_cache.insert(pair, CachedPair { is_trigger: false, manifold: None, seen: true });
                 false
             }
         };
@@ -884,14 +877,14 @@ impl PhysicsWorld {
     /// (hinges, springs, …) of the substep. Returns the bounces of speculative contacts
     /// (`solve_contacts`' `bounces`), which the step adds after integrating positions.
     #[tracing::instrument(skip_all, name = "constraint_solve")]
-    pub(crate) fn constraint_solve_step(&mut self, manifolds: Vec<ContactManifold>, dt: f32) -> Vec<(BodyHandle, Vec3, Vec3)> {
-        let mut bounces: Vec<(BodyHandle, Vec3, Vec3)> = Vec::new();
+    pub(crate) fn constraint_solve_step(&mut self, manifolds: Vec<ContactManifold>, dt: f32) -> Vec<(usize, Vec3, Vec3)> {
+        let mut bounces: Vec<(usize, Vec3, Vec3)> = Vec::new();
 
         // Dynamic bodies the island sleep rule got to decide about this substep. Declared out
         // here because the sweep for everything else has to run even when there are no contacts
         // at all — a pair of bodies joined only by a joint has no island and must still be able
         // to sleep.
-        let mut in_island: FxHashSet<u32> = FxHashSet::default();
+        let mut in_island = vec![false; self.entities.len()];
         // Each solved island's (had a mover, dynamic members), for the sleep decision after the
         // solve and the joints.
         let mut island_sleep: Vec<(bool, Vec<usize>)> = Vec::new();
@@ -969,10 +962,8 @@ impl PhysicsWorld {
         // After the joint pass on purpose. A joint-coupled wake calls `wake_up`, which zeroes the
         // counter, so a body woken there is not eligible and cannot be put straight back to sleep
         // in the same substep.
-        for i in 0..self.rigid_bodies.len() {
-            let id = self.entities[i].id();
-            let rb = &mut self.rigid_bodies[i];
-            if rb.is_dynamic() && !rb.is_sleeping && rb.sleep_eligible(required) && !in_island.contains(&id) {
+        for (i, rb) in self.rigid_bodies.iter_mut().enumerate() {
+            if rb.is_dynamic() && !rb.is_sleeping && rb.sleep_eligible(required) && !in_island[i] {
                 rb.is_sleeping = true;
             }
         }
@@ -996,8 +987,8 @@ impl PhysicsWorld {
         &mut self,
         manifolds: Vec<ContactManifold>,
         dt: f32,
-        in_island: &mut FxHashSet<u32>,
-        bounces: &mut Vec<(BodyHandle, Vec3, Vec3)>,
+        in_island: &mut [bool],
+        bounces: &mut Vec<(usize, Vec3, Vec3)>,
         island_sleep: &mut Vec<(bool, Vec<usize>)>,
         with_joints: bool,
     ) -> Vec<bool> {
@@ -1107,53 +1098,44 @@ impl PhysicsWorld {
                 && (velocities[i].linear.length_squared() > 1e-8
                     || velocities[i].angular.length_squared() > 1e-8)
         };
-        // The island's bodies: those of its contacts, then those of its joints.
-        let members: Vec<BodyHandle> = island_manifolds
+        // The island's bodies, by index and each once: those of its contacts and of its joints,
+        // looked up once each rather than once for every question below. In index order, which is
+        // what the sleep decision is handed (`members`); nothing else depends on it — every use is
+        // per body.
+        let mut island_indices: Vec<usize> = island_manifolds
             .iter()
             .flat_map(|m| [m.entity_a, m.entity_b])
             .chain(joints.iter().flat_map(|j| [j.entity_a, j.entity_b]))
+            .filter_map(|e| entity_map.get(&e.id()).copied())
             .collect();
-        let island_active = members.iter().any(|&e| {
-            entity_map.get(&e.id()).is_some_and(|&i| {
-                (rigid_bodies[i].is_dynamic() && !rigid_bodies[i].is_sleeping)
-                    || kinematic_moving(i)
-            })
-        });
+        island_indices.sort_unstable();
+        island_indices.dedup();
+        let island_active = island_indices
+            .iter()
+            .any(|&i| (rigid_bodies[i].is_dynamic() && !rigid_bodies[i].is_sleeping) || kinematic_moving(i));
 
         if !island_active {
             return IslandResult { manifolds: island_manifolds, ..IslandResult::default() };
         }
 
         // Gerçek hareketli: eşik üstü hızlı uyanık dinamik VEYA hareketli kinematik.
-        let island_has_mover = members.iter().any(|&e| {
-            entity_map.get(&e.id()).is_some_and(|&i| {
-                let rb = &rigid_bodies[i];
-                // On the velocity the last substep ended with (`pre_*`, cached before this
-                // substep's gravity): the integrated one still holds `g·dt`, which alone is over
-                // the threshold below about 200 Hz, and would make a body at rest a mover.
-                let v = &velocities[i];
-                let ended = Velocity { linear: v.pre_linear, angular: v.pre_angular, ..*v };
-                (rb.is_dynamic() && !rb.is_sleeping && !rb.can_sleep(&ended)) || kinematic_moving(i)
-            })
+        let island_has_mover = island_indices.iter().any(|&i| {
+            let rb = &rigid_bodies[i];
+            // On the velocity the last substep ended with (`pre_*`, cached before this
+            // substep's gravity): the integrated one still holds `g·dt`, which alone is over
+            // the threshold below about 200 Hz, and would make a body at rest a mover.
+            let v = &velocities[i];
+            let ended = Velocity { linear: v.pre_linear, angular: v.pre_angular, ..*v };
+            (rb.is_dynamic() && !rb.is_sleeping && !rb.can_sleep(&ended)) || kinematic_moving(i)
         });
 
-        // Collect island indices and bodies that need waking.
-        let mut island_indices: FxHashSet<usize> = FxHashSet::default();
-        let mut wake_updates = Vec::new();
-
-        for &e in &members {
-            if let Some(&idx) = entity_map.get(&e.id()) {
-                island_indices.insert(idx);
-                // Uyuyanı YALNIZ gerçek bir hareketli varsa uyandır (yerleşen
-                // komşu uyuyanı geri uyandırmasın → ada topluca uyuyabilsin).
-                if island_has_mover
-                    && rigid_bodies[idx].is_dynamic()
-                    && rigid_bodies[idx].is_sleeping
-                {
-                    wake_updates.push(e);
-                }
-            }
-        }
+        // Uyuyanı YALNIZ gerçek bir hareketli varsa uyandır (yerleşen
+        // komşu uyuyanı geri uyandırmasın → ada topluca uyuyabilsin).
+        let wake_updates: Vec<usize> = if island_has_mover {
+            island_indices.iter().copied().filter(|&i| rigid_bodies[i].is_dynamic() && rigid_bodies[i].is_sleeping).collect()
+        } else {
+            Vec::new()
+        };
 
         let mut result = IslandResult {
             velocities: Vec::with_capacity(island_indices.len()),
@@ -1190,8 +1172,7 @@ impl PhysicsWorld {
         // which the ECS mirror was never told about. On screen the box lagged a step behind the
         // physics; in a debug build the step's own check panicked ("neither brought over nor
         // written back", `system.rs`). 2026-11-23.
-        let mut members: Vec<usize> = island_indices.iter().copied().filter(|&idx| rigid_bodies[idx].is_dynamic()).collect();
-        members.sort_unstable();
+        let members: Vec<usize> = island_indices.iter().copied().filter(|&idx| rigid_bodies[idx].is_dynamic()).collect();
 
         result.manifolds = island_manifolds;
         result.wake_ups = wake_updates;
@@ -1208,7 +1189,7 @@ impl PhysicsWorld {
         &self,
         island_manifolds: &mut [ContactManifold],
         joints: &mut [&mut Joint],
-        island_indices: &FxHashSet<usize>,
+        island_indices: &[usize],
         out: &mut IslandResult,
         dt: f32,
     ) -> crate::solver::SolveStats {
@@ -1217,7 +1198,6 @@ impl PhysicsWorld {
         let transforms = &self.transforms;
         let velocities = &self.velocities;
         let solver = &self.solver;
-        let entities_arr = &self.entities;
         let velocity_updates = &mut out.velocities;
         let kinematic_responses = &mut out.kinematic_responses;
         let position_updates = &mut out.position_corrections;
@@ -1258,11 +1238,6 @@ impl PhysicsWorld {
                 for &idx in island_indices {
                     buf[idx] = velocities[idx];
                 }
-
-                // Island-local body index list: sizes the solver's per-body
-                // scratch/loops to THIS island instead of the whole world.
-                let island_body_vec: Vec<usize> =
-                    island_indices.iter().copied().collect();
 
                 // The island's joints are swept before each of its contact sweeps, so the two converge
                 // together (`IslandManager::build_islands_with_joints`). A warm start's injection
@@ -1312,7 +1287,7 @@ impl PhysicsWorld {
                     &mut pos_buf,
                     &mut bounce_buf,
                     entity_map,
-                    &island_body_vec,
+                    island_indices,
                     dt,
                     between,
                 );
@@ -1328,14 +1303,14 @@ impl PhysicsWorld {
                         kinematic_responses.push((idx, buf[idx].linear - velocities[idx].linear + bounce));
                     }
                     if rigid_bodies[idx].is_dynamic() {
-                        velocity_updates.push((entities_arr[idx], buf[idx]));
+                        velocity_updates.push((idx, buf[idx]));
                         let (dlin, dang) = pos_buf[idx];
                         if dlin != Vec3::ZERO || dang != Vec3::ZERO {
-                            position_updates.push((entities_arr[idx], dlin, dang));
+                            position_updates.push((idx, dlin, dang));
                         }
                         let (blin, bang) = bounce_buf[idx];
                         if blin != Vec3::ZERO || bang != Vec3::ZERO {
-                            bounce_updates.push((entities_arr[idx], blin, bang));
+                            bounce_updates.push((idx, blin, bang));
                         }
                     }
                 }
@@ -1356,12 +1331,11 @@ impl PhysicsWorld {
         &mut self,
         result: IslandResult,
         event_index: &FxHashMap<(BodyHandle, BodyHandle), usize>,
-        in_island: &mut FxHashSet<u32>,
-        bounces: &mut Vec<(BodyHandle, Vec3, Vec3)>,
+        in_island: &mut [bool],
+        bounces: &mut Vec<(usize, Vec3, Vec3)>,
         island_sleep: &mut Vec<(bool, Vec<usize>)>,
         retired: &mut Vec<Vec<ContactManifold>>,
     ) -> (usize, usize) {
-        let entity_map = &self.entity_index_map;
         let IslandResult {
             velocities: island_vels,
             manifolds: island_manifolds,
@@ -1405,81 +1379,66 @@ impl PhysicsWorld {
         // runs and still take the impact impulse on this substep. Only the half-awake
         // island — woken by something that is not a mover, e.g. the unconditional
         // ended-collision wake — loses the write, which is exactly the case that was wrong.
-        for entity in wake_ups {
-            if let Some(&idx) = entity_map.get(&entity.id()) {
-                self.rigid_bodies[idx].wake_up();
-            }
+        for idx in wake_ups {
+            self.rigid_bodies[idx].wake_up();
         }
-        for (entity, vel) in island_vels {
+        for (idx, vel) in island_vels {
             // Unconditional: `in_island` is read further down to decide sleep eligibility,
             // and a body that was solved belongs to an island whether or not it woke.
-            in_island.insert(entity.id());
-            if let Some(&idx) = entity_map.get(&entity.id()) {
-                if !self.rigid_bodies[idx].is_sleeping {
-                    self.velocities[idx] = vel;
-                }
+            in_island[idx] = true;
+            if !self.rigid_bodies[idx].is_sleeping {
+                self.velocities[idx] = vel;
             }
         }
         // Split-impulse pozisyon düzeltmesini doğrudan transform'a uygula
         // (hız kanalına dokunmadan → resting jitter yok, cisimler uyuyabilir).
-        for (entity, dlin, dang) in pos_corrections {
-            if let Some(&idx) = entity_map.get(&entity.id()) {
-                // Axis locks hold here too: this moves the transform without a
-                // velocity, so the velocity-level `enforce_locks` cannot see it.
-                let (dlin, dang) = self.rigid_bodies[idx].mask_locked(dlin, dang);
-                // A sleeping member of an island with no real mover is not woken, and
-                // takes its share of the correction all the same: the step moves a body
-                // that stays asleep. Noted for whoever mirrors the world (`moved_asleep`).
-                let rb = &self.rigid_bodies[idx];
-                if rb.is_dynamic() && rb.is_sleeping && (dlin != gizmo_math::Vec3::ZERO || dang != gizmo_math::Vec3::ZERO) {
-                    self.moved_asleep.push(entity.id());
-                }
-                let t = &mut self.transforms[idx];
-                t.position += dlin;
-                if dang.length_squared() > 1e-12 {
-                    t.rotation = (gizmo_math::Quat::from_scaled_axis(dang) * t.rotation).normalize();
-                }
-                t.update_local_matrix();
+        for (idx, dlin, dang) in pos_corrections {
+            // Axis locks hold here too: this moves the transform without a
+            // velocity, so the velocity-level `enforce_locks` cannot see it.
+            let (dlin, dang) = self.rigid_bodies[idx].mask_locked(dlin, dang);
+            // A sleeping member of an island with no real mover is not woken, and
+            // takes its share of the correction all the same: the step moves a body
+            // that stays asleep. Noted for whoever mirrors the world (`moved_asleep`).
+            let rb = &self.rigid_bodies[idx];
+            if rb.is_dynamic() && rb.is_sleeping && (dlin != gizmo_math::Vec3::ZERO || dang != gizmo_math::Vec3::ZERO) {
+                self.moved_asleep.push(self.entities[idx].id());
             }
+            let t = &mut self.transforms[idx];
+            t.position += dlin;
+            if dang.length_squared() > 1e-12 {
+                t.rotation = (gizmo_math::Quat::from_scaled_axis(dang) * t.rotation).normalize();
+            }
+            t.update_local_matrix();
         }
         self.fracture_events.extend(local_fractures);
 
-        // Update solved contact points on the matching collision event.
-        // The cache already holds these contacts — `record_solid_contact` copied them in, into a
-        // buffer it keeps from step to step — and what the solve changed in them is the impulses and
-        // the friction state. Those are copied over; the solved manifold itself goes back to the
-        // caller, which frees the island's buffers off this thread. Moving it into the cache freed
-        // the cached copy here instead, one buffer per contact pair per substep, each allocated on
-        // another thread: 0.9–1.8 ms of a 4000-sphere pile's 60 Hz step, on its critical path.
-        for manifold in &island_manifolds {
+        // The solved manifolds go into the contact cache, where the next substep's narrow phase
+        // warm starts from them (`record_solid_contact` left the entries for this). What each
+        // replaces — the pair's manifold of the substep before — goes back to the caller, which
+        // frees the island's buffers off this thread: freeing them here, each allocated on another
+        // thread, cost 0.9–1.8 ms of a 4000-sphere pile's 60 Hz step, on its critical path.
+        let mut replaced = Vec::with_capacity(island_manifolds.len());
+        for manifold in island_manifolds {
             let key_ab = (manifold.entity_a, manifold.entity_b);
             let key_ba = (manifold.entity_b, manifold.entity_a);
 
-            if let Some(&idx) = event_index
-                .get(&key_ab)
-                .or_else(|| event_index.get(&key_ba))
-            {
-                self.collision_events[idx].contact_points = manifold.contacts.iter().copied().take(4).collect();
+            // The solved contact points on the matching collision event, if there is one.
+            if !event_index.is_empty() {
+                if let Some(&idx) = event_index.get(&key_ab).or_else(|| event_index.get(&key_ba)) {
+                    self.collision_events[idx].contact_points = manifold.contacts.iter().copied().take(4).collect();
+                }
             }
 
-            let cached = match self.contact_cache.get_mut(&key_ab) {
+            let entry = match self.contact_cache.get_mut(&key_ab) {
                 Some(entry) => Some(entry),
                 None => self.contact_cache.get_mut(&key_ba),
             };
-            if let Some(CachedPair { manifold: Some(cached), .. }) = cached {
-                if cached.contacts.len() == manifold.contacts.len() {
-                    for (into, solved) in cached.contacts.iter_mut().zip(&manifold.contacts) {
-                        into.normal_impulse = solved.normal_impulse;
-                        into.tangent_impulse = solved.tangent_impulse;
-                        into.sliding = solved.sliding;
-                    }
-                } else {
-                    cached.contacts.clear();
-                    cached.contacts.extend_from_slice(&manifold.contacts);
-                }
+            match entry {
+                Some(entry) => replaced.extend(entry.manifold.replace(manifold)),
+                None => replaced.push(manifold),
             }
         }
-        retired.push(island_manifolds);
+        retired.push(replaced);
         counts
     }
 
@@ -1570,9 +1529,8 @@ impl PhysicsWorld {
 
     /// Adds the speculative contacts' bounces (from [`constraint_solve_step`](Self::constraint_solve_step))
     /// once positions are integrated: the bodies have reached each other, and leave from there.
-    pub(crate) fn apply_bounces(&mut self, bounces: &[(BodyHandle, Vec3, Vec3)]) {
-        for &(entity, linear, angular) in bounces {
-            let Some(&idx) = self.entity_index_map.get(&entity.id()) else { continue };
+    pub(crate) fn apply_bounces(&mut self, bounces: &[(usize, Vec3, Vec3)]) {
+        for &(idx, linear, angular) in bounces {
             if self.rigid_bodies[idx].is_sleeping || !self.rigid_bodies[idx].is_dynamic() {
                 continue;
             }
@@ -1941,6 +1899,8 @@ enum Put {
     Static,
     Moving(Vec3),
     Still,
+    /// The tree already holds a box containing it (`SpatialHash::holds_moving`, `holds_static`).
+    Held,
 }
 
 #[cfg(test)]
