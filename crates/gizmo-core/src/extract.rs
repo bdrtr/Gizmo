@@ -313,6 +313,13 @@ impl Extractor {
     ///
     /// Moves `main`'s change tick on by one afterwards, so that a write made after this run —
     /// even with no schedule run in between to advance the tick — is newer than what it copied.
+    ///
+    /// **And `render`'s**, so that a reader of the copy asking what changed since its last look
+    /// (`World::query_since`, kept one short of the tick) sees what this run brought and nothing
+    /// older. Nothing runs a schedule on a copy, so until 2026-11-24 its tick stood at 1 for ever,
+    /// every such question answered "everything", and the draw's per-object cache
+    /// (`systems/render/kept.rs` in the facade) was thrown away and rebuilt every frame: ten
+    /// thousand still cubes walked the whole way, 1.2 million times in 120 frames, none of them kept.
     pub fn run(&mut self, main: &mut World, render: &mut World) {
         if !self.hooked {
             let log = Arc::downgrade(&self.despawned);
@@ -343,6 +350,7 @@ impl Extractor {
             step.run(main, render);
         }
         main.advance_change_tick();
+        render.advance_change_tick();
     }
 }
 
@@ -422,6 +430,31 @@ mod tests {
         }
         ex.run(&mut game, &mut render);
         assert_eq!(pos(&render, a), Some(5.0));
+    }
+
+    #[test]
+    fn a_reader_of_the_copy_sees_only_what_the_last_run_brought() {
+        let (mut game, mut render, mut ex) = pair();
+        let a = game.spawn_bundle((Pos(1.0),));
+        let b = game.spawn_bundle((Pos(2.0),));
+        ex.run(&mut game, &mut render);
+        // A reader of the copy, the way the draw's cache reads it: what changed since its last look,
+        // then keep one short of the tick.
+        let mut since = 0;
+        let mut look = |render: &World| {
+            let seen: Vec<Entity> = render.query_since::<Entity, Changed<Pos>>(since).iter().collect();
+            since = render.tick.wrapping_sub(1);
+            seen
+        };
+        assert_eq!(look(&render).len(), 2, "the first look sees everything");
+        ex.run(&mut game, &mut render);
+        assert!(look(&render).is_empty(), "a run that copied nothing still showed changes");
+        if let Some(mut p) = game.query_mut::<&mut Pos>().get_mut(b) {
+            p.0 = 20.0;
+        }
+        ex.run(&mut game, &mut render);
+        assert_eq!(look(&render), vec![b], "only the component this run copied is news");
+        let _ = a;
     }
 
     #[test]

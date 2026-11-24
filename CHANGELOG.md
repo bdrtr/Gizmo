@@ -549,6 +549,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The draw's per-object cache works in a windowed game.** The draw reads a copy of the game
+  world, and nothing ran a schedule on the copy, so its change tick stood at 1 for ever: every
+  "what changed since I last looked" asked of it answered "everything", and the cache that lets a
+  still object skip the walk (`systems/render/kept.rs`) was emptied every frame — ten thousand
+  still cubes took the whole way 1.2 million times in 120 frames, none of them from the cache.
+  `Extractor::run` now moves the copy's tick on as it does the original's. Ten thousand cubes
+  6.7 → 4.0 ms per frame (bloom, SSAO, TAA and volumetric off; 8.3 → 7.5 with the defaults), fifty
+  thousand 21.4 → 13.5 — Godot 4.7.2 draws the same scene in 13.2. Found measuring the engine
+  against Godot. `a_reader_of_the_copy_sees_only_what_the_last_run_brought`.
 - **A large island's contacts are solved on several threads.** Islands were solved in parallel
   with one another, each by one thread, and a fallen pile is one island: a thousand boxes spent
   13.6 ms in the sweeps on one thread and 15.3 on sixteen. An island of at least
