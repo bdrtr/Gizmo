@@ -87,12 +87,60 @@ fn solve_dense(a: &mut [[f32; 4]; 4], b: &mut [f32; 4], n: usize) -> Option<[f32
 /// Returns the new accumulated impulses `λ` (each ≥ 0). The caller applies the delta
 /// `λ_i − acc_i` as a normal impulse at contact i. Falls back to the (regularised)
 /// diagonal solution if the dense solve still degenerates.
+#[cfg(test)]
 pub(super) fn solve_normal_block(
     n: usize,
     a: &[[f32; 4]; 4],
     rhs_in: &[f32; 4],
     acc: &[f32; 4],
 ) -> [f32; 4] {
+    solve_normal_block_with(n, a, None, rhs_in, acc)
+}
+
+/// The inverse of the `n`×`n` block `a`, when elimination finds it regular: what
+/// [`solve_normal_block_with`] takes to answer the common case — every contact pushing — with a
+/// product instead of an elimination. `a` is the same for every sweep of a substep, so it is
+/// inverted once.
+pub(super) fn invert_block(n: usize, a: &[[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
+    let mut inv = [[0.0f32; 4]; 4];
+    for col in 0..n {
+        let mut m = *a;
+        let mut e = [0.0f32; 4];
+        e[col] = 1.0;
+        let x = solve_dense(&mut m, &mut e, n)?;
+        for row in 0..n {
+            inv[row][col] = x[row];
+        }
+    }
+    Some(inv)
+}
+
+/// [`solve_normal_block`], given the block's inverse when it has one ([`invert_block`]): the first
+/// step of the active-set search, every contact active, is then `λ = acc + A⁻¹·rhs`, and when no
+/// `λ` comes out below −1e-7 — a manifold at rest, every point pushing, nearly always — that is
+/// the answer, as the search's first step gives it. Otherwise the search runs as before.
+pub(super) fn solve_normal_block_with(
+    n: usize,
+    a: &[[f32; 4]; 4],
+    inv: Option<&[[f32; 4]; 4]>,
+    rhs_in: &[f32; 4],
+    acc: &[f32; 4],
+) -> [f32; 4] {
+    if let (Some(inv), true) = (inv, n >= 2) {
+        let mut lambda = [0.0f32; 4];
+        let mut pushing = true;
+        for r in 0..n {
+            let mut d = 0.0f32;
+            for c in 0..n {
+                d += inv[r][c] * rhs_in[c];
+            }
+            lambda[r] = acc[r] + d;
+            pushing &= lambda[r] >= -1e-7;
+        }
+        if pushing {
+            return lambda;
+        }
+    }
     debug_assert!((1..=4).contains(&n));
     // One contact — every sphere's: the active-set search below, worked through for n = 1, with its
     // arithmetic kept to the bit. `solve_dense` gives up on a pivot under 1e-12 (the fallback then

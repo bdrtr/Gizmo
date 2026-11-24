@@ -549,6 +549,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A big pile's solve: blocks inverted once, the warm start and the blocks' set-up on every thread.**
+  A box face's four-point block ran the active-set search every sweep, a 4×4 matrix built and
+  eliminated; its matrix is the same for the whole substep, so it is inverted once
+  (`block::invert_block`) and a sweep answers with `λ = acc + A⁻¹·rhs` when every point pushes —
+  the search's own first step — and falls back to the search otherwise. A coloured island's warm
+  start runs colour by colour in the sweep's first stages instead of on one thread before it; its
+  blocks and their inverses are built in parallel runs of whole manifolds; its colours go out in
+  chunks of 8 blocks, not 32 (64 and 128 were slower, 4 no better); and the islands are built in
+  order without a `std` hash map or a sort. The 1000-box pile at 60 Hz: 4.7 → about 4.0 ms a frame.
+  `headless_stress_test` 3EB22613F8AEEB67 → 76D037779A3726E2 (the blocks' rounding; a change
+  meant).
 - **A sleeping body put somewhere by hand wakes.** Its `Transform` or `Velocity` written through the
   ECS, it stayed asleep where it was put: `tahterevalli` set its plank back level at a round's end,
   and when the plank had gone to sleep by then it hung level in the air. The sync now wakes a

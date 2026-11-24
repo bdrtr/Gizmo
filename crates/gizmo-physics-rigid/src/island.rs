@@ -5,7 +5,6 @@
 /// Islands that are not moving go to sleep and are skipped entirely.
 use gizmo_physics_core::ContactManifold;
 use gizmo_physics_core::BodyHandle;
-use std::collections::HashMap;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Island veri yapısı
@@ -68,7 +67,8 @@ impl IslandManager {
         // ── Union-find over the dynamic bodies ────────────────────────────────
         // A static or kinematic body joins nothing: it can be touched by any number of islands,
         // which never exchange an impulse through it.
-        let mut node: HashMap<u32, usize> = HashMap::new();
+        let mut node: rustc_hash::FxHashMap<u32, usize> = rustc_hash::FxHashMap::default();
+        node.reserve(manifolds.len());
         let mut parent: Vec<usize> = Vec::new();
         let mut rank: Vec<u8> = Vec::new();
         let mut node_of = |body: BodyHandle, parent: &mut Vec<usize>, rank: &mut Vec<u8>| -> Option<usize> {
@@ -133,44 +133,39 @@ impl IslandManager {
         // ── Group the manifolds by root ───────────────────────────────────────
         // A manifold with no dynamic body (two kinematic bodies, say) is an island of its own.
         let n = manifolds.len();
-        let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
-        let mut alone: Vec<Vec<usize>> = Vec::new();
+        // Islands in the order of their first manifold, each one's manifolds in order — a fixed
+        // order from process to process, which the solve, its warm start and debugging rely on
+        // (islands are disjoint, so the physics would not care). A root's island is opened when its
+        // first manifold comes up, so walking the manifolds in order builds them sorted. They were
+        // gathered in a `std` hash map by root — whose order changes from process to process — and
+        // sorted after; the roots are node indices, so a vector indexes them.
+        let mut island_of_root: Vec<usize> = vec![usize::MAX; parent.len()];
+        let mut islands: Vec<Island> = Vec::new();
         for (i, node) in manifold_node.iter().enumerate() {
-            match node {
-                Some(k) => groups.entry(find(&mut parent, *k)).or_default().push(i),
-                None => alone.push(vec![i]),
-            }
-        }
-
-        // DETERMINIZM: `groups` bir HashMap; `into_values()` sırası süreçten sürece
-        // değişir (hash randomization). Island'lar arası çözüm sırası bundan etkilenmesin
-        // diye her island'ın indislerini sırala + island'ları en küçük indise göre sırala.
-        // (Island'lar AYRIK olduğundan fizik sonucu sıradan bağımsız; bu, süreçler-arası
-        // tutarlı sıra/warm-start eşlemesi ve tekrarlanabilir hata ayıklama içindir.)
-        let mut rooted: Vec<(Option<usize>, Vec<usize>)> =
-            groups.into_iter().map(|(root, indices)| (Some(root), indices)).chain(alone.into_iter().map(|i| (None, i))).collect();
-        for (_, indices) in &mut rooted {
-            indices.sort_unstable();
-        }
-        rooted.sort_unstable_by_key(|(_, indices)| indices.first().copied().unwrap_or(usize::MAX));
-
-        let mut island_of_root: HashMap<usize, usize> = HashMap::new();
-        let islands: Vec<Island> = rooted
-            .into_iter()
-            .enumerate()
-            .map(|(i, (root, indices))| {
-                if let Some(root) = root {
-                    island_of_root.insert(root, i);
+            let island = match node {
+                Some(k) => {
+                    let root = find(&mut parent, *k);
+                    if island_of_root[root] == usize::MAX {
+                        island_of_root[root] = islands.len();
+                        islands.push(Island { manifold_indices: Vec::new(), sleeping: false });
+                    }
+                    island_of_root[root]
                 }
-                Island {
-                    manifold_indices: indices,
-                    sleeping: false,
+                None => {
+                    islands.push(Island { manifold_indices: Vec::new(), sleeping: false });
+                    islands.len() - 1
                 }
-            })
-            .collect();
+            };
+            islands[island].manifold_indices.push(i);
+        }
         let joint_island = joint_node
             .into_iter()
-            .map(|k| k.and_then(|k| island_of_root.get(&find(&mut parent, k)).copied()))
+            .map(|k| {
+                k.and_then(|k| {
+                    let island = island_of_root[find(&mut parent, k)];
+                    (island != usize::MAX).then_some(island)
+                })
+            })
             .collect();
         // Hot path (per substep) → trace. Shows how the contact set partitioned into
         // independently-solvable islands (drives the parallel solve + sleep decisions).

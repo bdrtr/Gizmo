@@ -118,6 +118,8 @@ pub(super) struct BlockGroup {
     pub(super) start: usize,
     pub(super) n: usize,
     a: [[f32; 4]; 4],
+    /// `a⁻¹` for a block of two contacts or more, when it is regular (`block::invert_block`).
+    inv: Option<[[f32; 4]; 4]>,
 }
 
 impl ConstraintSolver {
@@ -210,7 +212,6 @@ impl ConstraintSolver {
 
         let coeffs = self.soft_coefficients(dt, inv_dt);
         let (vn0_off, vn0) = Self::approach_speeds(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
-        self.warm_start_tgs(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
         let mut real_bodies = Self::real_contact_bodies(manifolds, entity_index_map);
         // A joint's bodies take the position integration too: its correction is made in the biased
         // sweeps and kept in the position, not in the velocity (`super::IslandJoints::bodies`).
@@ -251,6 +252,12 @@ impl ConstraintSolver {
             && self.parallel_island_blocks > 0
             && block_groups.len() >= self.parallel_island_blocks)
             .then(|| super::parallel::color_blocks(&prepared, &block_groups, island_bodies, velocities.len()));
+        // The warm start: in the coloured sweep's first stages for a coloured island, here
+        // otherwise. Nothing above reads a velocity but the approach speeds, which are taken
+        // before it.
+        if coloring.is_none() {
+            self.warm_start_tgs(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
+        }
         // The bodies whose position delta the biased sweeps integrate.
         let integrate: Vec<usize> = island_bodies
             .iter()
@@ -294,6 +301,7 @@ impl ConstraintSolver {
                     h,
                     bias_rate: coeffs.0,
                     inv_dt,
+                    warm: self.warm_start_factor,
                 });
             }
             for iter in 0..if coloring.is_some() { 0 } else { n_iterations } {
@@ -653,9 +661,40 @@ impl ConstraintSolver {
     }
 
     /// The block solver's groups: each manifold's contacts in blocks of at most four, with their
-    /// regularised normal Delassus matrix.
-    #[allow(clippy::needless_range_loop)]
+    /// regularised normal Delassus matrix and its inverse. For a big island in parallel, in runs of
+    /// whole manifolds joined in order (`block_groups_in`): the same groups.
     fn block_groups(&self, prepared: &[Prepared]) -> Vec<BlockGroup> {
+        let n = prepared.len();
+        if n < PARALLEL_MANIFOLDS {
+            let mut groups = Vec::new();
+            self.block_groups_in(prepared, 0..n, &mut groups);
+            return groups;
+        }
+        // Runs of about `MANIFOLDS_PER_CHUNK` rows, each ending where a manifold does.
+        let mut bounds = vec![0usize];
+        let mut at = 0usize;
+        while at < n {
+            let mut end = (at + MANIFOLDS_PER_CHUNK).min(n);
+            while end < n && prepared[end].mid == prepared[end - 1].mid {
+                end += 1;
+            }
+            bounds.push(end);
+            at = end;
+        }
+        let parts: Vec<Vec<BlockGroup>> = (0..bounds.len() - 1)
+            .into_par_iter()
+            .map(|k| {
+                let mut groups = Vec::new();
+                self.block_groups_in(prepared, bounds[k]..bounds[k + 1], &mut groups);
+                groups
+            })
+            .collect();
+        parts.into_iter().flatten().collect()
+    }
+
+    /// `block_groups` over the rows `rows` of `prepared`, which start and end on a manifold's edge.
+    #[allow(clippy::needless_range_loop)]
+    fn block_groups_in(&self, prepared: &[Prepared], rows: std::ops::Range<usize>, groups: &mut Vec<BlockGroup>) {
         // ── Block-solver groups (Stage: manifold block normal solve) ──
         // Each manifold's contacts are CONTIGUOUS in `prepared` (built mid-outer, cid-inner),
         // all sharing the same body pair. Precompute, once, the N×N normal Delassus matrix A
@@ -663,12 +702,11 @@ impl ConstraintSolver {
         // r's normal velocity per unit normal impulse at contact c. The biased/relax sweeps
         // then solve each group's normals JOINTLY (block LCP) so the inter-point tilt coupling
         // is exact — the restoring stiffness that keeps tall stacks from buckling.
-        let mut groups: Vec<BlockGroup> = Vec::new();
-        let mut i = 0usize;
-        while i < prepared.len() {
+        let mut i = rows.start;
+        while i < rows.end {
             let mid = prepared[i].mid;
             let m_start = i;
-            while i < prepared.len() && prepared[i].mid == mid {
+            while i < rows.end && prepared[i].mid == mid {
                 i += 1;
             }
             // Chunk this manifold's contacts into blocks of ≤4 so EVERY contact is
@@ -714,11 +752,11 @@ impl ConstraintSolver {
                         a[r][r] += reg;
                     }
                 }
-                groups.push(BlockGroup { start, n, a });
+                let inv = if n >= 2 { super::block::invert_block(n, &a) } else { None };
+                groups.push(BlockGroup { start, n, a, inv });
                 start += n;
             }
         }
-        groups
     }
 
     /// The whole island's normal Delassus matrix, `nprep × nprep` row-major and regularised on
@@ -985,6 +1023,25 @@ impl ConstraintSolver {
     /// deltas. Only the dynamic ends of `pair` are written. Taking the pair by value rather than
     /// the island's velocity buffer is what lets groups that share no dynamic body run at once.
     #[allow(clippy::too_many_arguments)]
+    /// One block's warm start: each row's last impulses, `acc_n` along the normal and `acc_t` in the
+    /// tangent plane, scaled by `factor`, handed to the pair as `warm_start_tgs` does for a manifold
+    /// — through the row's precomputed `I⁻¹(r×axis)` (`Prepared::jac`).
+    pub(super) fn block_warm_start(run: &[Prepared], pair: &mut [Velocity; 2], factor: f32) {
+        for p in run {
+            let (n, t1, t2) = (p.acc_n * factor, p.acc_t.dot(p.t1) * factor, p.acc_t.dot(p.t2) * factor);
+            let linear = p.normal * n + p.t1 * t1 + p.t2 * t2;
+            let j = &p.jac;
+            if p.dyn_a {
+                pair[0].linear -= linear * p.inv_m_a;
+                pair[0].angular -= j.in_a * n + j.it1_a * t1 + j.it2_a * t2;
+            }
+            if p.dyn_b {
+                pair[1].linear += linear * p.inv_m_b;
+                pair[1].angular += j.in_b * n + j.it1_b * t1 + j.it2_b * t2;
+            }
+        }
+    }
+
     pub(super) fn block_group_step(
         &self,
         g: &BlockGroup,
@@ -1029,7 +1086,7 @@ impl ConstraintSolver {
             acc[c] = p.acc_n;
         }
 
-        let lambda = super::block::solve_normal_block(n, &g.a, &rhs, &acc);
+        let lambda = super::block::solve_normal_block_with(n, &g.a, g.inv.as_ref(), &rhs, &acc);
 
         for c in 0..n {
             let p = &mut run[c];

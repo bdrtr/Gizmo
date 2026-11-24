@@ -34,9 +34,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// More colours than this and the rest of the blocks go to one serial overflow stage. A pile's
 /// boxes touch a handful of neighbours each; 64 is far past what a contact graph needs.
 const MAX_COLORS: u32 = 64;
-/// Blocks per chunk at least: a ticket is two atomic operations on lines every worker touches, and
-/// a one-contact block (a sphere's) costs about as much as that.
-const MIN_BLOCKS_PER_CHUNK: usize = 32;
+/// Blocks per chunk at least. Smaller chunks spread a colour over more workers; a ticket is two
+/// atomic operations on lines every worker touches, so below this a chunk costs more to hand out
+/// than to solve. Measured 2026-11-25 on gizmo-godot-bench at 60 Hz (three runs each): 32 → 8
+/// took the 1000-box pile 4.7 → 4.3 ms a frame and 4000 spheres 12.2 → 11.8; 4 was no better,
+/// 64 and 128 worse (5.2, 6.4 ms on the pile).
+const MIN_BLOCKS_PER_CHUNK: usize = 8;
 /// Chunks per worker in a colour: a few, so that a worker that started late or ran into slower
 /// blocks does not hold the stage up.
 const CHUNKS_PER_WORKER: usize = 2;
@@ -157,6 +160,9 @@ enum Stage {
     Color { color: usize, biased: bool, reverse: bool },
     /// `dp += v · h` for the bodies the sweeps integrate.
     Integrate,
+    /// One colour's blocks hand their last step's impulses back to their bodies (the warm start),
+    /// before the first sweep.
+    Warm { color: usize },
 }
 
 /// What the island's coloured solve needs besides `self`.
@@ -172,6 +178,8 @@ pub(super) struct ColoredSweeps<'a> {
     pub(super) h: f32,
     pub(super) bias_rate: f32,
     pub(super) inv_dt: f32,
+    /// The warm start's factor, applied colour by colour before the sweeps; 0 for none.
+    pub(super) warm: f32,
 }
 
 impl ConstraintSolver {
@@ -204,6 +212,14 @@ impl ConstraintSolver {
             }
         };
         let integrate_chunks = s.integrate.len().div_ceil(BODIES_PER_CHUNK);
+        // The warm start, colour by colour: the blocks of a colour share no dynamic body, so they
+        // hand their impulses back at once. It was a pass over the island's manifolds on one thread
+        // before the sweeps.
+        if s.warm > 0.0 {
+            for color in 0..colors {
+                stages.push((Stage::Warm { color }, chunks_of(color)));
+            }
+        }
         for iter in 0..s.n_iterations {
             sweep(&mut stages, iter, true);
             if integrate_chunks > 0 {
@@ -218,7 +234,7 @@ impl ConstraintSolver {
         let velocities = Shared(s.velocities.as_mut_ptr());
         let dp = Shared(s.dp.as_mut_ptr());
         let (groups, coloring, integrate, h) = (s.groups, s.coloring, s.integrate, s.h);
-        let (bias_rate, inv_dt) = (s.bias_rate, s.inv_dt);
+        let (bias_rate, inv_dt, warm) = (s.bias_rate, s.inv_dt, s.warm);
         let work = |stage: Stage, chunk: usize| match stage {
             Stage::Color { color, biased, reverse } => {
                 let blocks = coloring.color(color);
@@ -249,6 +265,27 @@ impl ConstraintSolver {
                     range.rev().for_each(|k| step(blocks[k]));
                 } else {
                     range.for_each(|k| step(blocks[k]));
+                }
+            }
+            Stage::Warm { color } => {
+                let blocks = coloring.color(color);
+                let len = chunk_len[color];
+                for k in chunk * len..((chunk + 1) * len).min(blocks.len()) {
+                    let g = &groups[blocks[k] as usize];
+                    // SAFETY: as for `Stage::Color` — a colour's blocks share no dynamic body, and the
+                    // overflow colour is one chunk.
+                    unsafe {
+                        let run = std::slice::from_raw_parts(prepared.at(g.start), g.n);
+                        let (ia, ib) = (run[0].idx_a, run[0].idx_b);
+                        let mut pair = [velocities.at(ia).read(), velocities.at(ib).read()];
+                        Self::block_warm_start(run, &mut pair, warm);
+                        if run[0].dyn_a {
+                            velocities.at(ia).write(pair[0]);
+                        }
+                        if run[0].dyn_b {
+                            velocities.at(ib).write(pair[1]);
+                        }
+                    }
                 }
             }
             Stage::Integrate => {
