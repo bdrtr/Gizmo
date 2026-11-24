@@ -67,6 +67,8 @@ impl PhysicsWorld {
             metrics: _,
             render_alpha: _,
             bodies_without_collider: _,
+            // Written and taken inside one substep: empty between steps.
+            joint_poses: _,
 
             // ── Structure. A restore is index-aligned and therefore *requires* these to be
             //    identical already; carrying them would hide a caller error rather than fix it.

@@ -56,6 +56,7 @@ impl PhysicsWorld {
             entity_index_map: crate::world::EntityIndexMap::default(),
             ecs_generations: rustc_hash::FxHashMap::default(),
             departed_contacts: Vec::new(),
+            joint_poses: Vec::new(),
             is_paused: false,
             step_once: false,
             rewind_requested: false,
@@ -83,8 +84,13 @@ impl PhysicsWorld {
 
     /// This world stepping at `hz` substeps a second instead of
     /// [`DEFAULT_SUBSTEP_RATE`](super::DEFAULT_SUBSTEP_RATE), each running the whole pipeline once.
-    /// Fewer substeps cost less; each is longer, so a fast body moves further between two looks at
-    /// what it touches. Chosen here, when the world is built, and not changed in play.
+    /// Fewer substeps cost less; each is longer, so a body moves further between two looks at what
+    /// it touches. What holds at any rate: a pair closing faster than its size allows has a
+    /// speculative contact and does not pass through, and joints are solved at 240 Hz whatever the
+    /// world's rate (a free joint in as many steps of the substep, one in a contact island against
+    /// where its bodies have got to in the island's solve). What does not: a body landing sinks up to
+    /// a substep's travel before it is pushed out — 6 cm for a fall from 2 m at 60 Hz, 4 mm at 240.
+    /// Chosen here, when the world is built, and not changed in play.
     ///
     /// # Errors
     /// [`SubstepRateError::OutOfRange`](super::SubstepRateError::OutOfRange) outside

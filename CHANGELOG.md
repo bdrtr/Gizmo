@@ -549,6 +549,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Joints hold at any substep rate: they are solved at 240 Hz whatever the world's.** At 60 Hz a
+  chain of eight 1 kg links ending in 50 kg came apart by 2.24 m (7.6 mm at 240), and a chain folding
+  onto itself opened 33 mm (6). A joint no contact island holds is now stepped through the world's
+  substep in as many steps as 240 Hz takes — each with its share of the gravity and forces, solved
+  against the poses its bodies have reached, moving them on (`JointSolver::finish`, Box2D v3's
+  substepping) — and moves exactly as it does in a 240 Hz world. A joint inside a contact island is
+  solved, sweep by sweep, against where the island's solve has taken its bodies (`joints::Poses`),
+  not where they began the substep: 8.5 mm for the folding chain. A joint's λ is over the time its
+  pass covered, so its reported force and its break check read the same at every rate, and a warm
+  start into a pass of another length is scaled to it. `joint_substeps.rs`, each test red with its
+  piece taken out. At 240 Hz nothing changes (`headless_stress_test` unchanged). **Not closed:** a
+  heavy body landing sinks a substep's travel into the ground before it is pushed out — 6 cm from
+  2 m at 60 Hz, 4 mm at 240 — and opens the joints holding it for that frame; a contact found a
+  substep late, which a contact distance would close.
 - **A fast body does not tunnel, at any substep rate, CCD or not.** Discrete detection only kept up
   because the world ran at 240 Hz: at 60 Hz a 0.5 m sphere struck at 320 m/s passed the one it struck.
   A pair now closing more than half the sum of its two smallest half-extents in one substep

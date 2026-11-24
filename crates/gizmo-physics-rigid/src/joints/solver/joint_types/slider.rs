@@ -10,7 +10,7 @@ impl JointSolver {
         &self,
         joint: &mut Joint,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
@@ -82,7 +82,7 @@ impl JointSolver {
     fn slider_off_axis(
         &self,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
@@ -138,7 +138,7 @@ impl JointSolver {
     fn slider_rotation_lock(
         &self,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
@@ -183,7 +183,7 @@ impl JointSolver {
     fn slider_limits(
         &self,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
@@ -242,7 +242,7 @@ impl JointSolver {
     fn slider_motor(
         &self,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
@@ -312,7 +312,7 @@ impl JointSolver {
         &self,
         joint: &mut Joint,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,

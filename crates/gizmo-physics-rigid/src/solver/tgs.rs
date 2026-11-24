@@ -261,7 +261,7 @@ impl ConstraintSolver {
                 // the last word goes to the contacts, which have no correction for a small overlap
                 // (`slop`) — a joint's error is corrected by its own bias on the next substep.
                 if let Some(between) = between.as_mut() {
-                    (between.sweep)(velocities, false);
+                    (between.sweep)(velocities, dp.as_slice(), false);
                 }
                 self.sweep(&mut prepared, &block_groups, direct, velocities, dp.as_slice(), iter % 2 == 1, Some(coeffs), inv_dt);
                 for &i in &integrate {
@@ -275,7 +275,7 @@ impl ConstraintSolver {
             let _relax = crate::profile::Scope::new(&crate::profile::PHASES.relax);
             for iter in 0..if coloring.is_some() { 0 } else { self.relax_iterations } {
                 if let Some(between) = between.as_mut() {
-                    (between.sweep)(velocities, true);
+                    (between.sweep)(velocities, dp.as_slice(), true);
                 }
                 self.sweep(&mut prepared, &block_groups, direct, velocities, dp.as_slice(), iter % 2 == 1, None, inv_dt);
             }

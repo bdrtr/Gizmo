@@ -546,6 +546,10 @@ pub struct PhysicsWorld {
     /// impulses), and reported `Ended` by the next step, as the vanished pair always was.
     #[serde(skip)]
     pub(crate) departed_contacts: Vec<((BodyHandle, BodyHandle), bool)>,
+    /// The poses the substep's free joints left their bodies in, when they were substepped
+    /// (`JointSolver::finish`): written over the position integration's, by the same substep.
+    #[serde(skip)]
+    pub(crate) joint_poses: Vec<(usize, Transform)>,
 
     /// Localized gravity overrides; see [`GravityField`] for how overlaps resolve.
     /// Empty (the default) means every body uses `integrator.gravity`.

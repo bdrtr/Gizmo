@@ -858,14 +858,16 @@ impl PhysicsWorld {
         if !self.joints.is_empty() {
             self.wake_joint_components();
             if joints_open {
-                self.joint_solver.finish(
+                let substeps = joint_substeps(self.substep_rate());
+                self.joint_poses = self.joint_solver.finish(
                     &mut self.joints,
                     &self.entity_index_map,
                     &self.rigid_bodies,
-                    &self.transforms,
+                    crate::joints::Poses::of(&self.transforms),
                     &mut self.velocities,
                     dt,
                     &coupled,
+                    substeps,
                 );
             }
 
@@ -1207,7 +1209,7 @@ impl PhysicsWorld {
                 // sweep comes first, as it does in the free joints' pass.
                 let joint_solver = &self.joint_solver;
                 if !joints.is_empty() && joint_solver.warm_starts() {
-                    joint_solver.sweep_island(joints, entity_map, rigid_bodies, transforms, &mut buf, dt, true, false);
+                    joint_solver.sweep_island(joints, entity_map, rigid_bodies, crate::joints::Poses::of(transforms), &mut buf, dt, true, false);
                 }
                 let has_joints = !joints.is_empty();
                 // The dynamic bodies the joints hold, for the TGS position integration.
@@ -1219,8 +1221,27 @@ impl PhysicsWorld {
                     .collect();
                 held.sort_unstable();
                 held.dedup();
-                let mut sweep_joints = |v: &mut [Velocity], relax: bool| {
-                    joint_solver.sweep_island(joints, entity_map, rigid_bodies, transforms, v, dt, false, relax);
+                // Below the joints' rate (`joint_substeps`) a joint is solved against where its bodies
+                // have got to in the island's sweeps, not where they began the substep: each sweep
+                // then corrects what the last one left, as substeps would. At the joints' rate the
+                // substep is short enough for the start, and the path stays what it was.
+                let substepped = joint_substeps(self.substep_rate()) > 1;
+                let mut moved: Vec<(usize, Transform)> = Vec::new();
+                let mut sweep_joints = |v: &mut [Velocity], dp: &[(Vec3, Vec3)], relax: bool| {
+                    moved.clear();
+                    if substepped && !dp.is_empty() {
+                        moved.extend(held.iter().map(|&i| {
+                            let mut pose = transforms[i];
+                            let (linear, angular) = dp[i];
+                            pose.position += linear;
+                            if angular.length_squared() > 1e-12 {
+                                pose.rotation = (gizmo_math::Quat::from_scaled_axis(angular) * pose.rotation).normalize();
+                            }
+                            (i, pose)
+                        }));
+                    }
+                    let poses = crate::joints::Poses::of(transforms).with(&moved);
+                    joint_solver.sweep_island(joints, entity_map, rigid_bodies, poses, v, dt, false, relax);
                 };
                 let between: crate::solver::BetweenSweeps<'_> = has_joints.then_some(crate::solver::IslandJoints { bodies: &held, sweep: &mut sweep_joints });
                 let stats = solver.solve_contacts_with(
@@ -1703,6 +1724,18 @@ impl PhysicsWorld {
         }
         normal
     }
+}
+
+/// The rate a joint is solved at, in hertz, whatever the world's: a world stepping coarser solves
+/// its free joints (`JointSolver::finish`) in as many steps of its substep as this takes. The rate
+/// every joint in the engine was tuned at; at 60 Hz a chain carrying 50 times a link's mass came
+/// apart by 2.2 m solved once a substep (2026-11-24).
+pub(crate) const JOINT_RATE: u32 = 240;
+
+/// How many joint steps a substep of a world at `substep_rate` holds: `JOINT_RATE` over the rate,
+/// rounded up, and never fewer than one.
+pub(crate) fn joint_substeps(substep_rate: u32) -> u32 {
+    JOINT_RATE.div_ceil(substep_rate.max(1)).max(1)
 }
 
 /// How far through its own size a body may move in one substep before discrete collision detection

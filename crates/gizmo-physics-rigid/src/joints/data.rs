@@ -39,6 +39,12 @@ pub struct JointScratch {
     /// newton-metres) — what [`Joint::last_force`] / [`Joint::last_torque`] report.
     pub(crate) force: f32,
     pub(crate) torque: f32,
+    /// The length of time the pass covers, in seconds: the world's substep, or a share of it when
+    /// the joint is substepped (`JointSolver::finish`). `rows` are impulses over that time, so the
+    /// break check divides by it, and a warm start into a pass of another length scales the
+    /// previous λ by the ratio (a steady load's impulse is proportional to the time it acts). 0
+    /// before the first pass.
+    pass_dt: f32,
 }
 
 impl JointScratch {
@@ -99,9 +105,31 @@ impl JointScratch {
     /// Begin a solver pass that WILL run: this pass's λ and net impulses go to zero, and the
     /// λ the previous pass converged to is retained for the warm start.
     #[inline]
-    pub(crate) fn begin_pass(&mut self) {
+    pub(crate) fn begin_pass(&mut self, dt: f32) {
         self.prev_rows = self.rows;
         self.clear_pass();
+        self.rescale_pass(dt);
+    }
+
+    /// Makes the pass that is opening one of `dt` seconds: the warm start's λ, taken over the last
+    /// pass's length, is scaled to this one's. Nothing changes while the length does not.
+    pub(crate) fn rescale_pass(&mut self, dt: f32) {
+        if self.pass_dt > 0.0 && self.pass_dt != dt {
+            let ratio = dt / self.pass_dt;
+            for row in &mut self.prev_rows {
+                *row *= ratio;
+            }
+        }
+        self.pass_dt = dt;
+    }
+
+    /// The length of time the last pass covered (`pass_dt`), `fallback` before any.
+    pub(crate) fn pass_dt_or(&self, fallback: f32) -> f32 {
+        if self.pass_dt > 0.0 {
+            self.pass_dt
+        } else {
+            fallback
+        }
     }
 
     /// Clear a pass that will NOT run (a zero-length step): the same visible zeroing as

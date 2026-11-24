@@ -1068,7 +1068,7 @@ impl ConstraintSolver {
         for iter in 0..self.iterations {
             // The island's joints first, then its contacts (see the TGS path's sweeps).
             if let Some(between) = between.as_mut() {
-                (between.sweep)(velocities, false);
+                (between.sweep)(velocities, &[], false);
             }
             // Symmetric Gauss-Seidel: alternate the sweep direction every
             // iteration. Plain forward-only PGS applies the manifold's contact
@@ -1505,9 +1505,10 @@ pub(crate) struct IslandJoints<'a> {
     /// as it does a contact's bodies, so a joint's position correction lands in the position, not
     /// in the velocity the step ends with.
     pub bodies: &'a [usize],
-    /// One sweep of them, given the island's velocities; the flag is a relax sweep
-    /// (`JointSolver::sweep_island`).
-    pub sweep: &'a mut dyn FnMut(&mut [Velocity], bool),
+    /// One sweep of them, given the island's velocities and how far each body has moved since the
+    /// substep began (`(linear, angular)`, indexed like the velocities — the TGS path's `dp`; empty
+    /// where nothing tracks it); the flag is a relax sweep (`JointSolver::sweep_island`).
+    pub sweep: &'a mut dyn FnMut(&mut [Velocity], &[(Vec3, Vec3)], bool),
 }
 
 /// What the solver decided for one island, reported back so a caller can see the sweep count

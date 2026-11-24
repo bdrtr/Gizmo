@@ -367,7 +367,7 @@ impl JointSolver {
         // Bilinçli bir kabul; ayrıntı `JointScratch::clear_pass`'ta. `rows`/`impulse_*` her
         // iki yolda da sıfırlanıyor, yani faktör 0'da ayrım gözlemlenemez.
         if self.begin(joints, dt) {
-            self.finish(joints, entity_index_map, rigid_bodies, transforms, velocities, dt, &[]);
+            self.finish(joints, entity_index_map, rigid_bodies, Poses::of(transforms), velocities, dt, &[], 1);
         }
     }
 
@@ -378,7 +378,7 @@ impl JointSolver {
         let steppable = dt > 0.0 && dt.is_finite();
         for joint in joints.iter_mut() {
             if steppable {
-                joint.scratch.begin_pass();
+                joint.scratch.begin_pass(dt);
             } else {
                 joint.scratch.clear_pass();
             }
@@ -416,20 +416,129 @@ impl JointSolver {
     /// Closes the pass `begin` opened: the velocity sweeps of every joint not already solved with an
     /// island's contacts (`coupled[i]`, missing entries false), then the force joints and the
     /// break check of all of them.
+    ///
+    /// With `substeps` over 1 the joints no island solved are stepped that many times through `dt`
+    /// (`finish_substepped`), and the poses their bodies reach are returned: the step writes them
+    /// over what its position integration gives those bodies. Empty otherwise.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn finish(
         &self,
         joints: &mut [Joint],
         entity_index_map: &crate::world::EntityIndexMap,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         dt: f32,
         coupled: &[bool],
-    ) {
-        self.solve_velocity_passes(joints, entity_index_map, rigid_bodies, transforms, velocities, dt, coupled);
-        self.solve_force_joints(joints, entity_index_map, rigid_bodies, transforms, velocities, dt);
+        substeps: u32,
+    ) -> Vec<(usize, Transform)> {
+        let is_coupled = |i: usize| coupled.get(i).copied().unwrap_or(false);
+        let poses = if substeps > 1 {
+            self.finish_substepped(joints, entity_index_map, rigid_bodies, transforms, velocities, dt, &is_coupled, substeps)
+        } else {
+            self.solve_velocity_passes(joints, entity_index_map, rigid_bodies, transforms, velocities, dt, coupled);
+            self.solve_force_joints(joints, entity_index_map, rigid_bodies, transforms, velocities, dt, |_| true);
+            Vec::new()
+        };
         check_breaks(joints, entity_index_map, rigid_bodies, velocities, dt);
+        poses
+    }
+
+    /// The free joints — every one no contact island solved — stepped `substeps` times through
+    /// `dt`, as the world would step them at `substeps` times its rate: each step takes its share of
+    /// the substep's external velocity change (gravity, forces, damping, which the velocity
+    /// integration applied whole), solves the joints against the poses their bodies have reached,
+    /// and moves those bodies on. A joint's error is corrected `substeps` times a world substep
+    /// instead of once, and the solver meets a mass ratio in short steps (Box2D v3's case for
+    /// substepping over iterating). Returns the dynamic bodies' poses at the end.
+    ///
+    /// Each step is a pass of its own: λ is over `dt / substeps`, which the warm start and the
+    /// break check read off the pass (`JointScratch::rescale_pass`).
+    #[allow(clippy::too_many_arguments)]
+    fn finish_substepped(
+        &self,
+        joints: &mut [Joint],
+        entity_index_map: &crate::world::EntityIndexMap,
+        rigid_bodies: &[RigidBody],
+        transforms: Poses<'_>,
+        velocities: &mut [Velocity],
+        dt: f32,
+        is_coupled: &dyn Fn(usize) -> bool,
+        substeps: u32,
+    ) -> Vec<(usize, Transform)> {
+        let h = dt / substeps as f32;
+        let share = 1.0 / substeps as f32;
+        let free = |i: usize, joint: &Joint| !is_coupled(i) && !joint.is_broken;
+
+        let mut bodies: Vec<usize> = joints
+            .iter()
+            .enumerate()
+            .filter(|(i, joint)| free(*i, joint))
+            .filter_map(|(_, joint)| joint_bodies(joint, entity_index_map))
+            .flat_map(|(a, b)| [a, b])
+            .filter(|&i| !rigid_bodies[i].is_static() && !rigid_bodies[i].is_sleeping)
+            .collect();
+        bodies.sort_unstable();
+        bodies.dedup();
+
+        // Where the bodies have got to, advanced step by step: what the joints are solved against.
+        let mut moved: Vec<(usize, Transform)> = bodies.iter().map(|&i| (i, transforms[i])).collect();
+        // The substep's external velocity change, taken back out to be handed in by shares.
+        let external: Vec<(Vec3, Vec3)> = bodies
+            .iter()
+            .map(|&i| {
+                if !rigid_bodies[i].is_dynamic() {
+                    return (Vec3::ZERO, Vec3::ZERO);
+                }
+                let v = &mut velocities[i];
+                let change = (v.linear - v.pre_linear, v.angular - v.pre_angular);
+                v.linear = v.pre_linear;
+                v.angular = v.pre_angular;
+                change
+            })
+            .collect();
+
+        let warm = self.warm_starts();
+        for step in 0..substeps {
+            for (i, joint) in joints.iter_mut().enumerate() {
+                if free(i, joint) {
+                    if step == 0 {
+                        joint.scratch.rescale_pass(h);
+                    } else {
+                        joint.scratch.begin_pass(h);
+                    }
+                }
+            }
+            for (&i, &(linear, angular)) in bodies.iter().zip(&external) {
+                velocities[i].linear += linear * share;
+                velocities[i].angular += angular * share;
+            }
+            for pass in 0..self.iterations + usize::from(warm) {
+                let injecting = warm && pass == 0;
+                for (i, joint) in joints.iter_mut().enumerate() {
+                    if free(i, joint) {
+                        self.sweep_one(joint, entity_index_map, rigid_bodies, transforms.with(&moved), velocities, h, injecting);
+                    }
+                }
+            }
+            self.solve_force_joints(joints, entity_index_map, rigid_bodies, transforms.with(&moved), velocities, h, |i| !is_coupled(i));
+            for (i, pose) in &mut moved {
+                let mut v = velocities[*i];
+                rigid_bodies[*i].enforce_locks(&mut v);
+                pose.position += v.linear * h;
+                if v.angular.length_squared() > 1e-8 {
+                    pose.rotation = (Quat::from_scaled_axis(v.angular * h) * pose.rotation).normalize();
+                }
+            }
+        }
+        // A force joint an island solved is applied once, over the whole substep, as `finish` does.
+        self.solve_force_joints(joints, entity_index_map, rigid_bodies, transforms, velocities, dt, is_coupled);
+
+        moved.retain(|(i, _)| rigid_bodies[*i].is_dynamic());
+        for (_, pose) in &mut moved {
+            pose.update_local_matrix();
+        }
+        moved
     }
 
     /// One sweep over an island's joints, inside the island's contact solve: called before each of
@@ -449,7 +558,7 @@ impl JointSolver {
         joints: &mut [&mut Joint],
         entity_index_map: &crate::world::EntityIndexMap,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         dt: f32,
         injecting: bool,
@@ -470,7 +579,7 @@ impl JointSolver {
         joint: &mut Joint,
         entity_index_map: &crate::world::EntityIndexMap,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         dt: f32,
         injecting: bool,
@@ -513,7 +622,7 @@ impl JointSolver {
         joints: &mut [Joint],
         entity_index_map: &crate::world::EntityIndexMap,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         dt: f32,
         coupled: &[bool],
@@ -542,7 +651,7 @@ impl JointSolver {
         &self,
         joint: &mut Joint,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
@@ -616,20 +725,22 @@ impl JointSolver {
     /// The force-based joints, once per step: a spring's force depends on position, not velocity, so
     /// it is constant over the velocity sweeps and applied outside them — Spring always, and the
     /// optional suspension and torsion springs of Slider and Hinge, and D6's drives.
+    #[allow(clippy::too_many_arguments)]
     fn solve_force_joints(
         &self,
         joints: &mut [Joint],
         entity_index_map: &crate::world::EntityIndexMap,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         dt: f32,
+        only: impl Fn(usize) -> bool,
     ) {
         // ── Kuvvet-tabanlı eklemler: step başına BİR kez ──────────────────
         // Yay kuvveti pozisyona bağlı olduğundan velocity-solver iterasyonları
         // boyunca sabittir; döngü dışında tek sefer uygulanmalıdır.
-        for joint in joints.iter_mut() {
-            if joint.is_broken {
+        for (i, joint) in joints.iter_mut().enumerate() {
+            if joint.is_broken || !only(i) {
                 continue;
             }
             let Some((idx_a, idx_b)) = joint_bodies(joint, entity_index_map) else {
@@ -720,7 +831,7 @@ impl JointSolver {
     #[inline]
     pub(crate) fn lever_arm(
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         idx: usize,
         point: Vec3,
     ) -> Vec3 {
@@ -751,7 +862,7 @@ impl JointSolver {
     /// how much the row's relative velocity changes per unit impulse. Only the dynamic ends count.
     pub(crate) fn linear_row_k_inv(
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         (idx_a, idx_b): (usize, usize),
         (r_a, r_b): (Vec3, Vec3),
         n: Vec3,
@@ -768,7 +879,7 @@ impl JointSolver {
     }
 
     /// The inverse effective mass of an angular row about the unit `axis`. Only the dynamic ends count.
-    pub(crate) fn angular_row_k_inv(rigid_bodies: &[RigidBody], transforms: &[Transform], (idx_a, idx_b): (usize, usize), axis: Vec3) -> f32 {
+    pub(crate) fn angular_row_k_inv(rigid_bodies: &[RigidBody], transforms: Poses<'_>, (idx_a, idx_b): (usize, usize), axis: Vec3) -> f32 {
         let end = |idx: usize| {
             let rb = &rigid_bodies[idx];
             if !rb.is_dynamic() {
@@ -949,7 +1060,7 @@ impl JointSolver {
     fn apply_angular_constraint(
         &self,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
@@ -984,7 +1095,7 @@ impl JointSolver {
     fn apply_angular_constraint_soft(
         &self,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
@@ -1090,7 +1201,7 @@ impl JointSolver {
     fn apply_linear_constraint(
         &self,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
@@ -1117,7 +1228,7 @@ impl JointSolver {
     fn apply_linear_constraint_soft(
         &self,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
@@ -1210,7 +1321,7 @@ impl JointSolver {
     pub(crate) fn apply_point_constraint(
         &self,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
@@ -1295,6 +1406,41 @@ pub(crate) fn pair_mut(velocities: &mut [Velocity], a: usize, b: usize) -> (&mut
 }
 
 /// The rows of `joint`'s two bodies; `None` when either is not in the world or they are one body.
+/// The poses joints are solved against: a substep's `base` poses, with the bodies in `moved` (sorted
+/// by index) where a substepped solve has taken them since. Indexed like the world's transforms.
+#[derive(Clone, Copy)]
+pub(crate) struct Poses<'a> {
+    base: &'a [Transform],
+    moved: &'a [(usize, Transform)],
+}
+
+impl<'a> Poses<'a> {
+    /// The poses as they are, nothing moved.
+    pub(crate) fn of(base: &'a [Transform]) -> Self {
+        Self { base, moved: &[] }
+    }
+
+    /// The same base with `moved` (sorted by body index, each at most once) in place of its own.
+    pub(crate) fn with<'b>(self, moved: &'b [(usize, Transform)]) -> Poses<'b>
+    where
+        'a: 'b,
+    {
+        debug_assert!(moved.windows(2).all(|w| w[0].0 < w[1].0), "moved poses must be sorted and distinct");
+        Poses { base: self.base, moved }
+    }
+}
+
+impl std::ops::Index<usize> for Poses<'_> {
+    type Output = Transform;
+
+    fn index(&self, i: usize) -> &Transform {
+        match self.moved.binary_search_by_key(&i, |m| m.0) {
+            Ok(k) => &self.moved[k].1,
+            Err(_) => &self.base[i],
+        }
+    }
+}
+
 fn joint_bodies(joint: &Joint, entity_index_map: &crate::world::EntityIndexMap) -> Option<(usize, usize)> {
     let idx_a = entity_index_map.get(&joint.entity_a.id()).copied()?;
     let idx_b = entity_index_map.get(&joint.entity_b.id()).copied()?;
@@ -1332,8 +1478,10 @@ fn check_breaks(
         if joint.is_broken {
             continue;
         }
-        let force = joint.scratch.impulse_lin.length() / dt;
-        let torque = joint.scratch.impulse_ang.length() / dt;
+        // Over the time its last pass covered: a substepped joint's is a share of `dt`.
+        let pass_dt = joint.scratch.pass_dt_or(dt);
+        let force = joint.scratch.impulse_lin.length() / pass_dt;
+        let torque = joint.scratch.impulse_ang.length() / pass_dt;
         // A pair with both ends asleep or static was not solved: it reports the load it last
         // carried, not the zero this pass left in its scratch — a weight that settles on a
         // rope has not stopped weighing on it.
@@ -1439,7 +1587,7 @@ mod tests {
 
         solver.apply_linear_constraint(
             &bodies,
-            &transforms,
+            Poses::of(&transforms),
             &mut vels,
             0,
             1,
@@ -1496,7 +1644,7 @@ mod tests {
         // 1) Cisimler ayrılıyor (bağıl hız +1) → yalnız-çeken satır onları yakalar.
         vels[1].linear = Vec3::Y;
         let first = solver.apply_linear_constraint(
-            &bodies, &transforms, &mut vels, 0, 1, Vec3::Y, Vec3::ZERO, Vec3::ZERO,
+            &bodies, Poses::of(&transforms), &mut vels, 0, 1, Vec3::Y, Vec3::ZERO, Vec3::ZERO,
             0.0, // pozisyon hatası yok → saf hız kısıtı
             1.0 / 60.0,
             f32::NEG_INFINITY,
@@ -1522,7 +1670,7 @@ mod tests {
         assert!((rel(&vels) - (-1.0)).abs() < 1e-6);
 
         let second = solver.apply_linear_constraint(
-            &bodies, &transforms, &mut vels, 0, 1, Vec3::Y, Vec3::ZERO, Vec3::ZERO, 0.0,
+            &bodies, Poses::of(&transforms), &mut vels, 0, 1, Vec3::Y, Vec3::ZERO, Vec3::ZERO, 0.0,
             1.0 / 60.0,
             f32::NEG_INFINITY,
             0.0,
@@ -1557,7 +1705,7 @@ mod tests {
 
         vels[1].linear = Vec3::Y;
         solver.apply_linear_constraint(
-            &bodies, &transforms, &mut vels, 0, 1, args.0, args.1, args.2, args.3, dt,
+            &bodies, Poses::of(&transforms), &mut vels, 0, 1, args.0, args.1, args.2, args.3, dt,
             f32::NEG_INFINITY, 0.0, &mut scratch, row::LIMIT,
         );
         let applied_total = *scratch.row(row::LIMIT);
@@ -1567,7 +1715,7 @@ mod tests {
         vels[0].linear = Vec3::ZERO;
         vels[1].linear = Vec3::Y * -3.0;
         solver.apply_linear_constraint(
-            &bodies, &transforms, &mut vels, 0, 1, args.0, args.1, args.2, args.3, dt,
+            &bodies, Poses::of(&transforms), &mut vels, 0, 1, args.0, args.1, args.2, args.3, dt,
             f32::NEG_INFINITY, 0.0, &mut scratch, row::LIMIT,
         );
 

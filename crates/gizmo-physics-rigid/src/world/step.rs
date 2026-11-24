@@ -291,6 +291,10 @@ impl PhysicsWorld {
         // 5-6. Pozisyon entegrasyonu ve uyku durumu
         let t4 = Instant::now();
         self.position_integration_step(dt)?;
+        // Substepped joints' bodies are where their own steps took them.
+        for (i, pose) in std::mem::take(&mut self.joint_poses) {
+            self.transforms[i] = pose;
+        }
         // CCD geometrik güvencesi: ince geometriye karşı speculative GJK mesafesi
         // dejenere olduğunda hızlı bir cismin tünellemesini engelle (yalnız hızlı CCD
         // cisimlerini etkiler; yavaş/dinlenen cisimler dokunulmaz → determinizm nötr).

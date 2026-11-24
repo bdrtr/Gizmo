@@ -10,7 +10,7 @@ impl JointSolver {
         &self,
         joint: &mut Joint,
         rigid_bodies: &[RigidBody],
-        transforms: &[Transform],
+        transforms: Poses<'_>,
         velocities: &mut [Velocity],
         idx_a: usize,
         idx_b: usize,
