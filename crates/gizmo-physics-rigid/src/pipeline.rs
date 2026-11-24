@@ -97,6 +97,9 @@ fn collect_fracture_events(
 struct PairContacts {
     entity_a: BodyHandle,
     entity_b: BodyHandle,
+    /// The two bodies' indices in the world's rows, which nothing changes until the step ends:
+    /// what the islands are built from (`IslandManager::build_islands_by_index`).
+    bodies: [u32; 2],
     contacts: Vec<gizmo_physics_core::ContactPoint>,
     is_trigger_a: bool,
     is_trigger_b: bool,
@@ -414,7 +417,7 @@ impl PhysicsWorld {
     ///
     /// Returns the set of [`ContactManifold`]s to be fed into the solver.
     #[tracing::instrument(skip_all, name = "narrowphase_collision")]
-    pub(crate) fn narrowphase_and_collision_step(&mut self, dt: f32) -> Vec<ContactManifold> {
+    pub(crate) fn narrowphase_and_collision_step(&mut self, dt: f32) -> (Vec<ContactManifold>, Vec<[u32; 2]>) {
         let (active_pairs, dormant_pairs) = self.partition_pairs();
         let disabled_joint_pairs = self.collision_disabled_joint_pairs();
 
@@ -445,11 +448,14 @@ impl PhysicsWorld {
         // ~log2(N) grow-and-rehash reallocations the map/vec otherwise do every frame while
         // filling to tens of thousands of entries.
         let mut manifolds = Vec::with_capacity(narrowphase_results.len());
+        // Each manifold's bodies' indices, beside it (`PairContacts::bodies`).
+        let mut ends: Vec<[u32; 2]> = Vec::with_capacity(narrowphase_results.len());
         let _mani = crate::profile::Scope::new(&crate::profile::PHASES.manifold);
         for found in narrowphase_results {
             if found.is_trigger_a || found.is_trigger_b {
                 self.record_trigger(&found);
             } else {
+                ends.push(found.bodies);
                 manifolds.push(self.record_solid_contact(found));
             }
         }
@@ -484,7 +490,7 @@ impl PhysicsWorld {
             "narrowphase complete"
         );
 
-        manifolds
+        (manifolds, ends)
     }
 
     /// This step's candidate pairs, split into the ones the narrowphase tests (in id order) and
@@ -728,6 +734,7 @@ impl PhysicsWorld {
         Some(PairContacts {
             entity_a,
             entity_b,
+            bodies: [idx_a as u32, idx_b as u32],
             contacts,
             is_trigger_a: collider_a.is_trigger,
             is_trigger_b: collider_b.is_trigger,
@@ -891,7 +898,7 @@ impl PhysicsWorld {
     /// (hinges, springs, …) of the substep. Returns the bounces of speculative contacts
     /// (`solve_contacts`' `bounces`), which the step adds after integrating positions.
     #[tracing::instrument(skip_all, name = "constraint_solve")]
-    pub(crate) fn constraint_solve_step(&mut self, manifolds: Vec<ContactManifold>, dt: f32) -> Vec<(usize, Vec3, Vec3)> {
+    pub(crate) fn constraint_solve_step(&mut self, manifolds: Vec<ContactManifold>, ends: Vec<[u32; 2]>, dt: f32) -> Vec<(usize, Vec3, Vec3)> {
         let mut bounces: Vec<(usize, Vec3, Vec3)> = Vec::new();
 
         // Dynamic bodies the island sleep rule got to decide about this substep. Declared out
@@ -911,7 +918,7 @@ impl PhysicsWorld {
         let coupled = if manifolds.is_empty() {
             Vec::new()
         } else {
-            self.solve_islands(manifolds, dt, &mut in_island, &mut bounces, &mut island_sleep, joints_open)
+            self.solve_islands(manifolds, ends, dt, &mut in_island, &mut bounces, &mut island_sleep, joints_open)
         };
 
         // ── Joints ────────────────────────────────────────────────────────
@@ -1000,6 +1007,7 @@ impl PhysicsWorld {
     fn solve_islands(
         &mut self,
         manifolds: Vec<ContactManifold>,
+        ends: Vec<[u32; 2]>,
         dt: f32,
         in_island: &mut [bool],
         bounces: &mut Vec<(usize, Vec3, Vec3)>,
@@ -1007,27 +1015,27 @@ impl PhysicsWorld {
         with_joints: bool,
     ) -> Vec<bool> {
         let entity_map = &self.entity_index_map;
-        let is_dynamic = |entity: BodyHandle| -> bool {
-            entity_map
-                .get(&entity.id())
-                .is_some_and(|&idx| self.rigid_bodies[idx].is_dynamic())
-        };
 
         // Joints are island edges: a body a joint holds and a contact touches is solved against
         // both in one set of sweeps. Solved one after the other, each undid the other every
         // substep — a box resting on a hinged seesaw shook at 6 cm/s and never slept (2026-11-23).
-        let joint_pairs: Vec<Option<(BodyHandle, BodyHandle)>> = self
+        let joint_pairs: Vec<Option<(u32, u32)>> = self
             .joints
             .iter()
             .map(|j| {
-                let present = entity_map.get(&j.entity_a.id()).is_some() && entity_map.get(&j.entity_b.id()).is_some();
-                (with_joints && !j.is_broken && present).then_some((j.entity_a, j.entity_b))
+                let (a, b) = (entity_map.get(&j.entity_a.id())?, entity_map.get(&j.entity_b.id())?);
+                (with_joints && !j.is_broken).then_some((*a as u32, *b as u32))
             })
             .collect();
-        let (islands, joint_island) =
-            crate::island::IslandManager::build_islands_with_joints(&manifolds, &joint_pairs, &is_dynamic);
+        let rigid_bodies = &self.rigid_bodies;
+        let (islands, joint_island) = crate::island::IslandManager::build_islands_by_index(
+            &ends,
+            &joint_pairs,
+            |i| rigid_bodies[i].is_dynamic(),
+            rigid_bodies.len(),
+        );
         let island_count = islands.len();
-        let island_groups = crate::island::IslandManager::split_manifolds(manifolds, &islands);
+        let island_groups = crate::island::IslandManager::split_by_island(manifolds, ends, &islands);
 
         // Each island's joints, by mutable reference, so islands solved in parallel each own theirs.
         let mut joints = std::mem::take(&mut self.joints);
@@ -1039,12 +1047,12 @@ impl PhysicsWorld {
             }
         }
 
-        let solve_island = |(island_manifolds, island_joints): (Vec<ContactManifold>, Vec<&mut Joint>)| {
-            self.solve_island(island_manifolds, island_joints, dt)
+        let solve_island = |((island_manifolds, island_ends), island_joints): ((Vec<ContactManifold>, Vec<[u32; 2]>), Vec<&mut Joint>)| {
+            self.solve_island(island_manifolds, &island_ends, island_joints, dt)
         };
         // On the calling thread when there are few islands (`worth_parallel_jobs`); order is kept.
         let results: Vec<IslandResult> = if island_groups.len() > 1
-            && worth_parallel_jobs(island_groups.iter().map(Vec::len).sum(), PARALLEL_MIN_MANIFOLDS)
+            && worth_parallel_jobs(island_groups.iter().map(|(m, _)| m.len()).sum(), PARALLEL_MIN_MANIFOLDS)
         {
             island_groups.into_par_iter().zip(buckets).map(solve_island).collect()
         } else {
@@ -1090,7 +1098,7 @@ impl PhysicsWorld {
     /// One island's solve, on whichever worker drew it: whether it is solved at all and whether it
     /// wakes its sleepers, the contact solve itself (`solve_island_contacts`), the fractures it
     /// caused, and whether the island as a whole may sleep.
-    fn solve_island(&self, mut island_manifolds: Vec<ContactManifold>, mut joints: Vec<&mut Joint>, dt: f32) -> IslandResult {
+    fn solve_island(&self, mut island_manifolds: Vec<ContactManifold>, ends: &[[u32; 2]], mut joints: Vec<&mut Joint>, dt: f32) -> IslandResult {
         let entity_map = &self.entity_index_map;
         let rigid_bodies = &self.rigid_bodies;
         let velocities = &self.velocities;
@@ -1116,11 +1124,10 @@ impl PhysicsWorld {
         // looked up once each rather than once for every question below. In index order, which is
         // what the sleep decision is handed (`members`); nothing else depends on it — every use is
         // per body.
-        let mut island_indices: Vec<usize> = island_manifolds
+        let mut island_indices: Vec<usize> = ends
             .iter()
-            .flat_map(|m| [m.entity_a, m.entity_b])
-            .chain(joints.iter().flat_map(|j| [j.entity_a, j.entity_b]))
-            .filter_map(|e| entity_map.get(&e.id()).copied())
+            .flat_map(|&[a, b]| [a as usize, b as usize])
+            .chain(joints.iter().flat_map(|j| [j.entity_a, j.entity_b]).filter_map(|e| entity_map.get(&e.id()).copied()))
             .collect();
         island_indices.sort_unstable();
         island_indices.dedup();

@@ -60,18 +60,9 @@ impl IslandManager {
         joints: &[Option<(BodyHandle, BodyHandle)>],
         entity_is_dynamic: &impl Fn(BodyHandle) -> bool,
     ) -> (Vec<Island>, Vec<Option<usize>>) {
-        if manifolds.is_empty() {
-            return (Vec::new(), vec![None; joints.len()]);
-        }
-
-        // ── Union-find over the dynamic bodies ────────────────────────────────
-        // A static or kinematic body joins nothing: it can be touched by any number of islands,
-        // which never exchange an impulse through it.
         let mut node: rustc_hash::FxHashMap<u32, usize> = rustc_hash::FxHashMap::default();
         node.reserve(manifolds.len());
-        let mut parent: Vec<usize> = Vec::new();
-        let mut rank: Vec<u8> = Vec::new();
-        let mut node_of = |body: BodyHandle, parent: &mut Vec<usize>, rank: &mut Vec<u8>| -> Option<usize> {
+        let node_of = |body: BodyHandle, parent: &mut Vec<usize>, rank: &mut Vec<u8>| -> Option<usize> {
             if !entity_is_dynamic(body) {
                 return None;
             }
@@ -81,6 +72,53 @@ impl IslandManager {
                 parent.len() - 1
             }))
         };
+        Self::build(manifolds.iter().map(|m| [m.entity_a, m.entity_b]), manifolds.len(), joints, node_of)
+    }
+
+    /// [`build_islands_with_joints`](Self::build_islands_with_joints) for manifolds and joints
+    /// given by their bodies' indices in the world's rows (`ends`, one pair a manifold, as the
+    /// narrow phase found them): the same islands, in the same order, with no id looked up —
+    /// two hash lookups a manifold end, on the thread the whole solve waits for.
+    pub(crate) fn build_islands_by_index(
+        ends: &[[u32; 2]],
+        joints: &[Option<(u32, u32)>],
+        is_dynamic: impl Fn(usize) -> bool,
+        bodies: usize,
+    ) -> (Vec<Island>, Vec<Option<usize>>) {
+        let mut node = vec![u32::MAX; bodies];
+        let node_of = |body: u32, parent: &mut Vec<usize>, rank: &mut Vec<u8>| -> Option<usize> {
+            if !is_dynamic(body as usize) {
+                return None;
+            }
+            let slot = &mut node[body as usize];
+            if *slot == u32::MAX {
+                parent.push(parent.len());
+                rank.push(0);
+                *slot = (parent.len() - 1) as u32;
+            }
+            Some(*slot as usize)
+        };
+        Self::build(ends.iter().copied(), ends.len(), joints, node_of)
+    }
+
+    /// The union-find both builders share. `node_of` names a body's node, making it on first
+    /// sight. How the nodes are numbered changes nothing: an island is a connected set of
+    /// manifolds, and the islands come in the order of their first manifolds.
+    fn build<E: Copy>(
+        ends: impl Iterator<Item = [E; 2]>,
+        manifold_count: usize,
+        joints: &[Option<(E, E)>],
+        mut node_of: impl FnMut(E, &mut Vec<usize>, &mut Vec<u8>) -> Option<usize>,
+    ) -> (Vec<Island>, Vec<Option<usize>>) {
+        if manifold_count == 0 {
+            return (Vec::new(), vec![None; joints.len()]);
+        }
+
+        // ── Union-find over the dynamic bodies ────────────────────────────────
+        // A static or kinematic body joins nothing: it can be touched by any number of islands,
+        // which never exchange an impulse through it.
+        let mut parent: Vec<usize> = Vec::new();
+        let mut rank: Vec<u8> = Vec::new();
 
         fn find(parent: &mut [usize], mut i: usize) -> usize {
             while parent[i] != i {
@@ -108,10 +146,10 @@ impl IslandManager {
         }
 
         // Each manifold's dynamic node (either body's: they are joined), or none.
-        let mut manifold_node: Vec<Option<usize>> = Vec::with_capacity(manifolds.len());
-        for m in manifolds {
-            let a = node_of(m.entity_a, &mut parent, &mut rank);
-            let b = node_of(m.entity_b, &mut parent, &mut rank);
+        let mut manifold_node: Vec<Option<usize>> = Vec::with_capacity(manifold_count);
+        for [a, b] in ends {
+            let a = node_of(a, &mut parent, &mut rank);
+            let b = node_of(b, &mut parent, &mut rank);
             if let (Some(a), Some(b)) = (a, b) {
                 union(&mut parent, &mut rank, a, b);
             }
@@ -132,7 +170,7 @@ impl IslandManager {
 
         // ── Group the manifolds by root ───────────────────────────────────────
         // A manifold with no dynamic body (two kinematic bodies, say) is an island of its own.
-        let n = manifolds.len();
+        let n = manifold_count;
         // Islands in the order of their first manifold, each one's manifolds in order — a fixed
         // order from process to process, which the solve, its warm start and debugging rely on
         // (islands are disjoint, so the physics would not care). A root's island is opened when its
@@ -196,6 +234,34 @@ impl IslandManager {
                     .collect()
             })
             .collect()
+    }
+
+    /// [`split_manifolds`](Self::split_manifolds) with each manifold's bodies' indices
+    /// (`build_islands_by_index`'s `ends`) carried along: the same groups in the same order. Each
+    /// manifold moves once, straight into its island's list.
+    pub(crate) fn split_by_island(
+        manifolds: Vec<ContactManifold>,
+        ends: Vec<[u32; 2]>,
+        islands: &[Island],
+    ) -> Vec<(Vec<ContactManifold>, Vec<[u32; 2]>)> {
+        let mut island_of = vec![usize::MAX; manifolds.len()];
+        for (k, island) in islands.iter().enumerate() {
+            for &i in &island.manifold_indices {
+                island_of[i] = k;
+            }
+        }
+        let mut groups: Vec<(Vec<ContactManifold>, Vec<[u32; 2]>)> = islands
+            .iter()
+            .map(|island| (Vec::with_capacity(island.manifold_indices.len()), Vec::with_capacity(island.manifold_indices.len())))
+            .collect();
+        // In manifold order, which is each island's (its `manifold_indices` are ascending).
+        for ((island, manifold), end) in island_of.into_iter().zip(manifolds).zip(ends) {
+            if let Some((group, group_ends)) = groups.get_mut(island) {
+                group.push(manifold);
+                group_ends.push(end);
+            }
+        }
+        groups
     }
 
     /// Decide whether the island may go to sleep.
@@ -365,6 +431,55 @@ mod tests {
             sliding: false,
         });
         m
+    }
+
+    /// The builder the step uses (`build_islands_by_index`, bodies by row) and the one by id give
+    /// the same islands in the same order, the same island for each joint, and the same groups
+    /// once split — over a scrambled contact graph with static bodies, joints and a broken one.
+    #[test]
+    fn the_islands_by_index_are_the_islands_by_id() {
+        // Body `i` sits at row `(i * 7) % 40`, so rows and ids disagree; ids 0..5 are static.
+        let row = |id: u32| (id * 7) % 40;
+        let is_dyn = |e: BodyHandle| e.id() >= 5;
+        let mut seed = 12345u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 16) % 40
+        };
+        let manifolds: Vec<ContactManifold> = (0..22)
+            .map(|_| {
+                let (a, b) = (next(), next());
+                make_manifold(a, if a == b { (b + 1) % 40 } else { b })
+            })
+            .collect();
+        let joints_by_id = [Some((3u32, 17u32)), None, Some((22, 9)), Some((1, 2)), Some((38, 30))];
+        let pair = |j: &Option<(u32, u32)>| j.map(|(a, b)| (BodyHandle::from_id(a), BodyHandle::from_id(b)));
+        let joints: Vec<_> = joints_by_id.iter().map(pair).collect();
+        let (by_id, joint_by_id) = IslandManager::build_islands_with_joints(&manifolds, &joints, &is_dyn);
+
+        let ends: Vec<[u32; 2]> = manifolds.iter().map(|m| [row(m.entity_a.id()), row(m.entity_b.id())]).collect();
+        let joint_rows: Vec<_> = joints_by_id.iter().map(|j| j.map(|(a, b)| (row(a), row(b)))).collect();
+        let dynamic_row = |r: usize| (0..40u32).any(|id| row(id) as usize == r && id >= 5);
+        let (by_index, joint_by_index) = IslandManager::build_islands_by_index(&ends, &joint_rows, dynamic_row, 40);
+
+        assert!(by_id.len() > 3, "the graph should break into several islands, got {}", by_id.len());
+        assert_eq!(
+            by_id.iter().map(|i| i.manifold_indices.clone()).collect::<Vec<_>>(),
+            by_index.iter().map(|i| i.manifold_indices.clone()).collect::<Vec<_>>()
+        );
+        assert_eq!(joint_by_id, joint_by_index);
+
+        let pairs_of = |groups: Vec<Vec<ContactManifold>>| -> Vec<Vec<(u32, u32)>> {
+            groups.into_iter().map(|g| g.iter().map(|m| (m.entity_a.id(), m.entity_b.id())).collect()).collect()
+        };
+        let split_by_id = pairs_of(IslandManager::split_manifolds(manifolds.clone(), &by_id));
+        let split = IslandManager::split_by_island(manifolds, ends, &by_index);
+        for (group, group_ends) in &split {
+            for (m, end) in group.iter().zip(group_ends) {
+                assert_eq!(*end, [row(m.entity_a.id()), row(m.entity_b.id())], "an end travelled with another manifold");
+            }
+        }
+        assert_eq!(split_by_id, pairs_of(split.into_iter().map(|(g, _)| g).collect()));
     }
 
     #[test]
