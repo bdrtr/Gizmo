@@ -162,6 +162,7 @@ mod tests {
             local_point_b: Vec3::ZERO,
             normal_impulse: 20.0,
             tangent_impulse: Vec3::ZERO,
+            sliding: false,
         });
 
         world.collision_events.push(event);
@@ -195,6 +196,7 @@ mod tests {
             local_point_b: Vec3::ZERO,
             normal_impulse: 200.0, // High impulse
             tangent_impulse: Vec3::ZERO,
+            sliding: false,
         });
 
         world.collision_events.push(event);
@@ -237,6 +239,7 @@ mod tests {
             local_point_b: Vec3::ZERO,
             normal_impulse: 60.0, // > 50.0 fallback
             tangent_impulse: Vec3::ZERO,
+            sliding: false,
         });
 
         world.collision_events.push(event);

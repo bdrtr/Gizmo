@@ -38,15 +38,19 @@ impl JointSolver {
         let v_a = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
         let v_b = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
 
-        // Force calculation
-        // direction points from A to B
-        let spring_force = data.stiffness * (length - data.rest_length); // Positive if stretched (pulls together)
-        let relative_vel = (v_b - v_a).dot(direction); // Positive if B is moving away from A
-        let damping_force = data.damping * relative_vel;
-
-        // Total force pulling them together
-        let pull_force = spring_force + damping_force;
-        let pull_impulse = pull_force * dt;
+        // The impulse pulling them together, solved implicitly (`implicit_spring_impulse`): the
+        // stretch is positive when B is beyond the rest length, the rate when B moves away from A.
+        let relative_vel = (v_b - v_a).dot(direction);
+        let k_inv = Self::linear_row_k_inv(rigid_bodies, transforms, (idx_a, idx_b), (r_a, r_b), direction);
+        let pull_impulse = Self::implicit_spring_impulse(
+            data.stiffness,
+            data.damping,
+            length - data.rest_length,
+            relative_vel,
+            0.0,
+            k_inv,
+            dt,
+        );
 
         // Hard limits (optional max_length)
         let clamped_impulse = if length <= data.min_length && pull_impulse > 0.0 {

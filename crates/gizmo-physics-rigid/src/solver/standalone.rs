@@ -171,9 +171,10 @@ impl ConstraintSolver {
             return;
         }
 
-        // Coulomb bütçesi: duran temas μ_s, kayan temas μ_d (bkz. `friction_limit`). `tang_mag`
-        // zaten bu temasın teğet hızı, yani durum testi burada bedava.
-        let limit = self.friction_limit(tang_mag, static_friction, dynamic_friction, normal_impulse);
+        // Coulomb budget: one shot, no step before it, so the contact's speed now decides whether
+        // it is sliding (`friction_limit`).
+        let sliding = tang_mag > self.static_friction_velocity_threshold;
+        let limit = self.friction_limit(sliding, static_friction, dynamic_friction, normal_impulse);
 
         let delta_t = -tang_mag / k;
 

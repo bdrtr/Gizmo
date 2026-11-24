@@ -11,10 +11,20 @@ const CELLS: usize = 3;
 
 /// The fluid's push on one body this step.
 pub(crate) struct FluidPush {
-    /// Net force, newtons.
+    /// Net buoyancy, newtons.
     pub force: Vec3,
-    /// Net torque about the centre of mass, N·m.
+    /// Net buoyancy torque about the centre of mass, N·m.
     pub torque: Vec3,
+    /// Net drag at the velocities it was asked at, newtons.
+    pub drag_force: Vec3,
+    /// Net drag torque about the centre of mass, N·m.
+    pub drag_torque: Vec3,
+    /// The drag linearised about those velocities, `Σ κ` over the wet cells with
+    /// `κ = (linear + quadratic·|v|)·wet share`, N·s/m: what the step divides the drag by to take it
+    /// implicitly (`PhysicsWorld::velocity_integration_step`).
+    pub drag_rate: f32,
+    /// The same for turning, `Σ κ·|r|²` with `r` from the centre of mass, N·m·s.
+    pub drag_rate_turn: f32,
 }
 
 impl ZoneShape {
@@ -72,8 +82,18 @@ impl FluidZone {
             if share <= 0.0 {
                 return None;
             }
-            let force = -gravity * (volume * share * self.density) + self.drag(linear) * share;
-            return Some(FluidPush { force, torque: (position - com).cross(force) });
+            let force = -gravity * (volume * share * self.density);
+            let drag_force = self.drag(linear) * share;
+            let kappa = self.drag_rate(linear) * share;
+            let r = position - com;
+            return Some(FluidPush {
+                force,
+                torque: r.cross(force),
+                drag_force,
+                drag_torque: r.cross(drag_force),
+                drag_rate: kappa,
+                drag_rate_turn: kappa * r.length_squared(),
+            });
         }
 
         // The body's local bounds, centred where they are (a compound or a hull need not be
@@ -94,6 +114,7 @@ impl FluidZone {
 
         let mut force = Vec3::ZERO;
         let mut torque = Vec3::ZERO;
+        let (mut drag_force, mut drag_torque, mut drag_rate, mut drag_rate_turn) = (Vec3::ZERO, Vec3::ZERO, 0.0, 0.0);
         let mut any = false;
         for i in 0..CELLS {
             for j in 0..CELLS {
@@ -118,15 +139,26 @@ impl FluidZone {
                         continue;
                     }
                     any = true;
-                    let v = linear + angular.cross(p - com);
-                    let f = -gravity * (cell_volume * share * self.density)
-                        + self.drag(v) * (share * weight);
+                    let r = p - com;
+                    let v = linear + angular.cross(r);
+                    let f = -gravity * (cell_volume * share * self.density);
                     force += f;
-                    torque += (p - com).cross(f);
+                    torque += r.cross(f);
+                    let d = self.drag(v) * (share * weight);
+                    drag_force += d;
+                    drag_torque += r.cross(d);
+                    let kappa = self.drag_rate(v) * (share * weight);
+                    drag_rate += kappa;
+                    drag_rate_turn += kappa * r.length_squared();
                 }
             }
         }
-        any.then_some(FluidPush { force, torque })
+        any.then_some(FluidPush { force, torque, drag_force, drag_torque, drag_rate, drag_rate_turn })
+    }
+
+    /// How fast the drag grows with speed at `v`, linearised: `linear + quadratic·|v|`, N·s/m.
+    fn drag_rate(&self, v: Vec3) -> f32 {
+        self.linear_drag + self.quadratic_drag * v.length()
     }
 
     /// The drag force on the whole body moving at `v`, before the submerged share.

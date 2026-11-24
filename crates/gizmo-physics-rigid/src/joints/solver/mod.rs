@@ -729,6 +729,56 @@ impl JointSolver {
         point - global_com
     }
 
+    /// The impulse a spring-damper gives over one step of `dt`, solved **implicitly** (one backward-
+    /// Euler step): the force is the one at the END of the step, where the error has moved on by the
+    /// velocity the impulse leaves. With `k` the stiffness, `c` the damping, `x` the error
+    /// (`x_target` subtracted), `v` its rate, `v_target` the drive's target rate and `k_inv` the row's
+    /// inverse effective mass:
+    ///
+    /// `λ = dt·(k·x + c·(v − v_target) + k·dt·v) / (1 + k_inv·dt·(c + k·dt))`
+    ///
+    /// The impulse reduces `v` by `k_inv·λ`. Unconditionally stable: the explicit `(k·x + c·v)·dt` it
+    /// replaced (2026-11-24) diverges once `(ω·dt)² + 2·c·k_inv·dt > 4`, with `ω² = k·k_inv` — met at
+    /// 240 Hz by every spring in the engine's tests, but a stiff spring tuned there, a heavily damped
+    /// light pair or a ragdoll's 1000 N/m bone blew up at 60 Hz. As `dt → 0` it is the explicit form.
+    #[inline]
+    pub(crate) fn implicit_spring_impulse(k: f32, c: f32, x: f32, v: f32, v_target: f32, k_inv: f32, dt: f32) -> f32 {
+        let c_eff = c + k * dt;
+        dt * (k * x + c * (v - v_target) + k * dt * v) / (1.0 + k_inv * dt * c_eff)
+    }
+
+    /// The inverse effective mass of a linear row along the unit `n` at the lever arms `r_a`, `r_b`:
+    /// how much the row's relative velocity changes per unit impulse. Only the dynamic ends count.
+    pub(crate) fn linear_row_k_inv(
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        (idx_a, idx_b): (usize, usize),
+        (r_a, r_b): (Vec3, Vec3),
+        n: Vec3,
+    ) -> f32 {
+        let end = |idx: usize, r: Vec3| {
+            let rb = &rigid_bodies[idx];
+            if !rb.is_dynamic() {
+                return 0.0;
+            }
+            let rn = r.cross(n);
+            rb.inv_mass() + rb.inv_world_inertia_tensor(transforms[idx].rotation).mul_vec3(rn).dot(rn)
+        };
+        end(idx_a, r_a) + end(idx_b, r_b)
+    }
+
+    /// The inverse effective mass of an angular row about the unit `axis`. Only the dynamic ends count.
+    pub(crate) fn angular_row_k_inv(rigid_bodies: &[RigidBody], transforms: &[Transform], (idx_a, idx_b): (usize, usize), axis: Vec3) -> f32 {
+        let end = |idx: usize| {
+            let rb = &rigid_bodies[idx];
+            if !rb.is_dynamic() {
+                return 0.0;
+            }
+            rb.inv_world_inertia_tensor(transforms[idx].rotation).mul_vec3(axis).dot(axis)
+        };
+        end(idx_a) + end(idx_b)
+    }
+
     /// Box2D-v3 soft-constraint coefficients of a compliant row:
     /// `(bias_rate, mass_scale, impulse_scale)`.
     ///

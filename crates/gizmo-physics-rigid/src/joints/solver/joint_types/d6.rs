@@ -159,10 +159,17 @@ impl JointSolver {
             let v_b = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
             let rel_vel = (v_b - v_a).dot(axis_w);
             let limit = if dr.max_force > 0.0 { dr.max_force } else { f32::INFINITY };
-            let force = (dr.stiffness * (offset - dr.target_position)
-                + dr.damping * (rel_vel - dr.target_velocity))
-                .clamp(-limit, limit);
-            let impulse_mag = force * dt;
+            let k_inv = Self::linear_row_k_inv(rigid_bodies, transforms, (idx_a, idx_b), (r_a, r_b), axis_w);
+            let impulse_mag = Self::implicit_spring_impulse(
+                dr.stiffness,
+                dr.damping,
+                offset - dr.target_position,
+                rel_vel,
+                dr.target_velocity,
+                k_inv,
+                dt,
+            )
+            .clamp(-limit * dt, limit * dt);
             if impulse_mag.abs() < 1e-10 {
                 continue;
             }
@@ -201,10 +208,17 @@ impl JointSolver {
             let axis_w = rot_a * axis_local;
             let ang_rel = (velocities[idx_b].angular - velocities[idx_a].angular).dot(axis_w);
             let limit = if dr.max_force > 0.0 { dr.max_force } else { f32::INFINITY };
-            let torque = (dr.stiffness * (angle - dr.target_position)
-                + dr.damping * (ang_rel - dr.target_velocity))
-                .clamp(-limit, limit);
-            let torque_impulse = -torque * dt;
+            let k_inv = Self::angular_row_k_inv(rigid_bodies, transforms, (idx_a, idx_b), axis_w);
+            let torque_impulse = -Self::implicit_spring_impulse(
+                dr.stiffness,
+                dr.damping,
+                angle - dr.target_position,
+                ang_rel,
+                dr.target_velocity,
+                k_inv,
+                dt,
+            )
+            .clamp(-limit * dt, limit * dt);
             if torque_impulse.abs() < 1e-12 {
                 continue;
             }

@@ -677,6 +677,7 @@ impl Gjk {
             local_point_b: point - pos_b,
             normal_impulse: 0.0,
             tangent_impulse: Vec3::ZERO,
+            sliding: false,
         })
     }
 

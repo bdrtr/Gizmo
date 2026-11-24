@@ -42,6 +42,9 @@ pub(super) struct Prepared {
     cid: usize,
     acc_n: f32,
     acc_t: Vec3,
+    /// The contact's state at the end of the last step (`ContactPoint::sliding`): which friction
+    /// budget this step's sweeps use.
+    sliding: bool,
     /// Accumulated rolling (torque) impulse, kept for the same reason `acc_t` is: the
     /// Coulomb bound is on the *total* impulse over the sweep, not on each increment.
     acc_r: Vec3,
@@ -528,6 +531,7 @@ impl ConstraintSolver {
                     cid,
                     acc_n: ct.normal_impulse,
                     acc_t: ct.tangent_impulse,
+                    sliding: ct.sliding,
                     // Not warm-started from the contact: the manifold carries no rolling
                     // impulse field, so the row starts cold each substep. Rolling resistance
                     // is a slow, dissipative effect rather than a stiff constraint, so the
@@ -797,10 +801,9 @@ impl ConstraintSolver {
             } else {
                 acc_t2
             };
-            // Coulomb bütçesi: duran temas μ_s, kayan temas μ_d (bkz. `friction_limit`).
-            let tang_speed = (rel2 - p.normal * rel2.dot(p.normal)).length();
+            // Coulomb budget: μ_s for a contact at rest at the last step's end, μ_d for one sliding (`friction_limit`).
             let limit =
-                self.friction_limit(tang_speed, p.static_friction, p.friction, new_acc_n);
+                self.friction_limit(p.sliding, p.static_friction, p.friction, new_acc_n);
             let mag = (new1 * new1 + new2 * new2).sqrt();
             if mag > limit && mag > 1e-12 {
                 let s = limit / mag;
@@ -954,9 +957,8 @@ impl ConstraintSolver {
             } else {
                 acc_t2
             };
-            // Coulomb bütçesi: duran temas μ_s, kayan temas μ_d (bkz. `friction_limit`).
-            let tang_speed = (rel2 - p.normal * rel2.dot(p.normal)).length();
-            let limit = self.friction_limit(tang_speed, p.static_friction, p.friction, p.acc_n);
+            // Coulomb budget: μ_s for a contact at rest at the last step's end, μ_d for one sliding (`friction_limit`).
+            let limit = self.friction_limit(p.sliding, p.static_friction, p.friction, p.acc_n);
             let mag = (new1 * new1 + new2 * new2).sqrt();
             if mag > limit && mag > 1e-12 {
                 let s = limit / mag;
@@ -1077,9 +1079,8 @@ impl ConstraintSolver {
             } else {
                 acc_t2
             };
-            // Coulomb bütçesi: duran temas μ_s, kayan temas μ_d (bkz. `friction_limit`).
-            let tang_speed = (rel2 - p.normal * rel2.dot(p.normal)).length();
-            let limit = self.friction_limit(tang_speed, p.static_friction, p.friction, p.acc_n);
+            // Coulomb budget: μ_s for a contact at rest at the last step's end, μ_d for one sliding (`friction_limit`).
+            let limit = self.friction_limit(p.sliding, p.static_friction, p.friction, p.acc_n);
             let mag = (new1 * new1 + new2 * new2).sqrt();
             if mag > limit && mag > 1e-12 {
                 let s = limit / mag;

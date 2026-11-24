@@ -178,6 +178,8 @@ impl PhysicsWorld {
                         let com = pos + transform.rotation * rb.center_of_mass;
                         let mut force = gizmo_math::Vec3::ZERO;
                         let mut torque = gizmo_math::Vec3::ZERO;
+                        let (mut drag_force, mut drag_torque) = (gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ZERO);
+                        let (mut drag_rate, mut drag_rate_turn) = (0.0f32, 0.0f32);
                         for zone in fluid_zones {
                             if let Some(push) = zone.push_on(
                                 collider,
@@ -190,10 +192,23 @@ impl PhysicsWorld {
                             ) {
                                 force += push.force;
                                 torque += push.torque;
+                                drag_force += push.drag_force;
+                                drag_torque += push.drag_torque;
+                                drag_rate += push.drag_rate;
+                                drag_rate_turn += push.drag_rate_turn;
                             }
                         }
-                        vel.linear += force * rb.inv_mass() * dt;
-                        vel.angular += rb.inv_world_inertia_tensor(transform.rotation) * torque * dt;
+                        // Buoyancy explicitly; the drag implicitly, linearised about this velocity:
+                        // a backward-Euler step divides it by `1 + κ·dt/m`, so it brings a body to
+                        // rest at any step length and never past it. Explicit, it overshot once
+                        // `κ·dt/m > 1` and diverged past 2 — a 2.4 kg crate in a pool of linear drag
+                        // 300 was 0.52 at 240 Hz and 2.08 at 60 (2026-11-24). Turning, the same with
+                        // `Σκ·r²` against the largest inverse inertia, the most a drag torque can spin.
+                        let inv_m = rb.inv_mass();
+                        let inv_i = rb.inv_world_inertia_tensor(transform.rotation);
+                        let inv_i_max = inv_i.x_axis.x.max(inv_i.y_axis.y).max(inv_i.z_axis.z);
+                        vel.linear += (force + drag_force / (1.0 + drag_rate * inv_m * dt)) * inv_m * dt;
+                        vel.angular += inv_i * (torque + drag_torque / (1.0 + drag_rate_turn * inv_i_max * dt)) * dt;
                     }
 
                     // ── Velocity integration ──────────────────────────────
@@ -575,6 +590,8 @@ impl PhysicsWorld {
         // Warm-start here, on the worker. Triggers carry no impulses, so the same
         // condition the sequential loop used still gates it.
         let mut warm = None;
+        // Which contacts took their state from the pair's last substep (a bit each).
+        let mut carried = 0u64;
         if !collider_a.is_trigger && !collider_b.is_trigger {
             if let Some((_, Some(old_manifold))) =
                 self.contact_cache.get(&(entity_a, entity_b))
@@ -582,13 +599,40 @@ impl PhysicsWorld {
                 warm = Some(old_manifold.lifetime + 1);
                 let ws_tol_sq =
                     self.solver.warm_start_match_tolerance.powi(2);
-                for contact in contacts.iter_mut() {
+                // A point with no match in a pair that was already touching takes the pair's state: a
+                // sliding box's points move past the matching tolerance every substep above 4.8 m/s at
+                // 240 Hz, and a piece rocking on its edge makes new ones — neither starts afresh.
+                let pair_sliding = old_manifold.contacts.iter().any(|o| o.sliding);
+                for (k, contact) in contacts.iter_mut().enumerate() {
                     if let Some(old) = old_manifold.contacts.iter().find(|o| {
                         (o.point - contact.point).length_squared() < ws_tol_sq
                     }) {
                         contact.normal_impulse = old.normal_impulse;
                         contact.tangent_impulse = old.tangent_impulse;
+                        contact.sliding = old.sliding;
+                    } else {
+                        contact.sliding = pair_sliding;
                     }
+                    carried |= 1 << k;
+                }
+            }
+        }
+        // A pair touching for the first time is sliding when its points slip past each other at the
+        // velocity the last substep ended with (`pre_*`, before this one's gravity, whose `g·dt` along
+        // a slope would make a crate set down at rest look like a slide).
+        if !collider_a.is_trigger && !collider_b.is_trigger {
+            let threshold = self.solver.static_friction_velocity_threshold;
+            let point_velocity = |idx: usize, p: Vec3| {
+                let (v, t, rb) = (&self.velocities[idx], &self.transforms[idx], &self.rigid_bodies[idx]);
+                if rb.is_static() {
+                    return Vec3::ZERO;
+                }
+                v.pre_linear + v.pre_angular.cross(p - (t.position + t.rotation * rb.center_of_mass))
+            };
+            for (k, contact) in contacts.iter_mut().enumerate() {
+                if carried & (1 << k) == 0 {
+                    let rel = point_velocity(idx_b, contact.point) - point_velocity(idx_a, contact.point);
+                    contact.sliding = (rel - contact.normal * rel.dot(contact.normal)).length() > threshold;
                 }
             }
         }

@@ -116,6 +116,7 @@ fn island_build_order_is_deterministic_sorted() {
             local_point_b: Vec3::ZERO,
             normal_impulse: 0.0,
             tangent_impulse: Vec3::ZERO,
+            sliding: false,
         });
         m
     };

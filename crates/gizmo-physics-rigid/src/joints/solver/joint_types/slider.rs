@@ -340,9 +340,16 @@ impl JointSolver {
         let v_b = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
         let rel_vel = (v_b - v_a).dot(axis_w);
 
-        let impulse_mag = (data.spring_stiffness * (along - data.spring_rest_position)
-            + data.spring_damping * rel_vel)
-            * dt;
+        let k_inv = Self::linear_row_k_inv(rigid_bodies, transforms, (idx_a, idx_b), (r_a, r_b), axis_w);
+        let impulse_mag = Self::implicit_spring_impulse(
+            data.spring_stiffness,
+            data.spring_damping,
+            along - data.spring_rest_position,
+            rel_vel,
+            0.0,
+            k_inv,
+            dt,
+        );
         if impulse_mag.abs() < 1e-10 {
             return;
         }

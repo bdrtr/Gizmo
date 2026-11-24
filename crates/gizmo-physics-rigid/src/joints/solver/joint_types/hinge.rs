@@ -215,9 +215,16 @@ impl JointSolver {
         // Restoring torque toward rest_angle (+ damping). Negative sign so that angle > rest
         // yields a torque that DECREASES the angle. Sign convention matches the hinge motor:
         // a positive impulse about axis_w increases the relative angle.
-        let torque_impulse = -(data.torsional_stiffness * (data.current_angle - data.rest_angle)
-            + data.torsional_damping * rel_ang_vel)
-            * dt;
+        let k_inv = Self::angular_row_k_inv(rigid_bodies, transforms, (idx_a, idx_b), axis_w);
+        let torque_impulse = -Self::implicit_spring_impulse(
+            data.torsional_stiffness,
+            data.torsional_damping,
+            data.current_angle - data.rest_angle,
+            rel_ang_vel,
+            0.0,
+            k_inv,
+            dt,
+        );
         if torque_impulse.abs() < 1e-12 {
             return;
         }

@@ -41,6 +41,11 @@ pub struct ContactPoint {
     pub normal_impulse: f32,
     /// Accumulated tangential impulse — reused for warm-starting.
     pub tangent_impulse: Vec3,
+    /// Whether the contact was sliding when the last step that solved it ended: its tangential speed
+    /// then above the solver's static-friction threshold. It decides static or dynamic friction for
+    /// the next step's sweeps, and travels with the warm-start impulses. `false` for a new contact.
+    #[serde(default)]
+    pub sliding: bool,
 }
 
 // ============================================================================

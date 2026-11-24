@@ -107,8 +107,13 @@ fn debris_comes_to_rest_on_its_own_shape() {
     let fastest = pieces.iter().map(|p| p.0).fold(0.0, f32::max);
     let deepest = pieces.iter().map(|p| p.1).fold(f32::MAX, f32::min);
     let farthest = pieces.iter().map(|p| p.2).fold(0.0, f32::max);
-    assert!(fastest < 0.1, "at rest after five seconds: the fastest piece moves at {fastest:.3} m/s");
-    assert!(deepest > -0.025, "a drawn cell is on the floor, not in it: {deepest:.3} m");
+    // Asleep, every one, and a few millimetres in at most. Until 2026-11-24 a hull against a box had
+    // one contact point a step (GJK/EPA), and the pieces rocked for ever: none slept in ten seconds,
+    // all still turning, sunk 1–7 cm — the bounds here were 0.1 m/s and 2.5 cm, and passed by luck.
+    let awake = world.query::<(&Debris, &RigidBody)>().iter().filter(|(_, rb)| !rb.is_sleeping).count();
+    assert_eq!(awake, 0, "every piece asleep after five seconds; the fastest moves at {fastest:.3} m/s");
+    assert!(fastest < 1e-3, "at rest after five seconds: the fastest piece moves at {fastest:.3} m/s");
+    assert!(deepest > -0.01, "a drawn cell is on the floor, not in it: {deepest:.3} m");
     assert!(farthest < 5.0, "near where it broke: {farthest:.1} m");
 }
 

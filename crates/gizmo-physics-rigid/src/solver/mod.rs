@@ -422,6 +422,13 @@ pub struct ConstraintSolver {
     /// The budget is now chosen by the contact's ACTUAL tangential speed (PhysX's `PxMaterial`
     /// model): below the threshold static, above it dynamic. The default is 1 cm/s — everything
     /// a game would call "at rest" is below it, and nothing genuinely sliding is.
+    ///
+    /// **The speed the step ENDED with, decided once for the next step** (`ContactPoint::sliding`,
+    /// 2026-11-24). It was the speed inside each sweep, which still holds the step's unbalanced
+    /// tangential acceleration `a·dt`: after a sweep that ended on the `μ_d` budget, `g·dt·(sinθ −
+    /// μ_d·cosθ)` — 0.0027 m/s on a 30° slope at 240 Hz, under the threshold, but 0.011 at 60 Hz,
+    /// over it, so the contact paid `μ_d` on every sweep and slid on a slope `μ_s` holds. The
+    /// state at the end of a step is a rest or a slide, whatever the step's length.
     pub static_friction_velocity_threshold: f32,
 
     /// Warm-start matching tolerance (m): the previous substep's contact impulse is carried to a
@@ -607,9 +614,9 @@ impl ConstraintSolver {
     }
     /// The Coulomb impulse budget for one contact point this sweep.
     ///
-    /// `μ_s·λ_n` while the contact is effectively at rest, `μ_d·λ_n` once it is genuinely
-    /// sliding — the decision comes from `tangential_speed`, not from whether the demanded
-    /// impulse happened to exceed the static cap on this sweep. See
+    /// `μ_s·λ_n` while the contact is at rest, `μ_d·λ_n` once it is genuinely sliding — `sliding`,
+    /// the contact's state at the end of the last step ([`record_sliding`](Self::record_sliding)),
+    /// not whether the demanded impulse happened to exceed the static cap on this sweep. See
     /// [`static_friction_velocity_threshold`](Self::static_friction_velocity_threshold) for what
     /// the old test cost (a crate on a 28° slope left the plate) and why this is the fix.
     ///
@@ -620,12 +627,12 @@ impl ConstraintSolver {
     #[inline]
     pub(crate) fn friction_limit(
         &self,
-        tangential_speed: f32,
+        sliding: bool,
         static_friction: f32,
         dynamic_friction: f32,
         normal_impulse: f32,
     ) -> f32 {
-        let mu = if tangential_speed > self.static_friction_velocity_threshold {
+        let mu = if sliding {
             dynamic_friction
         } else {
             static_friction
@@ -734,6 +741,7 @@ impl ConstraintSolver {
                 dt,
                 between,
             );
+            self.record_sliding(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
             return SolveStats {
                 island_depth,
                 iterations: n_iterations,
@@ -752,6 +760,7 @@ impl ConstraintSolver {
             dt,
             between,
         );
+        self.record_sliding(manifolds, rigid_bodies, transforms, velocities, entity_index_map);
         // The split-impulse path sweeps `self.iterations` (see the loop above) and has never
         // consumed the adaptive count, so reporting `n_iterations` here would be a lie about
         // work that was not done. An island reaches this path only by containing a CCD-enabled
@@ -759,6 +768,37 @@ impl ConstraintSolver {
         SolveStats {
             island_depth,
             iterations: self.iterations,
+        }
+    }
+
+    /// Each contact's state at the end of the solve, for the next step's friction
+    /// ([`friction_limit`](Self::friction_limit)): sliding when the bodies' points slip past each
+    /// other faster than [`static_friction_velocity_threshold`](Self::static_friction_velocity_threshold)
+    /// and the contact was sliding already or static friction gave all it had this step.
+    fn record_sliding(
+        &self,
+        manifolds: &mut [ContactManifold],
+        rigid_bodies: &[RigidBody],
+        transforms: &[Transform],
+        velocities: &[Velocity],
+        entity_index_map: &crate::world::EntityIndexMap,
+    ) {
+        for m in manifolds.iter_mut() {
+            let Some(pair) = ContactPair::of(m, rigid_bodies, transforms, entity_index_map) else {
+                continue;
+            };
+            let (va, vb) = (&velocities[pair.idx_a], &velocities[pair.idx_b]);
+            for c in m.contacts.iter_mut() {
+                let rel = (vb.linear + vb.angular.cross(c.point - pair.com_b)) - (va.linear + va.angular.cross(c.point - pair.com_a));
+                let slip = rel - c.normal * rel.dot(c.normal);
+                // Coulomb's hysteresis: a contact at rest starts to slide only when static friction
+                // gave all it had — its tangential impulse at the `μ_s·λ_n` cone — and one sliding goes
+                // on until its points stop. A resting contact whose points move a little without the
+                // static budget running out (a piece rocking on its edge) stays at rest; with no such
+                // test, one that slipped past 1 cm/s for a step paid `μ_d` from then on and crept.
+                let gave_all = c.tangent_impulse.length() >= 0.99 * m.static_friction * c.normal_impulse.max(0.0);
+                c.sliding = slip.length() > self.static_friction_velocity_threshold && (c.sliding || gave_all);
+            }
         }
     }
 
@@ -1205,11 +1245,10 @@ impl ConstraintSolver {
             acc_t2
         };
 
-        // Dairesel Coulomb koni: bütçe temasın teğet hızından geliyor (duran temas
-        // μ_s, gerçekten kayan temas μ_d) — bkz. `friction_limit`.
-        let tang_speed = (rel2 - normal * rel2.dot(normal)).length();
+        // The circular Coulomb cone: μ_s for a contact at rest at the last step's end, μ_d for one
+        // sliding — see `friction_limit`.
         let limit = self.friction_limit(
-            tang_speed,
+            contact.sliding,
             static_friction,
             friction,
             new_acc_n,

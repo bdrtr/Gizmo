@@ -285,3 +285,140 @@ fn clip_to_half_space(polygon: &[Vec3], axis: Vec3, offset: f32) -> arrayvec::Ar
     }
     out
 }
+
+// ============================================================================
+//  Polyhedra — a box or a convex hull against a convex hull: clipped faces
+// ============================================================================
+
+/// One face of a polyhedral shape, in world space: its outward unit normal, its plane
+/// (`normal · x = offset` on the face) and its corners, counter-clockwise seen from outside.
+pub(super) struct PolyFace {
+    normal: Vec3,
+    offset: f32,
+    corners: Vec<Vec3>,
+}
+
+/// The face of a box or a convex hull whose outward normal is most aligned with `dir`, or `None` for
+/// another shape or a hull with no faces (one built from a degenerate point set).
+///
+/// A hull's flat face is several of its triangles in one plane: the face is every vertex in the
+/// best triangle's plane, so a box-like hull gives its four corners and not one triangle's three.
+pub(super) fn polyhedral_face(shape: &ColliderShape, pos: Vec3, rot: Quat, dir: Vec3) -> Option<PolyFace> {
+    let local_dir = rot.inverse() * dir;
+    let (local_n, mut local) = match shape {
+        ColliderShape::Box(b) => {
+            let h = b.half_extents;
+            let a = local_dir.abs();
+            let k = if a.x >= a.y && a.x >= a.z { 0 } else if a.y >= a.z { 1 } else { 2 };
+            let s = if local_dir[k] >= 0.0 { 1.0 } else { -1.0 };
+            let mut n = Vec3::ZERO;
+            n[k] = s;
+            let (i, j) = ((k + 1) % 3, (k + 2) % 3);
+            let corner = |u: f32, v: f32| {
+                let mut p = Vec3::ZERO;
+                p[k] = s * h[k];
+                p[i] = u * h[i];
+                p[j] = v * h[j];
+                p
+            };
+            (n, vec![corner(1.0, 1.0), corner(-1.0, 1.0), corner(-1.0, -1.0), corner(1.0, -1.0)])
+        }
+        ColliderShape::ConvexHull(hull) => {
+            let (verts, faces) = (&hull.vertices, &hull.faces);
+            let mut best: Option<(f32, Vec3)> = None;
+            for f in faces.iter() {
+                let [a, b, c] = f.map(|i| verts[i as usize]);
+                let n = (b - a).cross(c - a);
+                let len = n.length();
+                if len < 1e-12 {
+                    continue;
+                }
+                let n = n / len;
+                let align = n.dot(local_dir);
+                if best.is_none_or(|(bv, _)| align > bv) {
+                    best = Some((align, n));
+                }
+            }
+            let (_, n) = best?;
+            let d = verts.iter().map(|v| v.dot(n)).fold(f32::MIN, f32::max);
+            let size = verts.iter().map(|v| v.length()).fold(0.0f32, f32::max);
+            let tol = 1e-4 + 1e-3 * size;
+            (n, verts.iter().copied().filter(|v| (v.dot(n) - d).abs() <= tol).collect())
+        }
+        _ => return None,
+    };
+    if local.len() < 3 {
+        return None;
+    }
+    // Counter-clockwise about the normal: by angle around the centroid in the face's plane.
+    let centre = local.iter().copied().sum::<Vec3>() / local.len() as f32;
+    let u = (local[0] - centre).normalize_or_zero();
+    let v = local_n.cross(u);
+    local.sort_by(|a, b| {
+        let (pa, pb) = (*a - centre, *b - centre);
+        pa.dot(v).atan2(pa.dot(u)).total_cmp(&pb.dot(v).atan2(pb.dot(u)))
+    });
+    local.dedup_by(|a, b| (*a - *b).length_squared() < 1e-12);
+    let normal = rot * local_n;
+    let corners: Vec<Vec3> = local.into_iter().map(|p| pos + rot * p).collect();
+    Some(PolyFace { normal, offset: normal.dot(corners[0]), corners })
+}
+
+/// The contact patch of two polyhedra touching along `normal` (A towards B, from GJK/EPA): the face
+/// of either most aligned with it is the reference, the other's most opposed face is clipped to the
+/// reference face's sides, and what of it lies behind the reference face is in contact — up to four
+/// points. Empty when either shape has no faces or nothing survives, and the caller keeps EPA's one
+/// point then.
+///
+/// GJK/EPA gives one point a step. A hull resting on a face had one support at a time, wandering
+/// between its corners, and rocked for ever: not one of six debris-shaped hulls dropped on a floor
+/// slept in ten seconds, each still turning at 0.02–0.15 rad/s (2026-11-24).
+pub(super) fn clip_polyhedra(
+    (shape_a, pos_a, rot_a): (&ColliderShape, Vec3, Quat),
+    (shape_b, pos_b, rot_b): (&ColliderShape, Vec3, Quat),
+    normal: Vec3,
+) -> Vec<ContactPoint> {
+    const SLAB_TOLERANCE: f32 = 1e-3;
+    const DEPTH_TOLERANCE: f32 = 1e-4;
+    let (Some(face_a), Some(face_b)) = (polyhedral_face(shape_a, pos_a, rot_a, normal), polyhedral_face(shape_b, pos_b, rot_b, -normal)) else {
+        return Vec::new();
+    };
+    let (reference, incident) = if face_a.normal.dot(normal) >= face_b.normal.dot(-normal) { (face_a, face_b) } else { (face_b, face_a) };
+    let ref_n = reference.normal;
+    let mut polygon = incident.corners;
+    let k = reference.corners.len();
+    for i in 0..k {
+        let (a, b) = (reference.corners[i], reference.corners[(i + 1) % k]);
+        let side = (b - a).cross(ref_n).normalize_or_zero();
+        if side == Vec3::ZERO {
+            continue;
+        }
+        let offset = side.dot(a) + SLAB_TOLERANCE;
+        let mut out = Vec::with_capacity(polygon.len() + 1);
+        for (j, &p) in polygon.iter().enumerate() {
+            let q = polygon[(j + 1) % polygon.len()];
+            let (dp, dq) = (p.dot(side) - offset, q.dot(side) - offset);
+            if dp <= 0.0 {
+                out.push(p);
+            }
+            if (dp <= 0.0) != (dq <= 0.0) {
+                out.push(p + (q - p) * (dp / (dp - dq)));
+            }
+        }
+        polygon = out;
+        if polygon.is_empty() {
+            return Vec::new();
+        }
+    }
+    // A point's depth: how far behind the reference face it is, along `normal` (the reference
+    // face's normal is the best aligned of its faces, so the division never gets near zero).
+    let along = ref_n.dot(normal).abs().max(0.5);
+    let contacts: Vec<ContactPoint> = polygon
+        .into_iter()
+        .filter_map(|p| {
+            let behind = reference.offset - p.dot(ref_n);
+            (behind >= -DEPTH_TOLERANCE).then(|| mk_contact(p, normal, (behind / along).max(0.0)))
+        })
+        .collect();
+    select_4_contacts(contacts)
+}

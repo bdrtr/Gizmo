@@ -121,3 +121,26 @@ fn a_ball_floats_and_a_stone_sinks() {
     assert!(ball_y > -0.5 && ball_y < 0.5, "the ball is not at the surface: y {ball_y:.2}");
     assert!(stone_y < -5.0, "the stone did not sink: y {stone_y:.2}");
 }
+
+/// **A small light crate in damped water settles at any substep rate.** A 0.12 m crate of density 300
+/// is 0.52 kg; floating 30 % under in the pool its drag rate `κ` is about 90 N·s/m, so `κ·dt/m` is 0.72
+/// at 240 Hz and 2.9 at 60. Integrated explicitly the drag overshot past 1 and grew past 2 — the crate's
+/// velocity flipped sign every substep and it left the pool. It is taken implicitly now, and the crate
+/// floats at its depth at every rate.
+#[test]
+fn a_small_crate_in_damped_water_settles_at_every_rate() {
+    for hz in [60u32, 120, 240] {
+        let mut world = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)).with_substep_rate(hz).expect("rate");
+        world.fluid_zones = pool().fluid_zones;
+        add_box(&mut world, 1, Vec3::splat(0.06), 300.0, Vec3::new(0.0, 0.3, 0.0), Quat::IDENTITY);
+        for _ in 0..(8.0 / DT) as usize {
+            world.step(DT).unwrap();
+            assert!(world.velocities[0].linear.is_finite(), "{hz} Hz: the crate blew up");
+        }
+        // Archimedes: 30 % of its 0.12 m under, the centre 0.024 m above the surface.
+        let y = world.transforms[0].position.y;
+        assert!((y - 0.024).abs() < 0.006, "{hz} Hz: floats at {y}, not 0.024");
+        let v = world.velocities[0].linear.length();
+        assert!(v < 0.05, "{hz} Hz: still moving at {v} m/s");
+    }
+}

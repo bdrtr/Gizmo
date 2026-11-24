@@ -1026,6 +1026,18 @@ impl NarrowPhase {
                 None => Gjk::get_contact(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b).into_iter().collect(),
             },
 
+            // A convex hull against a hull or a box: EPA's normal, then the faces clipped to a patch
+            // of up to four points (`clip_polyhedra`); EPA's one point when the faces give none.
+            (ColliderShape::ConvexHull(_), ColliderShape::ConvexHull(_) | ColliderShape::Box(_))
+            | (ColliderShape::Box(_), ColliderShape::ConvexHull(_)) => {
+                match Gjk::get_contact(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b) {
+                    Some(epa) => {
+                        let patch = clip_polyhedra((shape_a, pos_a, rot_a), (shape_b, pos_b, rot_b), epa.normal);
+                        if patch.is_empty() { vec![epa] } else { patch }
+                    }
+                    None => Vec::new(),
+                }
+            }
             // Fallback to GJK + EPA for all other shape combinations.
             _ => Gjk::get_contact(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b)
                 .into_iter()
@@ -1235,7 +1247,7 @@ mod trimesh_tests {
 // The contact-generation helpers moved to `contacts`; import the ones the pair methods above
 // call so their bodies stay verbatim. The 377-line test suite moved to `tests`.
 mod contacts;
-use contacts::{box_corners, clip_box_box, mk_contact, sat_penetration};
+use contacts::{box_corners, clip_box_box, clip_polyhedra, mk_contact, sat_penetration};
 
 #[cfg(test)]
 mod tests;

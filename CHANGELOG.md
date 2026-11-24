@@ -549,6 +549,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A convex hull comes to rest, and sleeps.** A hull against a box or another hull went to GJK/EPA,
+  which gives one contact point a step: a hull resting on a face had one support at a time, wandering
+  between its corners, and rocked for ever. Six debris-shaped hulls dropped on a floor: none slept in
+  ten seconds, each still turning at 0.02–0.15 rad/s and sunk 6–12 mm; a broken crate's pieces never
+  slept and sank 1–7 cm (the test's 2.5 cm bound passed by luck). The faces are clipped to a patch of
+  up to four points now, as box against box always was (`clip_polyhedra`): the hulls sleep in 1–3 s,
+  the pieces of six throws all sleep, sunk 5–6 mm. `convex_hull_rest.rs`; `debris_comes_to_rest_on_its_own_shape`
+  asserts every piece asleep and under 1 cm.
+- **Springs, drives and fluid drag hold at any substep rate; static friction is a state.** The spring
+  joint, a slider's suspension, a hinge's torsional spring and D6 drives were explicit, `(k·x + c·v)·dt`
+  once a substep, which diverges once `(ω·dt)² + 2·c·k_inv·dt > 4`: they are solved implicitly now
+  (`implicit_spring_impulse`), unconditionally stable and the same as `dt → 0`. A fluid zone's drag is
+  taken implicitly too, linearised per cell — a small crate in the test pool left it at 13 km at 60 Hz.
+  And whether a contact pays `μ_s` or `μ_d` is its state at the end of the last step
+  (`ContactPoint::sliding`: Coulomb's hysteresis, a resting contact starts to slide only when static
+  friction gave all it had), not its speed inside each sweep, which carried the step's `a·dt` — at
+  60 Hz a box pushed at 95 % of its static limit slid 51.8 m in ten seconds. Each in a test at 60, 120
+  and 240 Hz that is red with the old form (`implicit_springs.rs`, `a_small_crate_in_damped_water_settles_at_every_rate`,
+  `static_friction_holds_and_gives_way_at_every_rate`). At 240 Hz: `headless_stress_test` unchanged,
+  the golden friction stopping distance unchanged.
 - **A world's physics substep rate is a choice.** `PhysicsWorld::with_substep_rate(hz)` (30–1000 Hz,
   `SUBSTEP_RATES`; `SubstepRateError` outside) builds a world that runs its whole pipeline `hz` times a
   second instead of the 240 it was fixed at — `DEFAULT_SUBSTEP_RATE`, bit-identical (`headless_stress_test`

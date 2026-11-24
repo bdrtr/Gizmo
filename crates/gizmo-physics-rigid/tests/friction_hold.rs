@@ -32,9 +32,9 @@ const GRAVITY: f32 = 9.81;
 const MASS: f32 = 1.0;
 const MU_S: f32 = 0.6;
 
-fn scene() -> World {
+fn scene_at(hz: u32) -> World {
     let mut w = World::new();
-    w.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -GRAVITY, 0.0)));
+    w.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -GRAVITY, 0.0)).with_substep_rate(hz).expect("rate"));
     w
 }
 
@@ -62,7 +62,12 @@ fn material() -> PhysicsMaterial {
 /// a number about the harness, not about the solver. A force is resisted *before* it becomes
 /// velocity, which is what a box on a slope actually experiences.
 fn drift_at(fraction: f32, seconds: f32) -> f32 {
-    let mut w = scene();
+    drift_at_rate(fraction, seconds, gizmo_physics_rigid::DEFAULT_SUBSTEP_RATE)
+}
+
+/// [`drift_at`] in a world stepping at `hz`.
+fn drift_at_rate(fraction: f32, seconds: f32, hz: u32) -> f32 {
+    let mut w = scene_at(hz);
 
     // Ground: a wide static box whose top is exactly y = 0.
     let g = w.spawn();
@@ -216,4 +221,20 @@ fn a_box_pushed_past_its_limit_does_slide() {
         "pushed half again past its limit the box moved only {drift:.4} m — friction is not \
          releasing, which would make every creep assertion above vacuous"
     );
+}
+
+/// **Static friction holds at any substep rate, and gives way past its limit at any.** Whether a
+/// contact pays `μ_s` or `μ_d` was decided on its tangential speed inside each sweep, which still held
+/// the step's unbalanced push `a·dt`: after a sweep that ended on the `μ_d` budget that residual was
+/// under the 1 cm/s threshold at 240 Hz and over it at 60, so the contact paid `μ_d` on every sweep and
+/// slid under a push `μ_s` holds — a box pushed at 95 % of its static limit crept away at 60 Hz. The
+/// decision is the contact's state at the end of the last step now (`ContactPoint::sliding`).
+#[test]
+fn static_friction_holds_and_gives_way_at_every_rate() {
+    for hz in [60u32, 120, 240] {
+        let held = drift_at_rate(0.95, 10.0, hz);
+        assert!(held < 0.002, "{hz} Hz: a box pushed at 95 % of its static limit drifted {held} m in 10 s");
+        let pushed = drift_at_rate(1.05, 2.0, hz);
+        assert!(pushed > 0.1, "{hz} Hz: a box pushed past its static limit moved only {pushed} m in 2 s");
+    }
 }
