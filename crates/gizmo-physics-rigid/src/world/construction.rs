@@ -8,7 +8,6 @@ use gizmo_physics_core::broadphase::SpatialHash;
 use gizmo_physics_core::components::{Collider, Transform};
 use gizmo_physics_core::BodyHandle;
 
-use rustc_hash::FxHashMap;
 
 impl PhysicsWorld {
     /// An empty world with default subsystems: the default [`Integrator`] (Earth-like
@@ -45,7 +44,7 @@ impl PhysicsWorld {
             fluid_zones: Vec::new(),
 
 
-            contact_cache: FxHashMap::default(),
+            contact_cache: super::ContactCache::default(),
             substep_rate: super::DEFAULT_SUBSTEP_RATE,
             accumulator: 0.0,
             render_alpha: 1.0,

@@ -141,6 +141,15 @@ struct OrderScratch {
 /// A manifold end whose body the world does not hold, in a list of manifold ends by row.
 pub(crate) const NO_ROW: u32 = u32::MAX;
 
+/// Where a manifold's two bodies are in the world's rows (`NO_ROW` for one the world does not
+/// hold), and its pair's slot in the contact cache (`NO_ROW` for none). It travels beside its
+/// manifold from the narrow phase to the write-back, through the support ordering's moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ManifoldEnds {
+    pub(crate) bodies: [u32; 2],
+    pub(crate) cache: u32,
+}
+
 thread_local! {
     static ORDER_SCRATCH: std::cell::RefCell<OrderScratch> =
         std::cell::RefCell::new(OrderScratch::default());
@@ -153,7 +162,7 @@ thread_local! {
 /// rows, which it reads instead of looking ids up) with them.
 fn support_order_manifolds(
     manifolds: &mut [ContactManifold],
-    ends: &mut [[u32; 2]],
+    ends: &mut [ManifoldEnds],
     rigid_bodies: &[RigidBody],
     reorder: bool,
 ) -> u32 {
@@ -180,7 +189,7 @@ fn support_order_manifolds(
     medges.clear();
     medges.reserve(n);
 
-    for &[a, b] in ends.iter() {
+    for &ManifoldEnds { bodies: [a, b], .. } in ends.iter() {
         if a == NO_ROW || b == NO_ROW {
             medges.push(None);
             continue;
@@ -631,8 +640,8 @@ impl ContactPair {
     /// worked it out again — two id lookups and two world inertia tensors a manifold, four times a
     /// substep. The values are pure functions of the bodies and their transforms, which no solve
     /// changes, so this is the same numbers.
-    pub(crate) fn all(ends: &[[u32; 2]], rigid_bodies: &[RigidBody], transforms: &[Transform]) -> Vec<Option<Self>> {
-        let of = |&[a, b]: &[u32; 2]| (a != NO_ROW && b != NO_ROW).then(|| Self::of_rows(a as usize, b as usize, rigid_bodies, transforms));
+    pub(crate) fn all(ends: &[ManifoldEnds], rigid_bodies: &[RigidBody], transforms: &[Transform]) -> Vec<Option<Self>> {
+        let of = |&ManifoldEnds { bodies: [a, b], .. }: &ManifoldEnds| (a != NO_ROW && b != NO_ROW).then(|| Self::of_rows(a as usize, b as usize, rigid_bodies, transforms));
         if ends.len() >= tgs::PARALLEL_MANIFOLDS {
             ends.par_iter().with_min_len(tgs::MANIFOLDS_PER_CHUNK).map(of).collect()
         } else {
@@ -724,7 +733,8 @@ impl ConstraintSolver {
         dt: f32,
     ) -> SolveStats {
         let row = |e: gizmo_physics_core::BodyHandle| entity_index_map.get(&e.id()).map_or(NO_ROW, |&i| i as u32);
-        let mut ends: Vec<[u32; 2]> = manifolds.iter().map(|m| [row(m.entity_a), row(m.entity_b)]).collect();
+        let mut ends: Vec<ManifoldEnds> =
+            manifolds.iter().map(|m| ManifoldEnds { bodies: [row(m.entity_a), row(m.entity_b)], cache: NO_ROW }).collect();
         self.solve_contacts_with(manifolds, &mut ends, rigid_bodies, transforms, velocities, pos_corrections, bounces, entity_index_map, island_bodies, dt, None)
     }
 
@@ -736,7 +746,7 @@ impl ConstraintSolver {
         manifolds: &mut [ContactManifold],
         // Each manifold's bodies' rows (`NO_ROW` for a body the world does not hold), kept in step
         // with `manifolds` as the support ordering moves them.
-        ends: &mut [[u32; 2]],
+        ends: &mut [ManifoldEnds],
         rigid_bodies: &[RigidBody],
         transforms: &[Transform],
         velocities: &mut [Velocity],
@@ -855,7 +865,7 @@ impl ConstraintSolver {
     }
 
     /// The island's support depth, its contacts support-ordered on the way when that is on.
-    fn island_depth(&self, manifolds: &mut [ContactManifold], ends: &mut [[u32; 2]], rigid_bodies: &[RigidBody]) -> u32 {
+    fn island_depth(&self, manifolds: &mut [ContactManifold], ends: &mut [ManifoldEnds], rigid_bodies: &[RigidBody]) -> u32 {
         // ── Support order + island depth ──
         // Support-order the island's contacts (bottom-up from anchors) when enabled — a
         // deterministic, pair-emission-invariant total order that lets the block solver's
@@ -934,7 +944,7 @@ impl ConstraintSolver {
     }
 
     /// Whether a body of the island has CCD on, which keeps the island off the TGS path.
-    fn island_has_ccd(ends: &[[u32; 2]], rigid_bodies: &[RigidBody]) -> bool {
+    fn island_has_ccd(ends: &[ManifoldEnds], rigid_bodies: &[RigidBody]) -> bool {
         // TGS Soft yolu (modern çözücü): soft constraint + relax pass.
         // İSTİSNA: CCD-etkin gövde içeren island'lar eski (split-impulse) yolu kullanır.
         // CCD speculative temasları ince ayarlıdır; TGS'in dp/relax akışı yüksek-hızlı
@@ -956,7 +966,7 @@ impl ConstraintSolver {
         // yazılmış bir karşı örnek (sevkiyattaki çözücü onu geçiyor, dolayısıyla bedava ek
         // kapsam), hatırlanan bir cümle değil. Öbür yol — split-impulse yolunda speculative
         // temaslara restitution — 2026-11-15'te açıldı: aşağıdaki "Restitution pass".
-        ends.iter().flatten().any(|&i| i != NO_ROW && rigid_bodies[i as usize].ccd_enabled)
+        ends.iter().flat_map(|e| e.bodies).any(|i| i != NO_ROW && rigid_bodies[i as usize].ccd_enabled)
     }
 
     /// The split-impulse sequential-impulse solve, for an island with a CCD body or with
@@ -1599,10 +1609,14 @@ mod support_order_tests {
     /// The support ordering of `ms`, their ends looked up by id; checks the ends went with them.
     fn order_by_ids(ms: &mut [ContactManifold], rigid_bodies: &[RigidBody], entity_index_map: &rustc_hash::FxHashMap<u32, usize>) {
         let row = |e: gizmo_physics_core::BodyHandle| entity_index_map.get(&e.id()).map_or(NO_ROW, |&i| i as u32);
-        let mut ends: Vec<[u32; 2]> = ms.iter().map(|m| [row(m.entity_a), row(m.entity_b)]).collect();
+        // The cache slot carries the manifold's place in the input, to follow it through the moves.
+        let mut ends: Vec<ManifoldEnds> =
+            ms.iter().enumerate().map(|(k, m)| ManifoldEnds { bodies: [row(m.entity_a), row(m.entity_b)], cache: k as u32 }).collect();
+        let pairs: Vec<(u32, u32)> = id_pairs(ms);
         support_order_manifolds(ms, &mut ends, rigid_bodies, true);
         for (m, end) in ms.iter().zip(&ends) {
-            assert_eq!(*end, [row(m.entity_a), row(m.entity_b)], "a manifold's ends did not move with it");
+            assert_eq!(end.bodies, [row(m.entity_a), row(m.entity_b)], "a manifold's ends did not move with it");
+            assert_eq!(pairs[end.cache as usize], (m.entity_a.id(), m.entity_b.id()), "a manifold's slot did not move with it");
         }
     }
 

@@ -13,6 +13,7 @@ use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactManifold, ContactPoints, TriggerEvent};
 use gizmo_physics_core::narrowphase::NarrowPhase;
 use crate::world::CachedPair;
+use crate::solver::ManifoldEnds;
 use gizmo_physics_core::BodyHandle;
 use crate::joints::Joint;
 use gizmo_math::Vec3;
@@ -98,7 +99,8 @@ struct PairContacts {
     entity_a: BodyHandle,
     entity_b: BodyHandle,
     /// The two bodies' indices in the world's rows, which nothing changes until the step ends:
-    /// what the islands are built from (`IslandManager::build_islands_by_index`).
+    /// what the islands are built from (`IslandManager::build_islands_by_index`), and the solve
+    /// reads (`ManifoldEnds`).
     bodies: [u32; 2],
     contacts: Vec<gizmo_physics_core::ContactPoint>,
     is_trigger_a: bool,
@@ -124,6 +126,8 @@ struct IslandResult {
     velocities: Vec<(usize, Velocity)>,
     /// The solved manifolds: the warm-start data, and the collision events' points.
     manifolds: Vec<ContactManifold>,
+    /// Each solved manifold's bodies and cache slot, in the same (support) order.
+    ends: Vec<ManifoldEnds>,
     /// The sleeping members a real mover in the island wakes.
     wake_ups: Vec<usize>,
     fractures: Vec<gizmo_physics_core::FractureEvent>,
@@ -417,7 +421,7 @@ impl PhysicsWorld {
     ///
     /// Returns the set of [`ContactManifold`]s to be fed into the solver.
     #[tracing::instrument(skip_all, name = "narrowphase_collision")]
-    pub(crate) fn narrowphase_and_collision_step(&mut self, dt: f32) -> (Vec<ContactManifold>, Vec<[u32; 2]>) {
+    pub(crate) fn narrowphase_and_collision_step(&mut self, dt: f32) -> (Vec<ContactManifold>, Vec<ManifoldEnds>) {
         let (active_pairs, dormant_pairs) = self.partition_pairs();
         let disabled_joint_pairs = self.collision_disabled_joint_pairs();
 
@@ -448,15 +452,17 @@ impl PhysicsWorld {
         // ~log2(N) grow-and-rehash reallocations the map/vec otherwise do every frame while
         // filling to tens of thousands of entries.
         let mut manifolds = Vec::with_capacity(narrowphase_results.len());
-        // Each manifold's bodies' indices, beside it (`PairContacts::bodies`).
-        let mut ends: Vec<[u32; 2]> = Vec::with_capacity(narrowphase_results.len());
+        // Each manifold's bodies' rows and cache slot, beside it (`ManifoldEnds`).
+        let mut ends: Vec<ManifoldEnds> = Vec::with_capacity(narrowphase_results.len());
         let _mani = crate::profile::Scope::new(&crate::profile::PHASES.manifold);
         for found in narrowphase_results {
             if found.is_trigger_a || found.is_trigger_b {
                 self.record_trigger(&found);
             } else {
-                ends.push(found.bodies);
-                manifolds.push(self.record_solid_contact(found));
+                let bodies = found.bodies;
+                let (manifold, cache) = self.record_solid_contact(found);
+                ends.push(ManifoldEnds { bodies, cache });
+                manifolds.push(manifold);
             }
         }
 
@@ -772,7 +778,7 @@ impl PhysicsWorld {
         let PairContacts { entity_a, entity_b, is_trigger_a, .. } = *found;
         let pair = (entity_a, entity_b);
         // ── Trigger ───────────────────────────────────────────────
-        let existed = self.contact_cache.insert(pair, CachedPair { is_trigger: true, manifold: None, seen: true }).is_some();
+        let existed = self.contact_cache.insert(pair, CachedPair { is_trigger: true, manifold: None, seen: true }).1.is_some();
 
         let event_type = if existed {
             CollisionEventType::Persisting
@@ -788,7 +794,8 @@ impl PhysicsWorld {
 
     /// A solid contact: its manifold with the pair's combined material and warm start, the cache's
     /// entry for the next step, and its event.
-    fn record_solid_contact(&mut self, found: PairContacts) -> ContactManifold {
+    /// The manifold of a solid pair's contacts, and its pair's slot in the contact cache.
+    fn record_solid_contact(&mut self, found: PairContacts) -> (ContactManifold, u32) {
         let PairContacts { entity_a, entity_b, contacts, material_a: mat_a, material_b: mat_b, warm, .. } = found;
         let pair = (entity_a, entity_b);
         // ── Solid contact ─────────────────────────────────────────
@@ -847,16 +854,14 @@ impl PhysicsWorld {
         // impulses over them again: two passes over memory scattered across the whole cache.
         //
         // Whether there was an entry is what decides the event below (`Persisting` or `Started`).
-        let existed = match self.contact_cache.get_mut(&pair) {
-            Some(entry) => {
+        let (slot, existed) = match self.contact_cache.slot(&pair) {
+            Some(slot) => {
+                let entry = self.contact_cache.at_mut(slot);
                 entry.is_trigger = false;
                 entry.seen = true;
-                true
+                (slot, true)
             }
-            None => {
-                self.contact_cache.insert(pair, CachedPair { is_trigger: false, manifold: None, seen: true });
-                false
-            }
+            None => (self.contact_cache.insert(pair, CachedPair { is_trigger: false, manifold: None, seen: true }).0, false),
         };
 
         // A contact going on is reported only when asked for (`persisting_contact_events`).
@@ -869,7 +874,7 @@ impl PhysicsWorld {
             self.collision_events.push(CollisionEvent { entity_a, entity_b, event_type, contact_points });
         }
 
-        manifold
+        (manifold, slot)
     }
 
     /// Keeps the dormant pairs' cache entries. The narrowphase skipped them (both bodies are
@@ -898,7 +903,7 @@ impl PhysicsWorld {
     /// (hinges, springs, …) of the substep. Returns the bounces of speculative contacts
     /// (`solve_contacts`' `bounces`), which the step adds after integrating positions.
     #[tracing::instrument(skip_all, name = "constraint_solve")]
-    pub(crate) fn constraint_solve_step(&mut self, manifolds: Vec<ContactManifold>, ends: Vec<[u32; 2]>, dt: f32) -> Vec<(usize, Vec3, Vec3)> {
+    pub(crate) fn constraint_solve_step(&mut self, manifolds: Vec<ContactManifold>, ends: Vec<ManifoldEnds>, dt: f32) -> Vec<(usize, Vec3, Vec3)> {
         let mut bounces: Vec<(usize, Vec3, Vec3)> = Vec::new();
 
         // Dynamic bodies the island sleep rule got to decide about this substep. Declared out
@@ -1007,7 +1012,7 @@ impl PhysicsWorld {
     fn solve_islands(
         &mut self,
         manifolds: Vec<ContactManifold>,
-        ends: Vec<[u32; 2]>,
+        ends: Vec<ManifoldEnds>,
         dt: f32,
         in_island: &mut [bool],
         bounces: &mut Vec<(usize, Vec3, Vec3)>,
@@ -1029,7 +1034,7 @@ impl PhysicsWorld {
             .collect();
         let rigid_bodies = &self.rigid_bodies;
         let (islands, joint_island) = crate::island::IslandManager::build_islands_by_index(
-            &ends,
+            ends.iter().map(|e| e.bodies),
             &joint_pairs,
             |i| rigid_bodies[i].is_dynamic(),
             rigid_bodies.len(),
@@ -1047,7 +1052,7 @@ impl PhysicsWorld {
             }
         }
 
-        let solve_island = |((island_manifolds, island_ends), island_joints): ((Vec<ContactManifold>, Vec<[u32; 2]>), Vec<&mut Joint>)| {
+        let solve_island = |((island_manifolds, island_ends), island_joints): ((Vec<ContactManifold>, Vec<ManifoldEnds>), Vec<&mut Joint>)| {
             self.solve_island(island_manifolds, island_ends, island_joints, dt)
         };
         // On the calling thread when there are few islands (`worth_parallel_jobs`); order is kept.
@@ -1098,7 +1103,7 @@ impl PhysicsWorld {
     /// One island's solve, on whichever worker drew it: whether it is solved at all and whether it
     /// wakes its sleepers, the contact solve itself (`solve_island_contacts`), the fractures it
     /// caused, and whether the island as a whole may sleep.
-    fn solve_island(&self, mut island_manifolds: Vec<ContactManifold>, mut ends: Vec<[u32; 2]>, mut joints: Vec<&mut Joint>, dt: f32) -> IslandResult {
+    fn solve_island(&self, mut island_manifolds: Vec<ContactManifold>, mut ends: Vec<ManifoldEnds>, mut joints: Vec<&mut Joint>, dt: f32) -> IslandResult {
         let entity_map = &self.entity_index_map;
         let rigid_bodies = &self.rigid_bodies;
         let velocities = &self.velocities;
@@ -1126,7 +1131,7 @@ impl PhysicsWorld {
         // per body.
         let mut island_indices: Vec<usize> = ends
             .iter()
-            .flat_map(|&[a, b]| [a as usize, b as usize])
+            .flat_map(|e| e.bodies.map(|i| i as usize))
             .chain(joints.iter().flat_map(|j| [j.entity_a, j.entity_b]).filter_map(|e| entity_map.get(&e.id()).copied()))
             .collect();
         island_indices.sort_unstable();
@@ -1136,7 +1141,7 @@ impl PhysicsWorld {
             .any(|&i| (rigid_bodies[i].is_dynamic() && !rigid_bodies[i].is_sleeping) || kinematic_moving(i));
 
         if !island_active {
-            return IslandResult { manifolds: island_manifolds, ..IslandResult::default() };
+            return IslandResult { manifolds: island_manifolds, ends, ..IslandResult::default() };
         }
 
         // Gerçek hareketli: eşik üstü hızlı uyanık dinamik VEYA hareketli kinematik.
@@ -1196,6 +1201,7 @@ impl PhysicsWorld {
         let members: Vec<usize> = island_indices.iter().copied().filter(|&idx| rigid_bodies[idx].is_dynamic()).collect();
 
         result.manifolds = island_manifolds;
+        result.ends = ends;
         result.wake_ups = wake_updates;
         result.fractures = fractures;
         result.has_mover = island_has_mover;
@@ -1209,7 +1215,7 @@ impl PhysicsWorld {
     fn solve_island_contacts(
         &self,
         island_manifolds: &mut [ContactManifold],
-        ends: &mut [[u32; 2]],
+        ends: &mut [ManifoldEnds],
         joints: &mut [&mut Joint],
         island_indices: &[usize],
         out: &mut IslandResult,
@@ -1362,6 +1368,7 @@ impl PhysicsWorld {
         let IslandResult {
             velocities: island_vels,
             manifolds: island_manifolds,
+            ends,
             wake_ups,
             fractures: local_fractures,
             position_corrections: pos_corrections,
@@ -1441,25 +1448,18 @@ impl PhysicsWorld {
         // frees the island's buffers off this thread: freeing them here, each allocated on another
         // thread, cost 0.9–1.8 ms of a 4000-sphere pile's 60 Hz step, on its critical path.
         let mut replaced = Vec::with_capacity(island_manifolds.len());
-        for manifold in island_manifolds {
-            let key_ab = (manifold.entity_a, manifold.entity_b);
-            let key_ba = (manifold.entity_b, manifold.entity_a);
+        for (manifold, end) in island_manifolds.into_iter().zip(ends) {
 
             // The solved contact points on the matching collision event, if there is one.
             if !event_index.is_empty() {
+                let (key_ab, key_ba) = ((manifold.entity_a, manifold.entity_b), (manifold.entity_b, manifold.entity_a));
                 if let Some(&idx) = event_index.get(&key_ab).or_else(|| event_index.get(&key_ba)) {
                     self.collision_events[idx].contact_points = manifold.contacts.iter().copied().take(4).collect();
                 }
             }
 
-            let entry = match self.contact_cache.get_mut(&key_ab) {
-                Some(entry) => Some(entry),
-                None => self.contact_cache.get_mut(&key_ba),
-            };
-            match entry {
-                Some(entry) => replaced.extend(entry.manifold.replace(manifold)),
-                None => replaced.push(manifold),
-            }
+            // Straight to the pair's slot, which `record_solid_contact` handed over.
+            replaced.extend(self.contact_cache.at_mut(end.cache).manifold.replace(manifold));
         }
         retired.push(replaced);
         counts

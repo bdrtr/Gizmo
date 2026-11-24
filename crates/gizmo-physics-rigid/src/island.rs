@@ -80,7 +80,7 @@ impl IslandManager {
     /// narrow phase found them): the same islands, in the same order, with no id looked up —
     /// two hash lookups a manifold end, on the thread the whole solve waits for.
     pub(crate) fn build_islands_by_index(
-        ends: &[[u32; 2]],
+        ends: impl ExactSizeIterator<Item = [u32; 2]>,
         joints: &[Option<(u32, u32)>],
         is_dynamic: impl Fn(usize) -> bool,
         bodies: usize,
@@ -98,7 +98,8 @@ impl IslandManager {
             }
             Some(*slot as usize)
         };
-        Self::build(ends.iter().copied(), ends.len(), joints, node_of)
+        let count = ends.len();
+        Self::build(ends, count, joints, node_of)
     }
 
     /// The union-find both builders share. `node_of` names a body's node, making it on first
@@ -239,18 +240,18 @@ impl IslandManager {
     /// [`split_manifolds`](Self::split_manifolds) with each manifold's bodies' indices
     /// (`build_islands_by_index`'s `ends`) carried along: the same groups in the same order. Each
     /// manifold moves once, straight into its island's list.
-    pub(crate) fn split_by_island(
+    pub(crate) fn split_by_island<T>(
         manifolds: Vec<ContactManifold>,
-        ends: Vec<[u32; 2]>,
+        ends: Vec<T>,
         islands: &[Island],
-    ) -> Vec<(Vec<ContactManifold>, Vec<[u32; 2]>)> {
+    ) -> Vec<(Vec<ContactManifold>, Vec<T>)> {
         let mut island_of = vec![usize::MAX; manifolds.len()];
         for (k, island) in islands.iter().enumerate() {
             for &i in &island.manifold_indices {
                 island_of[i] = k;
             }
         }
-        let mut groups: Vec<(Vec<ContactManifold>, Vec<[u32; 2]>)> = islands
+        let mut groups: Vec<(Vec<ContactManifold>, Vec<T>)> = islands
             .iter()
             .map(|island| (Vec::with_capacity(island.manifold_indices.len()), Vec::with_capacity(island.manifold_indices.len())))
             .collect();
@@ -460,7 +461,7 @@ mod tests {
         let ends: Vec<[u32; 2]> = manifolds.iter().map(|m| [row(m.entity_a.id()), row(m.entity_b.id())]).collect();
         let joint_rows: Vec<_> = joints_by_id.iter().map(|j| j.map(|(a, b)| (row(a), row(b)))).collect();
         let dynamic_row = |r: usize| (0..40u32).any(|id| row(id) as usize == r && id >= 5);
-        let (by_index, joint_by_index) = IslandManager::build_islands_by_index(&ends, &joint_rows, dynamic_row, 40);
+        let (by_index, joint_by_index) = IslandManager::build_islands_by_index(ends.iter().copied(), &joint_rows, dynamic_row, 40);
 
         assert!(by_id.len() > 3, "the graph should break into several islands, got {}", by_id.len());
         assert_eq!(

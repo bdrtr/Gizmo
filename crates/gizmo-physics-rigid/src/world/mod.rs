@@ -577,7 +577,7 @@ pub struct PhysicsWorld {
     /// Every pair the narrow phase found, or kept as dormant, by its pair: kept from substep to
     /// substep and updated in place (see [`CachedPair`]).
     #[serde(skip)]
-    pub(crate) contact_cache: FxHashMap<(BodyHandle, BodyHandle), CachedPair>,
+    pub(crate) contact_cache: ContactCache,
 
     /// The substep rate, in hertz ([`substep_rate`](Self::substep_rate)), chosen when the world
     /// is built ([`with_substep_rate`](Self::with_substep_rate)) and otherwise changed only by
@@ -746,7 +746,7 @@ pub struct WorldSnapshot {
     transforms: Vec<Transform>,
     velocities: Vec<crate::components::Velocity>,
     rigid_bodies: Vec<crate::components::RigidBody>,
-    contact_cache: FxHashMap<(BodyHandle, BodyHandle), CachedPair>,
+    contact_cache: ContactCache,
     accumulator: f32,
     // The rate the accumulator, the contacts' warm-start impulses and the sleep counters above are
     // in: CARRIED, like `weather` below — a restore puts the world back at the rate those were
@@ -793,4 +793,148 @@ pub(crate) struct CachedPair {
     /// Found by this substep's narrow phase, or kept as a dormant pair's. Cleared by the sweep at
     /// the narrow phase's end, which takes out the entries without it: false between substeps.
     pub(crate) seen: bool,
+}
+
+/// [`PhysicsWorld`]'s contact cache: each pair's [`CachedPair`] in a slot of its own, found by the
+/// pair through a map. A slot stays put while its pair lasts, so the narrow phase hands each
+/// manifold's slot on with it and the write-back after the solve goes straight to it: it looked
+/// every manifold's pair up again, on the thread the step waits for.
+///
+/// The map sees the same pairs come and go as the map of entries it replaced, so it walks them in
+/// the same order — the order the ended contacts are reported in.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ContactCache {
+    slot_of: FxHashMap<(BodyHandle, BodyHandle), u32>,
+    slots: Vec<CachedPair>,
+    /// Slots whose pairs ended, for the next new pair.
+    free: Vec<u32>,
+}
+
+impl ContactCache {
+    pub(crate) fn slot(&self, pair: &(BodyHandle, BodyHandle)) -> Option<u32> {
+        self.slot_of.get(pair).copied()
+    }
+
+    pub(crate) fn get(&self, pair: &(BodyHandle, BodyHandle)) -> Option<&CachedPair> {
+        self.slot(pair).map(|s| &self.slots[s as usize])
+    }
+
+    pub(crate) fn get_mut(&mut self, pair: &(BodyHandle, BodyHandle)) -> Option<&mut CachedPair> {
+        self.slot(pair).map(|s| &mut self.slots[s as usize])
+    }
+
+    /// The entry in `slot` (from [`slot`](Self::slot) or [`insert`](Self::insert)), which must
+    /// still be its pair's.
+    pub(crate) fn at_mut(&mut self, slot: u32) -> &mut CachedPair {
+        &mut self.slots[slot as usize]
+    }
+
+    /// Puts `entry` in for `pair`, in the pair's slot if it has one; returns the slot and what was
+    /// there.
+    pub(crate) fn insert(&mut self, pair: (BodyHandle, BodyHandle), entry: CachedPair) -> (u32, Option<CachedPair>) {
+        if let Some(slot) = self.slot(&pair) {
+            return (slot, Some(std::mem::replace(&mut self.slots[slot as usize], entry)));
+        }
+        let slot = match self.free.pop() {
+            Some(slot) => {
+                self.slots[slot as usize] = entry;
+                slot
+            }
+            None => {
+                self.slots.push(entry);
+                (self.slots.len() - 1) as u32
+            }
+        };
+        self.slot_of.insert(pair, slot);
+        (slot, None)
+    }
+
+    pub(crate) fn remove(&mut self, pair: &(BodyHandle, BodyHandle)) -> Option<CachedPair> {
+        let slot = self.slot_of.remove(pair)?;
+        self.free.push(slot);
+        Some(std::mem::replace(&mut self.slots[slot as usize], CachedPair { is_trigger: false, manifold: None, seen: false }))
+    }
+
+    /// Keeps the pairs `keep` says yes to, walking them in the map's order.
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&(BodyHandle, BodyHandle), &mut CachedPair) -> bool) {
+        let ContactCache { slot_of, slots, free } = self;
+        slot_of.retain(|pair, &mut slot| {
+            let entry = &mut slots[slot as usize];
+            if keep(pair, entry) {
+                return true;
+            }
+            entry.manifold = None;
+            free.push(slot);
+            false
+        });
+    }
+
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &(BodyHandle, BodyHandle)> {
+        self.slot_of.keys()
+    }
+}
+
+#[cfg(test)]
+mod contact_cache_tests {
+    use super::{CachedPair, ContactCache};
+    use gizmo_physics_core::{BodyHandle, ContactManifold};
+    use rustc_hash::FxHashMap;
+
+    fn entry(tag: u32) -> CachedPair {
+        let mut manifold = ContactManifold::new(BodyHandle::from_id(tag), BodyHandle::from_id(tag + 1));
+        manifold.lifetime = tag;
+        CachedPair { is_trigger: tag.is_multiple_of(5), manifold: Some(manifold), seen: true }
+    }
+
+    /// Through a churn of new pairs, replaced entries, removals and sweeps, the slotted cache holds
+    /// what a plain map given the same operations holds, walks its pairs in that map's order — the
+    /// order ended contacts are reported in — and a slot, while its pair lasts, stays the pair's.
+    #[test]
+    fn the_slotted_cache_is_the_map_it_replaced() {
+        let mut cache = ContactCache::default();
+        let mut model: FxHashMap<(BodyHandle, BodyHandle), u32> = FxHashMap::default();
+        let mut slot_of: FxHashMap<(BodyHandle, BodyHandle), u32> = FxHashMap::default();
+        let mut seed = 99u32;
+        let mut next = |m: u32| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 16) % m
+        };
+        for round in 0..400u32 {
+            let pair = (BodyHandle::from_id(next(30)), BodyHandle::from_id(30 + next(30)));
+            match next(10) {
+                0..=5 => {
+                    let tag = round * 3 + 1;
+                    let (slot, old) = cache.insert(pair, entry(tag));
+                    assert_eq!(old.and_then(|e| e.manifold).map(|m| m.lifetime), model.insert(pair, tag));
+                    if let Some(&kept) = slot_of.get(&pair) {
+                        assert_eq!(slot, kept, "a pair moved slot while it lasted");
+                    }
+                    slot_of.insert(pair, slot);
+                }
+                6..=7 => {
+                    assert_eq!(cache.remove(&pair).and_then(|e| e.manifold).map(|m| m.lifetime), model.remove(&pair));
+                    slot_of.remove(&pair);
+                }
+                _ => {
+                    let cut = next(4);
+                    let mut seen = Vec::new();
+                    cache.retain(|p, e| {
+                        seen.push(*p);
+                        e.manifold.as_ref().is_some_and(|m| m.lifetime % 4 != cut)
+                    });
+                    let expected: Vec<_> = model.keys().copied().collect();
+                    assert_eq!(seen, expected, "the sweep walked the pairs in another order");
+                    model.retain(|_, tag| *tag % 4 != cut);
+                    slot_of.retain(|p, _| model.contains_key(p));
+                }
+            }
+            assert_eq!(cache.keys().copied().collect::<Vec<_>>(), model.keys().copied().collect::<Vec<_>>());
+            for (pair, &tag) in &model {
+                assert_eq!(cache.get(pair).and_then(|e| e.manifold.as_ref()).map(|m| m.lifetime), Some(tag));
+                let slot = cache.slot(pair).unwrap();
+                assert_eq!(cache.at_mut(slot).manifold.as_ref().map(|m| m.lifetime), Some(tag));
+            }
+        }
+        assert!(cache.free.len() + cache.slot_of.len() == cache.slots.len(), "a slot was lost or shared");
+    }
 }
