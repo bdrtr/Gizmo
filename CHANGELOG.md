@@ -549,6 +549,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A solid contact that goes on reports `Persisting` only when asked for.**
+  `PhysicsWorld::persisting_contact_events`, off by default: `collision_events` carries a contact's
+  `Started` and `Ended`, and its `Persisting` on every substep between only with the flag on, as it
+  always did before. Every pair's points on every substep were most of the narrow phase's bookkeeping
+  — 6500 events of up to four points on a 4000-sphere pile at 60 Hz, written before and after the
+  solve and copied again into the ECS's queues. Triggers are unchanged (`trigger_events` always
+  reports `Persisting`); a Lua script's collision `"stay"` needs the flag (documented on
+  `update_physics_api`). It also put `fracture_step`'s breaks right: it read every event, and a
+  crate struck by a ball broke at its bottom corner, from its resting contact with the floor whose
+  `Persisting` event carried the push of the blow; it reads the impacts now, as `FractureSystem`
+  always did (`debris_comes_to_rest_on_its_own_shape` asserts the struck face). `contact_events.rs`.
 - **A big pile's narrow phase: one contact cache kept in place, the pair query on every thread.**
   The contact cache was rebuilt every substep (three hash operations a pair, a map allocated and
   freed); it is one map now, each pair updated where it stands and a sweep at the end taking out the

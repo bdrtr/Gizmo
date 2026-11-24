@@ -79,6 +79,7 @@ impl PhysicsWorld {
             //    history inside a snapshot), and a preloaded asset cache.
             is_paused: _,
             step_once: _,
+            persisting_contact_events: _,
             rewind_requested: _,
             history: _,
             fracture_cache: _,

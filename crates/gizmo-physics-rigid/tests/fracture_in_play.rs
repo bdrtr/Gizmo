@@ -80,7 +80,7 @@ fn a_breakable_without_a_body_breaks_and_says_so() {
 }
 
 /// A crate's pieces come to rest on their own shapes: still within seconds, near where it broke,
-/// and their drawn cells on the floor, not in it.
+/// and their drawn cells on the floor, not in it. It breaks where the ball struck it.
 #[test]
 fn debris_comes_to_rest_on_its_own_shape() {
     let mut world = world_with_floor();
@@ -91,10 +91,16 @@ fn debris_comes_to_rest_on_its_own_shape() {
     world.add_component(crate_, Velocity::default());
     world.add_component(crate_, fragile());
     throw_ball(&mut world, Vec3::new(0.0, 0.5, -3.0), Vec3::new(0.0, 0.0, 15.0), 1.0);
+    let mut told = Vec::new();
     for _ in 0..60 * 5 {
-        step(&mut world);
+        told.extend(step(&mut world));
     }
     assert!(!world.is_alive(crate_), "the crate broke");
+    // On its struck face. Until 2026-11-25 the break went to the crate's contact with the floor — a
+    // bottom corner — whose `Persisting` event came first and carried the push of the blow: with
+    // persisting contact events off by default, the break reads the impacts (`Started`) alone.
+    let impact = told[0].impact_point;
+    assert!(impact.z < 0.0 && impact.y > 0.3 && impact.x.abs() < 0.5, "struck on its face: {impact:?}");
     let pieces: Vec<(f32, f32, f32)> = world
         .query::<(&Transform, &Velocity, &Debris)>()
         .iter()
@@ -114,7 +120,9 @@ fn debris_comes_to_rest_on_its_own_shape() {
     assert_eq!(awake, 0, "every piece asleep after five seconds; the fastest moves at {fastest:.3} m/s");
     assert!(fastest < 1e-3, "at rest after five seconds: the fastest piece moves at {fastest:.3} m/s");
     assert!(deepest > -0.01, "a drawn cell is on the floor, not in it: {deepest:.3} m");
-    assert!(farthest < 5.0, "near where it broke: {farthest:.1} m");
+    // 5.2 m since the break is at the struck face (pieces leave along the blow); under 5 when it
+    // was put at the floor corner.
+    assert!(farthest < 6.0, "near where it broke: {farthest:.1} m");
 }
 
 /// A blast hurts as far as its `damage_radius` and pushes as far as its `force_radius`.

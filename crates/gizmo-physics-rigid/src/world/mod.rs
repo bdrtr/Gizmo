@@ -486,8 +486,9 @@ pub struct PhysicsWorld {
     #[serde(skip)]
     pub(crate) ecs_sync: crate::system::EcsSync,
     /// Non-trigger contacts observed during the last `step`: `Started` on the first
-    /// substep a pair touches, `Persisting` afterwards, `Ended` on the substep the
-    /// pair separates. Cleared and refilled by `step`, so entries accumulate across
+    /// substep a pair touches, `Ended` on the substep the pair separates, and — only with
+    /// [`persisting_contact_events`](Self::persisting_contact_events) on — `Persisting` on
+    /// each substep in between. Cleared and refilled by `step`, so entries accumulate across
     /// that frame's substeps: one continuous contact yields one event per substep, not
     /// one per frame. A paused `step` clears without refilling, but one servicing a
     /// rewind returns before the clear and leaves the previous frame's entries in
@@ -495,6 +496,16 @@ pub struct PhysicsWorld {
     /// size. Not serialized.
     #[serde(skip)]
     pub collision_events: Vec<CollisionEvent>,
+    /// Whether a solid contact that goes on reports `Persisting` in [`collision_events`](Self::collision_events)
+    /// on every substep it lasts, with its points. Off by default: `Started` and `Ended` say when
+    /// a contact begins and ends, and the points of every pair on every substep were most of the
+    /// narrow phase's bookkeeping — on a 4000-sphere pile at 60 Hz, 6500 events with up to four
+    /// points each, written twice (before and after the solve), and copied again into the ECS's
+    /// queues: about a millisecond of a 12 ms step. Turn it on for what has to follow a contact
+    /// while it lasts (a scraping sound, damage over time, a Lua script's `"stay"`).
+    /// Triggers are not affected: [`trigger_events`](Self::trigger_events) always reports
+    /// `Persisting`. May be changed between steps.
+    pub persisting_contact_events: bool,
     /// Overlaps where at least one collider has `is_trigger` set. Such a pair never
     /// produces a manifold, so it exchanges no impulse and the bodies pass through
     /// each other. Same clear-and-refill cadence as

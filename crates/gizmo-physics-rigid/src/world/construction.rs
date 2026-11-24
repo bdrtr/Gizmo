@@ -33,6 +33,7 @@ impl PhysicsWorld {
             #[cfg(feature = "ecs")]
             ecs_sync: crate::system::EcsSync::default(),
             collision_events: Vec::new(),
+            persisting_contact_events: false,
             trigger_events: Vec::new(),
             fracture_events: Vec::new(),
             fracture_cache: crate::fracture::PreFracturedCache::new(),

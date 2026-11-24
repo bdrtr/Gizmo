@@ -180,6 +180,11 @@ pub fn with_call_time_queries<R>(
 const GROUND_PROBE_HEIGHT: f32 = 10_000.0;
 
 /// Mirrors the current physics events (triggers, collisions) into Lua, every frame.
+///
+/// `status` is `"enter"`, `"stay"` or `"exit"`. A trigger reports `"stay"` on every step it is
+/// overlapped; a solid collision only when the physics world reports contacts that go on
+/// (`PhysicsWorld::persisting_contact_events`, off by default): otherwise a collision is its
+/// `"enter"` and its `"exit"`.
 #[tracing::instrument(skip_all, name = "script_physics_read")]
 pub fn update_physics_api(
     lua: &Lua,

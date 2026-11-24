@@ -746,7 +746,11 @@ impl PhysicsWorld {
         // modified COPY into the manifold, never touching `contacts`. Now that the buffer
         // is moved into the manifold and warm-started in place, taking the snapshot late
         // would start shipping accumulated impulses in `CollisionEvent.contact_points`.
-        let event_points: ContactPoints = contacts.iter().copied().take(4).collect();
+        // Only when an event can be sent: a new pair's (`Started`), or any pair's when a contact going
+        // on is reported (`persisting_contact_events`). A pair with no warm start is new to the
+        // solid contacts; one with a warm start is going on.
+        let event_points: Option<ContactPoints> =
+            (warm.is_none() || self.persisting_contact_events).then(|| contacts.iter().copied().take(4).collect());
 
         // Warm-start: the impulses were already carried across on the worker that found
         // these contacts (see `NpResult`'s last field). What is left is the part that
@@ -803,17 +807,15 @@ impl PhysicsWorld {
             }
         };
 
-        let event_type = if existed {
-            CollisionEventType::Persisting
-        } else {
-            CollisionEventType::Started
+        // A contact going on is reported only when asked for (`persisting_contact_events`).
+        let event_type = match (existed, self.persisting_contact_events) {
+            (false, _) => Some(CollisionEventType::Started),
+            (true, true) => Some(CollisionEventType::Persisting),
+            (true, false) => None,
         };
-        self.collision_events.push(CollisionEvent {
-            entity_a,
-            entity_b,
-            event_type,
-            contact_points: event_points,
-        });
+        if let (Some(event_type), Some(contact_points)) = (event_type, event_points) {
+            self.collision_events.push(CollisionEvent { entity_a, entity_b, event_type, contact_points });
+        }
 
         manifold
     }
