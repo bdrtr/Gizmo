@@ -1084,11 +1084,15 @@ impl PhysicsWorld {
                 const { std::cell::RefCell::new(Vec::new()) };
         }
 
-        VEL_CACHE.with(|cache| {
-            POS_CACHE.with(|pos_cache| { BOUNCE_CACHE.with(|bounce_cache| {
-                let mut buf = cache.borrow_mut();
-                let mut pos_buf = pos_cache.borrow_mut();
-                let mut bounce_buf = bounce_cache.borrow_mut();
+        // Taken out of the thread-locals for the solve and put back after, not borrowed across it: a
+        // large island's coloured solve (`solver/parallel.rs`) waits in a `rayon::scope`, and a
+        // thread waiting there runs other tasks — another island's solve, which needs buffers of its
+        // own. It finds the slot empty and grows a fresh one.
+        let mut buf = VEL_CACHE.with(|c| std::mem::take(&mut *c.borrow_mut()));
+        let mut pos_buf = POS_CACHE.with(|c| std::mem::take(&mut *c.borrow_mut()));
+        let mut bounce_buf = BOUNCE_CACHE.with(|c| std::mem::take(&mut *c.borrow_mut()));
+        let stats = {
+            {
                 if bounce_buf.len() < velocities.len() {
                     bounce_buf.resize(velocities.len(), (Vec3::ZERO, Vec3::ZERO));
                 }
@@ -1168,8 +1172,12 @@ impl PhysicsWorld {
                     }
                 }
                 stats
-            }) })
-        })
+            }
+        };
+        VEL_CACHE.with(|c| *c.borrow_mut() = buf);
+        POS_CACHE.with(|c| *c.borrow_mut() = pos_buf);
+        BOUNCE_CACHE.with(|c| *c.borrow_mut() = bounce_buf);
+        stats
     }
 
     /// One island's solve, written back to the world: the kinematic responses and the bounces, the

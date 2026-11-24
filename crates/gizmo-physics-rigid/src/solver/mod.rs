@@ -12,6 +12,7 @@ use gizmo_physics_core::components::Transform;
 use gizmo_physics_core::ContactManifold;
 
 mod block;
+mod parallel;
 mod standalone;
 mod tgs;
 
@@ -469,6 +470,14 @@ pub struct ConstraintSolver {
     /// discretisation inside the substep, and a stacked column needs the sweeps for support to
     /// reach its top.
     pub adaptive_iterations: bool,
+    /// An island with at least this many contact blocks (a block: up to four contacts of one
+    /// manifold) is swept colour by colour on several threads; `0` never does. Islands with joints
+    /// and islands on the split-impulse path are swept serially whatever their size.
+    ///
+    /// The coloured sweep visits the blocks in a different order from the serial one, so it
+    /// converges differently; which islands take it depends on their size only, so the result
+    /// does not depend on the machine's thread count. See `solver/parallel.rs`.
+    pub parallel_island_blocks: usize,
 
     /// Block-solver Tikhonov regularisation, as a fraction of the manifold's mean normal
     /// effective mass. It cures the rank deficiency of a 4-coplanar contact block, and must stay
@@ -524,6 +533,7 @@ impl Default for ConstraintSolver {
             warm_start_match_tolerance: 0.02,
             block_solver: true,
             adaptive_iterations: true,
+            parallel_island_blocks: 256,
             block_regularization: 0.05,
             direct_chain_solve: false,
         }

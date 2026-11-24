@@ -549,6 +549,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A large island's contacts are solved on several threads.** Islands were solved in parallel
+  with one another, each by one thread, and a fallen pile is one island: a thousand boxes spent
+  13.6 ms in the sweeps on one thread and 15.3 on sixteen. An island of at least
+  `ConstraintSolver::parallel_island_blocks` (default 256) contact blocks is now coloured — no two
+  blocks of a colour share a dynamic body — and swept colour by colour across up to nine threads
+  (`solver/parallel.rs`): that pile 27.3 → 10.3 ms per frame, 4000 spheres 72 → ~35. Same bits on
+  any thread count; islands under the threshold, with joints, or with a CCD body are swept serially
+  and unchanged. Found measuring the engine against Godot 4.7.2 (`docs/ENGINE.md`).
+  `tests/parallel_island.rs`.
 - **A vehicle's powertrain says the rest of what a game's needs** (`nfsu2-gizmo`'s
   `MOTOR-NOTLARI.md` #21, which wrote NFSU2's around the engine's step: the throttle cut before
   it, engine braking taken off the wheels' spin after it). `VehicleTuning` gains a shift's two

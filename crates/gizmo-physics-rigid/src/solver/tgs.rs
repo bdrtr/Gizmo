@@ -12,11 +12,11 @@ use gizmo_physics_core::ContactManifold;
 /// Every field is produced with the SAME expression the sweep used, so the result
 /// is bit-identical to the pre-hoist solver. Contacts that the old sweep skipped
 /// (`k_n < 1e-8`, or a manifold with two non-dynamic bodies) are simply not built.
-struct Prepared {
-    idx_a: usize,
-    idx_b: usize,
-    dyn_a: bool,
-    dyn_b: bool,
+pub(super) struct Prepared {
+    pub(super) idx_a: usize,
+    pub(super) idx_b: usize,
+    pub(super) dyn_a: bool,
+    pub(super) dyn_b: bool,
     inv_m_a: f32,
     inv_m_b: f32,
     inv_i_a: Mat3,
@@ -74,9 +74,9 @@ fn apply_rolling(p: &mut Prepared, velocities: &mut [Velocity]) {
 /// One contact manifold's contiguous run in `prepared`, plus its precomputed N×N normal
 /// Delassus matrix `a` (constant across sweeps under frozen anchors). Used by the block
 /// solver to resolve the manifold's coplanar normal impulses jointly.
-struct BlockGroup {
-    start: usize,
-    n: usize,
+pub(super) struct BlockGroup {
+    pub(super) start: usize,
+    pub(super) n: usize,
     a: [[f32; 4]; 4],
 }
 
@@ -200,6 +200,20 @@ impl ConstraintSolver {
             && (2..=Self::DIRECT_SOLVE_CAP).contains(&nprep);
         let island_a = if use_direct { self.island_delassus(&prepared) } else { Vec::new() };
         let direct = use_direct.then_some(island_a.as_slice());
+        // A large island without joints is swept colour by colour on several threads
+        // (`super::parallel`). Decided by the island's size alone, never by the thread count.
+        let coloring = (self.block_solver
+            && direct.is_none()
+            && between.is_none()
+            && self.parallel_island_blocks > 0
+            && block_groups.len() >= self.parallel_island_blocks)
+            .then(|| super::parallel::color_blocks(&prepared, &block_groups, island_bodies, velocities.len()));
+        // The bodies whose position delta the biased sweeps integrate.
+        let integrate: Vec<usize> = island_bodies
+            .iter()
+            .copied()
+            .filter(|i| real_bodies.contains(i) && rigid_bodies[*i].is_dynamic())
+            .collect();
 
         // Per-body position-delta scratch (dp), indexed by GLOBAL body index but sized once
         // per thread and RESET only for `island_bodies` — no per-island full-world allocation.
@@ -209,8 +223,10 @@ impl ConstraintSolver {
             static DP: std::cell::RefCell<Vec<(Vec3, Vec3)>> =
                 const { std::cell::RefCell::new(Vec::new()) };
         }
-        DP.with(|cell| {
-            let mut dp = cell.borrow_mut();
+        // Taken out and put back rather than borrowed across the solve, for the reason the pipeline's
+        // island buffers are (`solve_island_contacts`): a coloured solve waits in a `rayon::scope`.
+        let mut dp = DP.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+        {
             if dp.len() < velocities.len() {
                 dp.resize(velocities.len(), (Vec3::ZERO, Vec3::ZERO));
             }
@@ -223,7 +239,21 @@ impl ConstraintSolver {
             // iterasyonun bias'ı GÜNCEL penetrasyonu görür → düzeltme yığın boyunca yayılır
             // (SI'nin yapamadığı; uzun/çarpan yığınları ayakta tutan temel mekanizma).
             let _sweep = crate::profile::Scope::new(&crate::profile::PHASES.sweep);
-            for iter in 0..n_iterations {
+            if let Some(coloring) = &coloring {
+                self.sweep_colored(super::parallel::ColoredSweeps {
+                    prepared: &mut prepared,
+                    groups: &block_groups,
+                    coloring,
+                    velocities,
+                    dp: dp.as_mut_slice(),
+                    integrate: &integrate,
+                    n_iterations,
+                    h,
+                    bias_rate: coeffs.0,
+                    inv_dt,
+                });
+            }
+            for iter in 0..if coloring.is_some() { 0 } else { n_iterations } {
                 // The joints first and the contacts after, in every sweep (as Box2D v3 orders them):
                 // the last word goes to the contacts, which have no correction for a small overlap
                 // (`slop`) — a joint's error is corrected by its own bias on the next substep.
@@ -231,18 +261,16 @@ impl ConstraintSolver {
                     (between.sweep)(velocities, false);
                 }
                 self.sweep(&mut prepared, &block_groups, direct, velocities, dp.as_slice(), iter % 2 == 1, Some(coeffs), inv_dt);
-                for &i in island_bodies {
-                    if real_bodies.contains(&i) && rigid_bodies[i].is_dynamic() {
-                        dp[i].0 += velocities[i].linear * h;
-                        dp[i].1 += velocities[i].angular * h;
-                    }
+                for &i in &integrate {
+                    dp[i].0 += velocities[i].linear * h;
+                    dp[i].1 += velocities[i].angular * h;
                 }
             }
 
             // ── 4) RELAX (bias=0) — soft bias hızını temizle + restitution ──
             drop(_sweep);
             let _relax = crate::profile::Scope::new(&crate::profile::PHASES.relax);
-            for iter in 0..self.relax_iterations {
+            for iter in 0..if coloring.is_some() { 0 } else { self.relax_iterations } {
                 if let Some(between) = between.as_mut() {
                     (between.sweep)(velocities, true);
                 }
@@ -263,7 +291,8 @@ impl ConstraintSolver {
                     pos_corrections[i] = (dlin, dang);
                 }
             }
-        });
+        }
+        DP.with(|cell| *cell.borrow_mut() = dp);
 
         // Impulse birikimcilerini manifold'a geri yaz (warm-start sürekliliği: bir sonraki
         // substep bu değerleri okur). Eski kod bunu her sweep'te yazıyordu; `prepared` bunları
@@ -641,7 +670,7 @@ impl ConstraintSolver {
         if let Some(island_a) = direct {
             self.tgs_sweep_island(prepared, island_a, velocities, dp, relax, !relax, bias_rate, mass_scale, impulse_scale, inv_dt);
         } else if self.block_solver {
-            self.tgs_sweep_block(prepared, block_groups, velocities, dp, relax, reverse, !relax, bias_rate, mass_scale, impulse_scale, inv_dt);
+            self.tgs_sweep_block(prepared, block_groups, velocities, dp, relax, reverse, !relax, bias_rate, inv_dt);
         } else {
             self.tgs_sweep_prepared(prepared, velocities, dp, relax, reverse, !relax, bias_rate, mass_scale, impulse_scale, inv_dt);
         }
@@ -800,6 +829,10 @@ impl ConstraintSolver {
     /// is rigid (drives vn to bias/restitution target); the soft/relax distinction is
     /// carried by `use_bias` + the per-contact bias target, and `dp` still integrates
     /// position between biased iterations, so the overall soft-step behaviour is kept.
+    ///
+    /// Each group is solved by [`block_group_step`](Self::block_group_step) on a copy of its two
+    /// bodies' velocities, the same step the large islands' coloured sweep
+    /// ([`super::parallel`]) runs on several threads.
     #[allow(clippy::too_many_arguments)]
     fn tgs_sweep_block(
         &self,
@@ -811,118 +844,144 @@ impl ConstraintSolver {
         reverse: bool,
         use_bias: bool,
         bias_rate: f32,
-        mass_scale: f32,
-        impulse_scale: f32,
         inv_dt: f32,
     ) {
         let ng = groups.len();
         for gi in 0..ng {
             let g = &groups[if reverse { ng - 1 - gi } else { gi }];
-            let (start, n) = (g.start, g.n);
-            if n == 0 {
+            if g.n == 0 {
                 continue;
             }
+            let run = &mut prepared[g.start..g.start + g.n];
+            let (ia, ib) = (run[0].idx_a, run[0].idx_b);
+            let mut pair = [velocities[ia], velocities[ib]];
+            self.block_group_step(g, run, &mut pair, (dp[ia], dp[ib]), apply_restitution, use_bias, bias_rate, inv_dt);
+            velocities[ia] = pair[0];
+            velocities[ib] = pair[1];
+        }
+    }
 
-            // ── Block NORMAL solve ── build the coupled soft driving term per contact:
-            // rhs_i = m_scale·(target_i − vn_i) − i_scale·acc_i (the block generalisation
-            // of the soft per-contact update). Speculative (pen<0) and non-biased contacts
-            // use their own m_scale/i_scale exactly as the sequential sweep does.
-            let mut rhs = [0.0f32; 4];
-            let mut acc = [0.0f32; 4];
-            for c in 0..n {
-                let p = &prepared[start + c];
-                let dp_a = dp[p.idx_a].0 + dp[p.idx_a].1.cross(p.r_a);
-                let dp_b = dp[p.idx_b].0 + dp[p.idx_b].1.cross(p.r_b);
-                let penetration = p.pen0 - (dp_b - dp_a).dot(p.normal);
-                let va = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(p.r_a);
-                let vb = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(p.r_b);
-                let vn = (vb - va).dot(p.normal);
-                // RIGID block (max restoring stiffness — the buckling fix): drive vn to
-                // the bias/restitution target exactly. The Tikhonov regularisation on `a`
-                // (not soft mass-scaling) is what tames the response, so the singular
-                // redundant direction stays bounded while the physical modes stay stiff.
-                // Softening the block with mass_scale<1 measurably weakens the tall-stack
-                // fix, so it is deliberately NOT applied here. Speculative gaps (pen<0)
-                // limit approach; otherwise bias only when use_bias.
-                let _ = (mass_scale, impulse_scale);
-                let bias = if penetration < 0.0 {
-                    penetration * inv_dt
-                } else if use_bias && penetration > self.slop {
-                    (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity)
-                } else {
-                    0.0
-                };
-                let tvn = if apply_restitution
-                    && p.restitution > 0.0
-                    && p.pen0 >= 0.0
-                    && p.vn0 < -self.restitution_velocity_threshold
-                {
-                    -p.restitution * p.vn0
-                } else {
-                    0.0
-                };
-                rhs[c] = tvn + bias - vn;
-                acc[c] = p.acc_n;
+    /// One block group's step: its normal impulses jointly, then friction contact by contact.
+    ///
+    /// `run` is the group's contacts (`prepared[g.start..g.start + g.n]`), all of one manifold and
+    /// so of one body pair; `pair` is that pair's velocities, `[a, b]`, and `dp_ab` their position
+    /// deltas. Only the dynamic ends of `pair` are written. Taking the pair by value rather than
+    /// the island's velocity buffer is what lets groups that share no dynamic body run at once.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn block_group_step(
+        &self,
+        g: &BlockGroup,
+        run: &mut [Prepared],
+        pair: &mut [Velocity; 2],
+        (dp_a, dp_b): ((Vec3, Vec3), (Vec3, Vec3)),
+        apply_restitution: bool,
+        use_bias: bool,
+        bias_rate: f32,
+        inv_dt: f32,
+    ) {
+        let n = g.n;
+        // ── Block NORMAL solve ── build the coupled driving term per contact:
+        // rhs_i = target_i − vn_i. Speculative (pen<0) contacts limit approach.
+        let mut rhs = [0.0f32; 4];
+        let mut acc = [0.0f32; 4];
+        for c in 0..n {
+            let p = &run[c];
+            let disp_a = dp_a.0 + dp_a.1.cross(p.r_a);
+            let disp_b = dp_b.0 + dp_b.1.cross(p.r_b);
+            let penetration = p.pen0 - (disp_b - disp_a).dot(p.normal);
+            let va = pair[0].linear + pair[0].angular.cross(p.r_a);
+            let vb = pair[1].linear + pair[1].angular.cross(p.r_b);
+            let vn = (vb - va).dot(p.normal);
+            // RIGID block (max restoring stiffness — the buckling fix): drive vn to
+            // the bias/restitution target exactly. The Tikhonov regularisation on `a`
+            // (not soft mass-scaling) is what tames the response, so the singular
+            // redundant direction stays bounded while the physical modes stay stiff.
+            // Softening the block with mass_scale<1 measurably weakens the tall-stack
+            // fix, so it is deliberately NOT applied here. Speculative gaps (pen<0)
+            // limit approach; otherwise bias only when use_bias.
+            let bias = if penetration < 0.0 {
+                penetration * inv_dt
+            } else if use_bias && penetration > self.slop {
+                (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity)
+            } else {
+                0.0
+            };
+            let tvn = if apply_restitution
+                && p.restitution > 0.0
+                && p.pen0 >= 0.0
+                && p.vn0 < -self.restitution_velocity_threshold
+            {
+                -p.restitution * p.vn0
+            } else {
+                0.0
+            };
+            rhs[c] = tvn + bias - vn;
+            acc[c] = p.acc_n;
+        }
+
+        let lambda = super::block::solve_normal_block(n, &g.a, &rhs, &acc);
+
+        for c in 0..n {
+            let p = &mut run[c];
+            let delta = lambda[c] - p.acc_n;
+            p.acc_n = lambda[c];
+            let imp_n = p.normal * delta;
+            if p.dyn_a {
+                pair[0].linear -= imp_n * p.inv_m_a;
+                pair[0].angular -= p.inv_i_a.mul_vec3(p.r_a.cross(imp_n));
             }
-
-            let lambda = super::block::solve_normal_block(n, &g.a, &rhs, &acc);
-
-            for c in 0..n {
-                let p = &mut prepared[start + c];
-                let delta = lambda[c] - p.acc_n;
-                p.acc_n = lambda[c];
-                let imp_n = p.normal * delta;
-                if p.dyn_a {
-                    velocities[p.idx_a].linear -= imp_n * p.inv_m_a;
-                    velocities[p.idx_a].angular -= p.inv_i_a.mul_vec3(p.r_a.cross(imp_n));
-                }
-                if p.dyn_b {
-                    velocities[p.idx_b].linear += imp_n * p.inv_m_b;
-                    velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_n));
-                }
+            if p.dyn_b {
+                pair[1].linear += imp_n * p.inv_m_b;
+                pair[1].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_n));
             }
+        }
 
-            // ── Sequential FRICTION per contact (2-tangent Coulomb cone) — identical to
-            // tgs_sweep_prepared, using the (frozen) anchors and the block's new acc_n. ──
-            for c in 0..n {
-                let p = &mut prepared[start + c];
-                let va2 = velocities[p.idx_a].linear + velocities[p.idx_a].angular.cross(p.r_a);
-                let vb2 = velocities[p.idx_b].linear + velocities[p.idx_b].angular.cross(p.r_b);
-                let rel2 = vb2 - va2;
-                let acc_t1 = p.acc_t.dot(p.t1);
-                let acc_t2 = p.acc_t.dot(p.t2);
-                let mut new1 = if p.k_t1 > 1e-8 {
-                    acc_t1 - rel2.dot(p.t1) / p.k_t1
-                } else {
-                    acc_t1
-                };
-                let mut new2 = if p.k_t2 > 1e-8 {
-                    acc_t2 - rel2.dot(p.t2) / p.k_t2
-                } else {
-                    acc_t2
-                };
-                // Coulomb bütçesi: duran temas μ_s, kayan temas μ_d (bkz. `friction_limit`).
-                let tang_speed = (rel2 - p.normal * rel2.dot(p.normal)).length();
-                let limit =
-                    self.friction_limit(tang_speed, p.static_friction, p.friction, p.acc_n);
-                let mag = (new1 * new1 + new2 * new2).sqrt();
-                if mag > limit && mag > 1e-12 {
-                    let s = limit / mag;
-                    new1 *= s;
-                    new2 *= s;
-                }
-                let imp_t = p.t1 * (new1 - acc_t1) + p.t2 * (new2 - acc_t2);
-                p.acc_t = p.t1 * new1 + p.t2 * new2;
-                if p.dyn_a {
-                    velocities[p.idx_a].linear -= imp_t * p.inv_m_a;
-                    velocities[p.idx_a].angular -= p.inv_i_a.mul_vec3(p.r_a.cross(imp_t));
-                }
-                if p.dyn_b {
-                    velocities[p.idx_b].linear += imp_t * p.inv_m_b;
-                    velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_t));
-                }
-                apply_rolling(p, velocities);
+        // ── Sequential FRICTION per contact (2-tangent Coulomb cone) — identical to
+        // tgs_sweep_prepared, using the (frozen) anchors and the block's new acc_n. ──
+        for p in run.iter_mut() {
+            let va2 = pair[0].linear + pair[0].angular.cross(p.r_a);
+            let vb2 = pair[1].linear + pair[1].angular.cross(p.r_b);
+            let rel2 = vb2 - va2;
+            let acc_t1 = p.acc_t.dot(p.t1);
+            let acc_t2 = p.acc_t.dot(p.t2);
+            let mut new1 = if p.k_t1 > 1e-8 {
+                acc_t1 - rel2.dot(p.t1) / p.k_t1
+            } else {
+                acc_t1
+            };
+            let mut new2 = if p.k_t2 > 1e-8 {
+                acc_t2 - rel2.dot(p.t2) / p.k_t2
+            } else {
+                acc_t2
+            };
+            // Coulomb bütçesi: duran temas μ_s, kayan temas μ_d (bkz. `friction_limit`).
+            let tang_speed = (rel2 - p.normal * rel2.dot(p.normal)).length();
+            let limit = self.friction_limit(tang_speed, p.static_friction, p.friction, p.acc_n);
+            let mag = (new1 * new1 + new2 * new2).sqrt();
+            if mag > limit && mag > 1e-12 {
+                let s = limit / mag;
+                new1 *= s;
+                new2 *= s;
             }
+            let imp_t = p.t1 * (new1 - acc_t1) + p.t2 * (new2 - acc_t2);
+            p.acc_t = p.t1 * new1 + p.t2 * new2;
+            if p.dyn_a {
+                pair[0].linear -= imp_t * p.inv_m_a;
+                pair[0].angular -= p.inv_i_a.mul_vec3(p.r_a.cross(imp_t));
+            }
+            if p.dyn_b {
+                pair[1].linear += imp_t * p.inv_m_b;
+                pair[1].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_t));
+            }
+            p.acc_r = super::rolling_row(
+                pair,
+                (0, 1),
+                (p.dyn_a, p.dyn_b),
+                (p.inv_i_a, p.inv_i_b),
+                (p.rolling, super::rolling_lever(p.r_a, p.r_b, p.normal, (p.dyn_a, p.dyn_b))),
+                p.acc_n,
+                p.acc_r,
+            );
         }
     }
 

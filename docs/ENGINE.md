@@ -2742,6 +2742,33 @@ rather than concentrated in one. Neither is allocations. That next step was take
 above — and it moved the answer: of the ~2.5×, the constraint iteration is 1.2× and the rest of
 the per-substep pipeline is 1.8×.
 
+**A large island was one thread's (2026-11-24, measured against Godot 4.7.2's Jolt).** Islands
+were solved in parallel with one another and each by one thread — and a pile that has fallen is one
+island. A thousand boxes dropped in a loose grid (the `gizmo-godot-bench` pile, not the vs-rapier
+one, which settles as a stack by frame 75): 15.6 of the frame's 25.8 ms in the sweeps, **13.6 ms on
+one thread and 15.3 on sixteen** — no scaling at all. Godot's Jolt, at the same 240 Hz, took 8.2 ms
+for the whole frame. What Jolt and Box2D v3 do, and the solver now does (`solver/parallel.rs`):
+an island of at least `parallel_island_blocks` (256) contact blocks is **coloured** so that no two
+blocks of a colour share a dynamic body, and each sweep goes colour by colour with a colour's blocks
+spread over up to nine threads. Workers take tickets from one counter and wait only for the stage
+before theirs, so a helper that starts late never holds the solve up.
+
+    1000-box pile, ms/frame          1 thread   2      4      8      16
+    sweeps                           16.9       11.4   7.7    5.9    6.6
+    frame                            27.3       17.5   12.8   10.3   11.1
+    pile hash                        548a54bea5d2e37b on every column
+
+The colours are independent, so the result is the same bits whatever the pool's size; which
+islands take the path depends on their size alone. It changes their bits against the serial sweep
+(a different Gauss-Seidel order), and only theirs: the 200-box tower and every island under 256
+blocks step exactly as before (`headless_stress_test` `762BF756B589DE11`, unchanged). With the same
+materials in both engines (μ 0.5, no bounce) the pile sleeps at frame 983 here against Jolt's 778 at
+240 Hz; the 4000-sphere scene went from 72 to ~35 ms per frame, against Jolt's 29.7 at 240 Hz.
+`tests/parallel_island.rs`. **Still open, and measured:** sampled with eu-stack, the sphere scene
+keeps only ~3 threads busy on average — the narrowphase's manifold assembly, the island build and
+the per-substep preparation run on one thread while the workers idle; and islands with joints, or on
+the split-impulse path (a CCD body), are still swept serially.
+
 **NON-GOAL: narrowphase batch-SIMD.** Investigated, REJECTED (2026-07-14). Measurement
 (wide_scene, 2000 boxes, ~30ms frame): box-box SAT compute is only **~3.3%**; narrowphase
 post-processing cannot be batched; both per-pair SIMD attempts regressed (the scalar code is
