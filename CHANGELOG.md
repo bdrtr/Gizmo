@@ -549,6 +549,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A coloured island's blocks are solved four at a time with SIMD.** The blocks of a colour share no
+  dynamic body, so `solver/wide.rs` packs them four to a `WideBlock` — a lane each, every row quantity
+  laid out across the lanes as a `glam::Vec4` (SSE, NEON) — and runs the block step on the four at
+  once: Box2D v3's wide solver, for the 3D block solver. The normal block through its inverse on all
+  lanes, a lane with a contact pulling taking the active-set search alone; friction point by point;
+  only the slots some lane uses. A block with rolling resistance, and the overflow colour, are
+  solved one at a time as before; without SIMD (wasm without `simd128`) or with
+  `ConstraintSolver::wide_blocks` off, every block is. On one thread at 60 Hz the sweep of a 1000-box
+  pile 3.6 → 2.8 ms and of 4000 spheres 8.6 → 5.3; on all threads the pile's frame 3.25 → 3.0.
+  `wide_solver.rs`: a stack of 256 boxes rests within 2 mm of where the scalar step rests it, at 60
+  and 240 Hz — red with a sign flipped or an impulse dropped in the wide step.
 - **A moving body's broad-phase leaf reaches ahead of it.** A body that left its fattened box was
   taken out of the tree and put back, and a settling pile's bodies did so on nearly every step: on
   4000 spheres at 60 Hz the reinsertions were most of the broad phase's 1.8 ms. A leaf remade for a

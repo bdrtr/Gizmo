@@ -68,6 +68,100 @@ pub(super) struct Prepared {
     jac: Angular,
 }
 
+/// A prepared row's quantities, for packing into a wide block (`super::wide`).
+pub(super) struct RowView {
+    pub(super) normal: Vec3,
+    pub(super) t1: Vec3,
+    pub(super) t2: Vec3,
+    pub(super) rn_a: Vec3,
+    pub(super) rn_b: Vec3,
+    pub(super) in_a: Vec3,
+    pub(super) in_b: Vec3,
+    pub(super) rt1_a: Vec3,
+    pub(super) rt1_b: Vec3,
+    pub(super) it1_a: Vec3,
+    pub(super) it1_b: Vec3,
+    pub(super) rt2_a: Vec3,
+    pub(super) rt2_b: Vec3,
+    pub(super) it2_a: Vec3,
+    pub(super) it2_b: Vec3,
+    pub(super) pen0: f32,
+    pub(super) vn0: f32,
+    pub(super) restitution: f32,
+    pub(super) k_t1: f32,
+    pub(super) k_t2: f32,
+    pub(super) friction: f32,
+    pub(super) static_friction: f32,
+    pub(super) sliding: bool,
+    pub(super) acc_n: f32,
+    pub(super) acc_t: Vec3,
+}
+
+impl Prepared {
+    /// What a wide block packs of this row.
+    pub(super) fn row(&self) -> RowView {
+        let j = &self.jac;
+        RowView {
+            normal: j.normal.into(),
+            t1: j.t1.into(),
+            t2: j.t2.into(),
+            rn_a: j.rn_a.into(),
+            rn_b: j.rn_b.into(),
+            in_a: j.in_a.into(),
+            in_b: j.in_b.into(),
+            rt1_a: j.rt1_a.into(),
+            rt1_b: j.rt1_b.into(),
+            it1_a: j.it1_a.into(),
+            it1_b: j.it1_b.into(),
+            rt2_a: j.rt2_a.into(),
+            rt2_b: j.rt2_b.into(),
+            it2_a: j.it2_a.into(),
+            it2_b: j.it2_b.into(),
+            pen0: self.pen0,
+            vn0: self.vn0,
+            restitution: self.restitution,
+            k_t1: self.k_t1,
+            k_t2: self.k_t2,
+            friction: self.friction,
+            static_friction: self.static_friction,
+            sliding: self.sliding,
+            acc_n: self.acc_n,
+            acc_t: self.acc_t,
+        }
+    }
+
+    pub(super) fn inv_m_a(&self) -> f32 {
+        self.inv_m_a
+    }
+
+    pub(super) fn inv_m_b(&self) -> f32 {
+        self.inv_m_b
+    }
+
+    /// Whether the row has rolling resistance — a block with one is solved by the scalar step.
+    pub(super) fn rolls(&self) -> bool {
+        self.rolling > 0.0
+    }
+
+    /// The impulses a wide block solved for this row.
+    pub(super) fn set_impulses(&mut self, acc_n: f32, acc_t: Vec3) {
+        self.acc_n = acc_n;
+        self.acc_t = acc_t;
+    }
+}
+
+impl BlockGroup {
+    /// The block's regularised normal Delassus matrix.
+    pub(super) fn matrix(&self) -> &[[f32; 4]; 4] {
+        &self.a
+    }
+
+    /// Its inverse, when it has one (two contacts or more).
+    pub(super) fn inverse(&self) -> Option<&[[f32; 4]; 4]> {
+        self.inv.as_ref()
+    }
+}
+
 /// The block step's vectors, aligned for SIMD (`glam::Vec3A`).
 type V = gizmo_math::Vec3A;
 

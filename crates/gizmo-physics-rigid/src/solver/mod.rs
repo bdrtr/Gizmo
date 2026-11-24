@@ -15,6 +15,7 @@ mod block;
 mod parallel;
 mod standalone;
 mod tgs;
+mod wide;
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 #[cfg(target_arch = "wasm32")]
@@ -503,6 +504,11 @@ pub struct ConstraintSolver {
     /// converges differently; which islands take it depends on their size only, so the result
     /// does not depend on the machine's thread count. See `solver/parallel.rs`.
     pub parallel_island_blocks: usize,
+    /// Whether a coloured island's blocks are solved four at a time with SIMD (`solver/wide.rs`) —
+    /// on a target that has it (x86-64, AArch64, wasm with `simd128`); elsewhere, and with this off,
+    /// one at a time. The same step either way, rounded in another order. Measured on one thread at
+    /// 60 Hz (2026-11-25): the sweep of a 1000-box pile 3.6 → 2.8 ms, of 4000 spheres 8.6 → 5.3.
+    pub wide_blocks: bool,
 
     /// Block-solver Tikhonov regularisation, as a fraction of the manifold's mean normal
     /// effective mass. It cures the rank deficiency of a 4-coplanar contact block, and must stay
@@ -559,6 +565,7 @@ impl Default for ConstraintSolver {
             block_solver: true,
             adaptive_iterations: true,
             parallel_island_blocks: 256,
+            wide_blocks: true,
             block_regularization: 0.05,
             direct_chain_solve: false,
         }

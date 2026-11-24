@@ -26,6 +26,11 @@
 //! helper ever starts.
 
 use super::tgs::{BlockGroup, Prepared};
+use super::wide::{WideBlock, LANES};
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use crate::parallel_compat::*;
 use super::ConstraintSolver;
 use crate::components::Velocity;
 use gizmo_math::Vec3;
@@ -40,6 +45,13 @@ const MAX_COLORS: u32 = 64;
 /// took the 1000-box pile 4.7 → 4.3 ms a frame and 4000 spheres 12.2 → 11.8; 4 was no better,
 /// 64 and 128 worse (5.2, 6.4 ms on the pile).
 const MIN_BLOCKS_PER_CHUNK: usize = 8;
+/// Whether the target has the SIMD a wide block is built for (`glam::Vec4`): SSE on x86-64, NEON on
+/// AArch64, `simd128` on wasm. Without it the four lanes are four scalar sums and packing is a loss.
+const WIDE_SIMD: bool = cfg!(any(target_arch = "x86_64", target_arch = "aarch64", target_feature = "simd128"));
+
+/// Items per chunk at least, an item being a wide block (four blocks) or a block solved alone: the
+/// same two-wide-block floor as `MIN_BLOCKS_PER_CHUNK`'s eight blocks.
+const MIN_ITEMS_PER_CHUNK: usize = MIN_BLOCKS_PER_CHUNK / LANES;
 /// Chunks per worker in a colour: a few, so that a worker that started late or ran into slower
 /// blocks does not hold the stage up.
 const CHUNKS_PER_WORKER: usize = 2;
@@ -189,19 +201,44 @@ impl ConstraintSolver {
         let colors = s.coloring.colors();
         let overflow = s.coloring.overflow.then(|| colors - 1);
         let workers = workers();
-        // Each colour's chunk size: its blocks spread over the workers a few chunks each, never
-        // below `MIN_BLOCKS_PER_CHUNK`. The size decides only who solves what, not the result.
+
+        // Each colour's work: its blocks packed four to a wide block (`super::wide`), then those it
+        // solves one at a time — a block with rolling resistance, and every block of the overflow
+        // colour, whose blocks may share a body. Packed colour by colour on several threads. Without
+        // SIMD (wasm without `simd128`), or with `wide_blocks` off, every block is solved alone.
+        let wide_ok = self.wide_blocks && WIDE_SIMD;
+        let (packed, single): (Vec<Vec<u32>>, Vec<Vec<u32>>) = (0..colors)
+            .map(|c| {
+                let blocks = s.coloring.color(c);
+                if Some(c) == overflow || !wide_ok {
+                    return (Vec::new(), blocks.to_vec());
+                }
+                blocks.iter().partition(|&&gi| {
+                    let g = &s.groups[gi as usize];
+                    !s.prepared[g.start..g.start + g.n].iter().any(|p| p.rolls())
+                })
+            })
+            .unzip();
+        let (prepared_ro, groups_ro) = (&*s.prepared, s.groups);
+        let mut wide: Vec<Vec<WideBlock>> = packed
+            .par_iter()
+            .map(|blocks| blocks.chunks(LANES).map(|four| WideBlock::build(prepared_ro, groups_ro, four)).collect())
+            .collect();
+        let item_count: Vec<usize> = (0..colors).map(|c| wide[c].len() + single[c].len()).collect();
+        let items_of = |c: usize| item_count[c];
+        // Each colour's chunk size, in items (a wide block or a single block): its items spread over
+        // the workers a few chunks each. The size decides only who solves what, not the result.
         let chunk_len: Vec<usize> = (0..colors)
             .map(|c| {
-                let n = s.coloring.color(c).len();
+                let n = items_of(c);
                 if Some(c) == overflow {
                     n.max(1)
                 } else {
-                    n.div_ceil(workers * CHUNKS_PER_WORKER).max(MIN_BLOCKS_PER_CHUNK)
+                    n.div_ceil(workers * CHUNKS_PER_WORKER).max(MIN_ITEMS_PER_CHUNK)
                 }
             })
             .collect();
-        let chunks_of = |c: usize| s.coloring.color(c).len().div_ceil(chunk_len[c]);
+        let chunks_of = |c: usize| items_of(c).div_ceil(chunk_len[c]);
         // Odd sweeps go through the colours backwards, as the serial sweep goes through the blocks.
         let mut stages: Vec<(Stage, usize)> = Vec::new();
         let sweep = |stages: &mut Vec<(Stage, usize)>, iter: usize, biased: bool| {
@@ -230,16 +267,17 @@ impl ConstraintSolver {
             sweep(&mut stages, iter, false);
         }
 
+        let wide_at: Vec<Shared<WideBlock>> = wide.iter_mut().map(|w| Shared(w.as_mut_ptr())).collect();
         let prepared = Shared(s.prepared.as_mut_ptr());
         let velocities = Shared(s.velocities.as_mut_ptr());
         let dp = Shared(s.dp.as_mut_ptr());
-        let (groups, coloring, integrate, h) = (s.groups, s.coloring, s.integrate, s.h);
+        let (groups, integrate, h) = (s.groups, s.integrate, s.h);
         let (bias_rate, inv_dt, warm) = (s.bias_rate, s.inv_dt, s.warm);
+        let wide_len: Vec<usize> = (0..colors).map(|c| packed[c].len().div_ceil(LANES)).collect();
         let work = |stage: Stage, chunk: usize| match stage {
             Stage::Color { color, biased, reverse } => {
-                let blocks = coloring.color(color);
                 let len = chunk_len[color];
-                let range = chunk * len..((chunk + 1) * len).min(blocks.len());
+                let range = chunk * len..((chunk + 1) * len).min(items_of(color));
                 let step = |gi: u32| {
                     let g = &groups[gi as usize];
                     // SAFETY: a block's run of `prepared` belongs to that block alone, and no other
@@ -261,17 +299,32 @@ impl ConstraintSolver {
                         }
                     }
                 };
+                let item = |k: usize| {
+                    if k < wide_len[color] {
+                        // SAFETY: a wide block is in one chunk of its colour; its lanes' bodies are
+                        // its blocks', which no other block of the colour has.
+                        unsafe {
+                            (*wide_at[color].at(k)).step(self, groups, velocities.at(0), dp.at(0), !biased, biased, bias_rate, inv_dt);
+                        }
+                    } else {
+                        step(single[color][k - wide_len[color]]);
+                    }
+                };
                 if reverse && Some(color) == overflow {
-                    range.rev().for_each(|k| step(blocks[k]));
+                    range.rev().for_each(item);
                 } else {
-                    range.for_each(|k| step(blocks[k]));
+                    range.for_each(item);
                 }
             }
             Stage::Warm { color } => {
-                let blocks = coloring.color(color);
                 let len = chunk_len[color];
-                for k in chunk * len..((chunk + 1) * len).min(blocks.len()) {
-                    let g = &groups[blocks[k] as usize];
+                for k in chunk * len..((chunk + 1) * len).min(items_of(color)) {
+                    if k < wide_len[color] {
+                        // SAFETY: as for `Stage::Color`.
+                        unsafe { (*wide_at[color].at(k)).warm(velocities.at(0), warm) };
+                        continue;
+                    }
+                    let g = &groups[single[color][k - wide_len[color]] as usize];
                     // SAFETY: as for `Stage::Color` — a colour's blocks share no dynamic body, and the
                     // overflow colour is one chunk.
                     unsafe {
@@ -303,6 +356,10 @@ impl ConstraintSolver {
             }
         };
         run_stages(&stages, workers, &work);
+        // The wide blocks' impulses back into their rows.
+        for w in wide.iter().flatten() {
+            w.write_back(s.prepared);
+        }
     }
 }
 
