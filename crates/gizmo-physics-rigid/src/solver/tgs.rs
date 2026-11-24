@@ -60,6 +60,31 @@ pub(super) struct Prepared {
     /// Accumulated rolling (torque) impulse, kept for the same reason `acc_t` is: the
     /// Coulomb bound is on the *total* impulse over the sweep, not on each increment.
     acc_r: Vec3,
+    /// The row's angular terms, worked out once here instead of in every sweep: `r×n`, `r×t₁`,
+    /// `r×t₂` for each body and the same through its inverse inertia (`I⁻¹(r×n)`, …). A sweep then
+    /// reads a velocity along a row as dot products and hands an impulse out as scaled sums — no
+    /// 3×3 product and no cross product (Jolt keeps the same `I⁻¹(r×axis)` per row). The block
+    /// solver's step reads only these.
+    jac: Angular,
+}
+
+/// See [`Prepared::jac`].
+#[derive(Clone, Copy)]
+struct Angular {
+    rn_a: Vec3,
+    rn_b: Vec3,
+    in_a: Vec3,
+    in_b: Vec3,
+    rt1_a: Vec3,
+    rt1_b: Vec3,
+    it1_a: Vec3,
+    it1_b: Vec3,
+    rt2_a: Vec3,
+    rt2_b: Vec3,
+    it2_a: Vec3,
+    it2_b: Vec3,
+    /// `rolling_lever` of the row.
+    lever: f32,
 }
 
 /// Rolling-resistance row: oppose the pair's relative spin with a torque impulse, bounded
@@ -583,6 +608,24 @@ impl ConstraintSolver {
                     // is a slow, dissipative effect rather than a stiff constraint, so the
                     // cost of a cold start is a fraction of one substep's decay.
                     acc_r: Vec3::ZERO,
+                    jac: {
+                        let (rt1_a, rt1_b, rt2_a, rt2_b) = (r_a.cross(t1), r_b.cross(t1), r_a.cross(t2), r_b.cross(t2));
+                        Angular {
+                            rn_a: r_a_x_n,
+                            rn_b: r_b_x_n,
+                            in_a: inv_i_a.mul_vec3(r_a_x_n),
+                            in_b: inv_i_b.mul_vec3(r_b_x_n),
+                            rt1_a,
+                            rt1_b,
+                            it1_a: inv_i_a.mul_vec3(rt1_a),
+                            it1_b: inv_i_b.mul_vec3(rt1_b),
+                            rt2_a,
+                            rt2_b,
+                            it2_a: inv_i_a.mul_vec3(rt2_a),
+                            it2_b: inv_i_b.mul_vec3(rt2_b),
+                            lever: super::rolling_lever(r_a, r_b, normal, (dyn_a, dyn_b)),
+                        }
+                    },
                 });
             }
         }
@@ -954,25 +997,16 @@ impl ConstraintSolver {
         inv_dt: f32,
     ) {
         let n = g.n;
-        // ── Block NORMAL solve ── build the coupled driving term per contact:
-        // rhs_i = target_i − vn_i. Speculative (pen<0) contacts limit approach.
         let mut rhs = [0.0f32; 4];
         let mut acc = [0.0f32; 4];
+        let (lin, ang) = (pair[1].linear - pair[0].linear, (pair[0].angular, pair[1].angular));
+        let (dlin, dang) = (dp_b.0 - dp_a.0, (dp_a.1, dp_b.1));
         for c in 0..n {
             let p = &run[c];
-            let disp_a = dp_a.0 + dp_a.1.cross(p.r_a);
-            let disp_b = dp_b.0 + dp_b.1.cross(p.r_b);
-            let penetration = p.pen0 - (disp_b - disp_a).dot(p.normal);
-            let va = pair[0].linear + pair[0].angular.cross(p.r_a);
-            let vb = pair[1].linear + pair[1].angular.cross(p.r_b);
-            let vn = (vb - va).dot(p.normal);
-            // RIGID block (max restoring stiffness — the buckling fix): drive vn to
-            // the bias/restitution target exactly. The Tikhonov regularisation on `a`
-            // (not soft mass-scaling) is what tames the response, so the singular
-            // redundant direction stays bounded while the physical modes stay stiff.
-            // Softening the block with mass_scale<1 measurably weakens the tall-stack
-            // fix, so it is deliberately NOT applied here. Speculative gaps (pen<0)
-            // limit approach; otherwise bias only when use_bias.
+            let j = &p.jac;
+            // (b's point − a's point)·n, from the rows' r×n: ω×r·n = ω·(r×n).
+            let penetration = p.pen0 - (dlin.dot(p.normal) + dang.1.dot(j.rn_b) - dang.0.dot(j.rn_a));
+            let vn = lin.dot(p.normal) + ang.1.dot(j.rn_b) - ang.0.dot(j.rn_a);
             let tvn = if apply_restitution
                 && p.restitution > 0.0
                 && (p.pen0 >= 0.0 || p.acc_n > 0.0)
@@ -982,7 +1016,6 @@ impl ConstraintSolver {
             } else {
                 0.0
             };
-            // A bounce is the whole target (see `tgs_sweep_prepared`).
             let bias = if tvn > 0.0 {
                 0.0
             } else if penetration < 0.0 {
@@ -1002,36 +1035,32 @@ impl ConstraintSolver {
             let p = &mut run[c];
             let delta = lambda[c] - p.acc_n;
             p.acc_n = lambda[c];
-            let imp_n = p.normal * delta;
             if p.dyn_a {
-                pair[0].linear -= imp_n * p.inv_m_a;
-                pair[0].angular -= p.inv_i_a.mul_vec3(p.r_a.cross(imp_n));
+                pair[0].linear -= p.normal * (delta * p.inv_m_a);
+                pair[0].angular -= p.jac.in_a * delta;
             }
             if p.dyn_b {
-                pair[1].linear += imp_n * p.inv_m_b;
-                pair[1].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_n));
+                pair[1].linear += p.normal * (delta * p.inv_m_b);
+                pair[1].angular += p.jac.in_b * delta;
             }
         }
 
-        // ── Sequential FRICTION per contact (2-tangent Coulomb cone) — identical to
-        // tgs_sweep_prepared, using the (frozen) anchors and the block's new acc_n. ──
         for p in run.iter_mut() {
-            let va2 = pair[0].linear + pair[0].angular.cross(p.r_a);
-            let vb2 = pair[1].linear + pair[1].angular.cross(p.r_b);
-            let rel2 = vb2 - va2;
+            let j = &p.jac;
+            let lin = pair[1].linear - pair[0].linear;
+            let (wa, wb) = (pair[0].angular, pair[1].angular);
             let acc_t1 = p.acc_t.dot(p.t1);
             let acc_t2 = p.acc_t.dot(p.t2);
             let mut new1 = if p.k_t1 > 1e-8 {
-                acc_t1 - rel2.dot(p.t1) / p.k_t1
+                acc_t1 - (lin.dot(p.t1) + wb.dot(j.rt1_b) - wa.dot(j.rt1_a)) / p.k_t1
             } else {
                 acc_t1
             };
             let mut new2 = if p.k_t2 > 1e-8 {
-                acc_t2 - rel2.dot(p.t2) / p.k_t2
+                acc_t2 - (lin.dot(p.t2) + wb.dot(j.rt2_b) - wa.dot(j.rt2_a)) / p.k_t2
             } else {
                 acc_t2
             };
-            // Coulomb budget: μ_s for a contact at rest at the last step's end, μ_d for one sliding (`friction_limit`).
             let limit = self.friction_limit(p.sliding, p.static_friction, p.friction, p.acc_n);
             let mag = (new1 * new1 + new2 * new2).sqrt();
             if mag > limit && mag > 1e-12 {
@@ -1039,34 +1068,29 @@ impl ConstraintSolver {
                 new1 *= s;
                 new2 *= s;
             }
-            let imp_t = p.t1 * (new1 - acc_t1) + p.t2 * (new2 - acc_t2);
+            let (d1, d2) = (new1 - acc_t1, new2 - acc_t2);
+            let imp_t = p.t1 * d1 + p.t2 * d2;
             p.acc_t = p.t1 * new1 + p.t2 * new2;
             if p.dyn_a {
                 pair[0].linear -= imp_t * p.inv_m_a;
-                pair[0].angular -= p.inv_i_a.mul_vec3(p.r_a.cross(imp_t));
+                pair[0].angular -= j.it1_a * d1 + j.it2_a * d2;
             }
             if p.dyn_b {
                 pair[1].linear += imp_t * p.inv_m_b;
-                pair[1].angular += p.inv_i_b.mul_vec3(p.r_b.cross(imp_t));
+                pair[1].angular += j.it1_b * d1 + j.it2_b * d2;
             }
             p.acc_r = super::rolling_row(
                 pair,
                 (0, 1),
                 (p.dyn_a, p.dyn_b),
                 (p.inv_i_a, p.inv_i_b),
-                (p.rolling, super::rolling_lever(p.r_a, p.r_b, p.normal, (p.dyn_a, p.dyn_b))),
+                (p.rolling, j.lever),
                 p.acc_n,
                 p.acc_r,
             );
         }
     }
 
-    /// Whole-CHAIN direct sweep: solve ALL of the island's normal impulses JOINTLY (one
-    /// active-set LCP over the precomputed island Delassus matrix) so the inter-manifold
-    /// support coupling up the column is resolved EXACTLY, then friction sequentially per
-    /// contact. Iteration-independent — this is what eliminates the tall-tower buckling the
-    /// per-manifold iterative path leaves as a weak creep. Rigid normal solve (like the
-    /// block path); frozen anchors. No `reverse` (a joint solve has no sweep direction).
     #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
     fn tgs_sweep_island(
         &self,

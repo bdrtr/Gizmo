@@ -549,6 +549,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A big pile solves faster: its per-contact passes on every thread, its rows' angular terms worked
+  out once.** Profiled on `gizmo-godot-bench`'s 4000 spheres at 60 Hz, where one island holds 5800 of
+  6500 manifolds and its solve is the whole solve: about half of it ran on one thread. The write-back
+  moved each solved manifold into the contact cache, freeing the cached copy on the main thread —
+  one buffer per pair per substep, allocated on another thread; the impulses and friction state are
+  copied into the cached buffer now. `approach_speeds`, `prepare_contacts` and `record_sliding` run in
+  chunks on rayon from 1024 manifolds, joined in order (bit-identical). And each row keeps `r×n`,
+  `r×t₁`, `r×t₂` and their images through the inverse inertia, so the block solver's sweep reads a
+  row's velocity as dot products and hands out an impulse as scaled sums, with no 3×3 product (Jolt
+  keeps the same per row): the sweep on one thread 13.2 → 11.4 ms. Spheres at 60 Hz 14.3 → about
+  13 ms a frame. Tried and dropped, as measured to change nothing: laying the rows out in colour
+  order, balancing the colours. `headless_stress_test` A2C5AE085D5FA501 → 3EB22613F8AEEB67 (the
+  same sums rounded in another order; a change meant).
 - **A body lands on what it falls onto, at any substep rate; a speculative contact bounces once it has
   got there.** The narrow phase found a contact only once two shapes overlapped, so a body landed a
   substep's travel deep and was pushed back out: at 60 Hz a 50 kg box falling 2 m sank 6 cm, at 240 Hz
