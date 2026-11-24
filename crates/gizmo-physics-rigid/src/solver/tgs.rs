@@ -68,21 +68,27 @@ pub(super) struct Prepared {
     jac: Angular,
 }
 
+/// The block step's vectors, aligned for SIMD (`glam::Vec3A`).
+type V = gizmo_math::Vec3A;
+
 /// See [`Prepared::jac`].
 #[derive(Clone, Copy)]
 struct Angular {
-    rn_a: Vec3,
-    rn_b: Vec3,
-    in_a: Vec3,
-    in_b: Vec3,
-    rt1_a: Vec3,
-    rt1_b: Vec3,
-    it1_a: Vec3,
-    it1_b: Vec3,
-    rt2_a: Vec3,
-    rt2_b: Vec3,
-    it2_a: Vec3,
-    it2_b: Vec3,
+    normal: V,
+    t1: V,
+    t2: V,
+    rn_a: V,
+    rn_b: V,
+    in_a: V,
+    in_b: V,
+    rt1_a: V,
+    rt1_b: V,
+    it1_a: V,
+    it1_b: V,
+    rt2_a: V,
+    rt2_b: V,
+    it2_a: V,
+    it2_b: V,
     /// `rolling_lever` of the row.
     lever: f32,
 }
@@ -619,18 +625,21 @@ impl ConstraintSolver {
                     jac: {
                         let (rt1_a, rt1_b, rt2_a, rt2_b) = (r_a.cross(t1), r_b.cross(t1), r_a.cross(t2), r_b.cross(t2));
                         Angular {
-                            rn_a: r_a_x_n,
-                            rn_b: r_b_x_n,
-                            in_a: inv_i_a.mul_vec3(r_a_x_n),
-                            in_b: inv_i_b.mul_vec3(r_b_x_n),
-                            rt1_a,
-                            rt1_b,
-                            it1_a: inv_i_a.mul_vec3(rt1_a),
-                            it1_b: inv_i_b.mul_vec3(rt1_b),
-                            rt2_a,
-                            rt2_b,
-                            it2_a: inv_i_a.mul_vec3(rt2_a),
-                            it2_b: inv_i_b.mul_vec3(rt2_b),
+                            normal: normal.into(),
+                            t1: t1.into(),
+                            t2: t2.into(),
+                            rn_a: r_a_x_n.into(),
+                            rn_b: r_b_x_n.into(),
+                            in_a: inv_i_a.mul_vec3(r_a_x_n).into(),
+                            in_b: inv_i_b.mul_vec3(r_b_x_n).into(),
+                            rt1_a: rt1_a.into(),
+                            rt1_b: rt1_b.into(),
+                            it1_a: inv_i_a.mul_vec3(rt1_a).into(),
+                            it1_b: inv_i_b.mul_vec3(rt1_b).into(),
+                            rt2_a: rt2_a.into(),
+                            rt2_b: rt2_b.into(),
+                            it2_a: inv_i_a.mul_vec3(rt2_a).into(),
+                            it2_b: inv_i_b.mul_vec3(rt2_b).into(),
                             lever: super::rolling_lever(r_a, r_b, normal, (dyn_a, dyn_b)),
                         }
                     },
@@ -1027,19 +1036,23 @@ impl ConstraintSolver {
     /// tangent plane, scaled by `factor`, handed to the pair as `warm_start_tgs` does for a manifold
     /// — through the row's precomputed `I⁻¹(r×axis)` (`Prepared::jac`).
     pub(super) fn block_warm_start(run: &[Prepared], pair: &mut [Velocity; 2], factor: f32) {
+        let (mut la, mut wa, mut lb, mut wb) =
+            (V::from(pair[0].linear), V::from(pair[0].angular), V::from(pair[1].linear), V::from(pair[1].angular));
         for p in run {
-            let (n, t1, t2) = (p.acc_n * factor, p.acc_t.dot(p.t1) * factor, p.acc_t.dot(p.t2) * factor);
-            let linear = p.normal * n + p.t1 * t1 + p.t2 * t2;
             let j = &p.jac;
+            let acc_t = V::from(p.acc_t);
+            let (n, t1, t2) = (p.acc_n * factor, acc_t.dot(j.t1) * factor, acc_t.dot(j.t2) * factor);
+            let linear = j.normal * n + j.t1 * t1 + j.t2 * t2;
             if p.dyn_a {
-                pair[0].linear -= linear * p.inv_m_a;
-                pair[0].angular -= j.in_a * n + j.it1_a * t1 + j.it2_a * t2;
+                la -= linear * p.inv_m_a;
+                wa -= j.in_a * n + j.it1_a * t1 + j.it2_a * t2;
             }
             if p.dyn_b {
-                pair[1].linear += linear * p.inv_m_b;
-                pair[1].angular += j.in_b * n + j.it1_b * t1 + j.it2_b * t2;
+                lb += linear * p.inv_m_b;
+                wb += j.in_b * n + j.it1_b * t1 + j.it2_b * t2;
             }
         }
+        (pair[0].linear, pair[0].angular, pair[1].linear, pair[1].angular) = (la.into(), wa.into(), lb.into(), wb.into());
     }
 
     pub(super) fn block_group_step(
@@ -1054,16 +1067,18 @@ impl ConstraintSolver {
         inv_dt: f32,
     ) {
         let n = g.n;
+        let (mut la, mut wa, mut lb, mut wb) =
+            (V::from(pair[0].linear), V::from(pair[0].angular), V::from(pair[1].linear), V::from(pair[1].angular));
         let mut rhs = [0.0f32; 4];
         let mut acc = [0.0f32; 4];
-        let (lin, ang) = (pair[1].linear - pair[0].linear, (pair[0].angular, pair[1].angular));
-        let (dlin, dang) = (dp_b.0 - dp_a.0, (dp_a.1, dp_b.1));
+        let dlin = V::from(dp_b.0 - dp_a.0);
+        let (dwa, dwb) = (V::from(dp_a.1), V::from(dp_b.1));
         for c in 0..n {
             let p = &run[c];
             let j = &p.jac;
             // (b's point − a's point)·n, from the rows' r×n: ω×r·n = ω·(r×n).
-            let penetration = p.pen0 - (dlin.dot(p.normal) + dang.1.dot(j.rn_b) - dang.0.dot(j.rn_a));
-            let vn = lin.dot(p.normal) + ang.1.dot(j.rn_b) - ang.0.dot(j.rn_a);
+            let penetration = p.pen0 - (dlin.dot(j.normal) + dwb.dot(j.rn_b) - dwa.dot(j.rn_a));
+            let vn = (lb - la).dot(j.normal) + wb.dot(j.rn_b) - wa.dot(j.rn_a);
             let tvn = if apply_restitution
                 && p.restitution > 0.0
                 && (p.pen0 >= 0.0 || p.acc_n > 0.0)
@@ -1092,29 +1107,30 @@ impl ConstraintSolver {
             let p = &mut run[c];
             let delta = lambda[c] - p.acc_n;
             p.acc_n = lambda[c];
+            let j = &p.jac;
             if p.dyn_a {
-                pair[0].linear -= p.normal * (delta * p.inv_m_a);
-                pair[0].angular -= p.jac.in_a * delta;
+                la -= j.normal * (delta * p.inv_m_a);
+                wa -= j.in_a * delta;
             }
             if p.dyn_b {
-                pair[1].linear += p.normal * (delta * p.inv_m_b);
-                pair[1].angular += p.jac.in_b * delta;
+                lb += j.normal * (delta * p.inv_m_b);
+                wb += j.in_b * delta;
             }
         }
 
         for p in run.iter_mut() {
             let j = &p.jac;
-            let lin = pair[1].linear - pair[0].linear;
-            let (wa, wb) = (pair[0].angular, pair[1].angular);
-            let acc_t1 = p.acc_t.dot(p.t1);
-            let acc_t2 = p.acc_t.dot(p.t2);
+            let rel = lb - la;
+            let acc_t = V::from(p.acc_t);
+            let acc_t1 = acc_t.dot(j.t1);
+            let acc_t2 = acc_t.dot(j.t2);
             let mut new1 = if p.k_t1 > 1e-8 {
-                acc_t1 - (lin.dot(p.t1) + wb.dot(j.rt1_b) - wa.dot(j.rt1_a)) / p.k_t1
+                acc_t1 - (rel.dot(j.t1) + wb.dot(j.rt1_b) - wa.dot(j.rt1_a)) / p.k_t1
             } else {
                 acc_t1
             };
             let mut new2 = if p.k_t2 > 1e-8 {
-                acc_t2 - (lin.dot(p.t2) + wb.dot(j.rt2_b) - wa.dot(j.rt2_a)) / p.k_t2
+                acc_t2 - (rel.dot(j.t2) + wb.dot(j.rt2_b) - wa.dot(j.rt2_a)) / p.k_t2
             } else {
                 acc_t2
             };
@@ -1126,26 +1142,31 @@ impl ConstraintSolver {
                 new2 *= s;
             }
             let (d1, d2) = (new1 - acc_t1, new2 - acc_t2);
-            let imp_t = p.t1 * d1 + p.t2 * d2;
-            p.acc_t = p.t1 * new1 + p.t2 * new2;
+            let imp_t = j.t1 * d1 + j.t2 * d2;
+            p.acc_t = (j.t1 * new1 + j.t2 * new2).into();
             if p.dyn_a {
-                pair[0].linear -= imp_t * p.inv_m_a;
-                pair[0].angular -= j.it1_a * d1 + j.it2_a * d2;
+                la -= imp_t * p.inv_m_a;
+                wa -= j.it1_a * d1 + j.it2_a * d2;
             }
             if p.dyn_b {
-                pair[1].linear += imp_t * p.inv_m_b;
-                pair[1].angular += j.it1_b * d1 + j.it2_b * d2;
+                lb += imp_t * p.inv_m_b;
+                wb += j.it1_b * d1 + j.it2_b * d2;
             }
-            p.acc_r = super::rolling_row(
-                pair,
-                (0, 1),
-                (p.dyn_a, p.dyn_b),
-                (p.inv_i_a, p.inv_i_b),
-                (p.rolling, j.lever),
-                p.acc_n,
-                p.acc_r,
-            );
+            if p.rolling > 0.0 && p.acc_n > 0.0 {
+                (pair[0].linear, pair[0].angular, pair[1].linear, pair[1].angular) = (la.into(), wa.into(), lb.into(), wb.into());
+                p.acc_r = super::rolling_row(
+                    pair,
+                    (0, 1),
+                    (p.dyn_a, p.dyn_b),
+                    (p.inv_i_a, p.inv_i_b),
+                    (p.rolling, j.lever),
+                    p.acc_n,
+                    p.acc_r,
+                );
+                (wa, wb) = (pair[0].angular.into(), pair[1].angular.into());
+            }
         }
+        (pair[0].linear, pair[0].angular, pair[1].linear, pair[1].angular) = (la.into(), wa.into(), lb.into(), wb.into());
     }
 
     #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
