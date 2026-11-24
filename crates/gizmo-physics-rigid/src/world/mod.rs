@@ -317,12 +317,57 @@ impl PhysicsWorld {
     }
 }
 
-/// Fixed internal physics frequency (Hz) — 240 Hz (with sub-stepping, excellent collision
-/// detection)
-const PHYSICS_HZ: f32 = 240.0;
-const FIXED_DT: f32 = 1.0 / PHYSICS_HZ;
-/// Maximum number of steps per sub-step — prevents the spiral of death
-const MAX_SUBSTEPS: u32 = 64; // Increased from 8 to support larger DTs without losing simulation time
+/// A new world's substep rate, in hertz: [`PhysicsWorld::substep_rate`]. 240 — every substep runs
+/// the whole pipeline, collision detection included, and four of them a 60 Hz frame are what keep a
+/// 0.5 m sphere from passing through another at 320 m/s (docs/ENGINE.md). A game that wants the
+/// physics cheaper picks a lower one with [`PhysicsWorld::with_substep_rate`].
+pub const DEFAULT_SUBSTEP_RATE: u32 = 240;
+/// The substep rates a world accepts, in hertz. Below 30 a substep is longer than most frames and a
+/// body's travel in one is past what the narrow phase and the contacts are built for; above 1000 it
+/// is past any use.
+pub const SUBSTEP_RATES: std::ops::RangeInclusive<u32> = 30..=1000;
+/// The most time one [`PhysicsWorld::step`] takes in, in seconds: a longer frame delta is clamped
+/// to it.
+pub(crate) const MAX_FRAME_DT: f32 = 0.25;
+/// The most time one `step` simulates, in seconds, so a world behind real time pays its debt off
+/// over several frames instead of stalling one (the spiral of death). A little over
+/// [`MAX_FRAME_DT`], so a clamped frame is always paid in full: 64 substeps at 240 Hz, which is what
+/// it was as a count before the rate could be chosen.
+pub(crate) const MAX_SIMULATED_PER_STEP: f32 = 64.0 / 240.0;
+/// How close to a whole substep the accumulator has to be for [`PhysicsWorld::step`] to count it
+/// as one, as a fraction of a substep: f32 rounding of a step that is a whole number of substeps,
+/// and nothing a frame delta means. See the substep loop in `step`.
+pub(crate) const SUBSTEP_SNAP: f32 = 1e-4;
+
+fn default_substep_rate() -> u32 {
+    DEFAULT_SUBSTEP_RATE
+}
+
+/// A substep rate the world does not accept ([`PhysicsWorld::with_substep_rate`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SubstepRateError {
+    /// Outside [`SUBSTEP_RATES`].
+    OutOfRange {
+        /// The rate asked for, in hertz.
+        hz: u32,
+    },
+}
+
+impl std::fmt::Display for SubstepRateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OutOfRange { hz } => write!(
+                f,
+                "a substep rate of {hz} Hz is outside the {}–{} Hz a world accepts",
+                SUBSTEP_RATES.start(),
+                SUBSTEP_RATES.end()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SubstepRateError {}
 
 /// Global weather condition carried on the world as a shared setting.
 ///
@@ -511,10 +556,17 @@ pub struct PhysicsWorld {
     #[serde(skip)]
     pub(crate) contact_cache: FxHashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>,
 
+    /// The substep rate, in hertz ([`substep_rate`](Self::substep_rate)), chosen when the world
+    /// is built ([`with_substep_rate`](Self::with_substep_rate)) and otherwise changed only by
+    /// restoring a snapshot taken at another one. Not a setting to change in play: the contacts'
+    /// warm-start impulses and the sleep counters are kept in its units.
+    #[serde(default = "default_substep_rate")]
+    pub(crate) substep_rate: u32,
+
     /// Unspent simulation time in seconds, always less than one fixed substep except
     /// when the substep ceiling was hit. `step` adds the (clamped) frame delta to it
-    /// and drains it in fixed 1/240 s substeps, which is what decouples the physics
-    /// rate from the frame rate.
+    /// and drains it in substeps of [`substep_dt`](Self::substep_dt), which is what decouples
+    /// the physics rate from the frame rate.
     ///
     /// Part of the rollback snapshot: it decides how many substeps the next frame
     /// runs, so restoring poses without it makes the resimulation diverge.
@@ -527,8 +579,8 @@ pub struct PhysicsWorld {
     /// **There is a second one, and they are not interchangeable.**
     /// `gizmo_core::time::PhysicsTime::alpha` measures the leftover of the *caller's* fixed step
     /// (60 Hz on the `App`/`PlayLoop` path); this measures the leftover of **this world's own
-    /// 240 Hz sub-step accumulator**, which is a quarter of the size and near zero whenever the
-    /// caller hands whole 1/60 s deltas in. Use this one only when you drive
+    /// substep accumulator**, which is near zero whenever the caller hands in whole numbers of
+    /// substeps. Use this one only when you drive
     /// [`PhysicsWorld::step`] yourself with a variable frame delta — then this world's
     /// accumulator is the only one there is. Neither is spent by the engine: no previous
     /// `Transform` is stored anywhere, so nothing can interpolate against it.
@@ -673,6 +725,10 @@ pub struct WorldSnapshot {
     rigid_bodies: Vec<crate::components::RigidBody>,
     contact_cache: FxHashMap<(BodyHandle, BodyHandle), (bool, Option<ContactManifold>)>,
     accumulator: f32,
+    // The rate the accumulator, the contacts' warm-start impulses and the sleep counters above are
+    // in: CARRIED, like `weather` below — a restore puts the world back at the rate those were
+    // taken at, never reads them at another.
+    substep_rate: u32,
     // Force-field state also feeds `velocity_integration_step`, so it MUST be part of
     // the rollback snapshot: these are public mutable `Vec`s that gameplay can add to /
     // clear at runtime, and if one changes inside a rollback window a restore that left

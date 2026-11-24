@@ -505,7 +505,7 @@ impl<'a> SceneBuilder<'a> {
 ///
 ///   1. turn mouse/WASD into a camera pose ([`SimpleSceneState::fly_step`]);
 ///   2. write that pose onto **the scene's camera** — see below;
-///   3. step the CPU physics in ≤16 ms slices;
+///   3. step the CPU physics in whole steps of the world's substeps, about 1/60 s each (see below);
 ///   4. run `TransformSyncSystem` then `TransformPropagateSystem`.
 ///
 /// # Which camera step 2 writes to
@@ -545,15 +545,53 @@ pub fn simple_scene_update(
     // A `PhysicsPlugin` steps physics on the fixed schedule: stepping it here as well ran it twice a
     // frame (see `PhysicsSteppedBySchedule`).
     if world.get_resource::<crate::plugins::PhysicsSteppedBySchedule>().is_none() {
-        let mut physics_dt = dt.min(0.1);
-        while physics_dt > 0.0 {
-            let step = physics_dt.min(0.016);
-            systems::cpu_physics_step_system(world, step);
-            physics_dt -= step;
-        }
+        SceneStepper::advance(world, dt);
     }
 
     sync_transforms(world);
+}
+
+/// The physics driver of [`simple_scene_update`]: a [`FixedPhysics`] whose step is the whole number
+/// of the world's substeps nearest 1/60 s (4 at the default 240 Hz, 1 at 60, 2 at 90), kept in the
+/// world between frames and rebuilt when the world's rate changes.
+///
+/// It sliced the frame into pieces of up to 16 ms instead, which a world's substeps do not divide:
+/// a 60 fps frame became a 16 ms call and a 0.67 ms one — at 240 Hz three substeps and one, at
+/// 60 Hz none and one. Each call clears the forces written for it and puts a kinematic body on its
+/// target, so a force written once a frame acted for three substeps of four, a moving platform
+/// stood still for one, and on a 60 Hz world the first call moved nothing at all. And nothing was
+/// drawn between steps; through `FixedPhysics` the bodies are ([`InterpolationHistory`]).
+///
+/// [`InterpolationHistory`]: crate::systems::interpolation::InterpolationHistory
+struct SceneStepper {
+    /// The world rate the driver was built for; `None` when there was no world.
+    rate: Option<u32>,
+    physics: FixedPhysics,
+}
+
+impl SceneStepper {
+    /// The tick the simple scene steps physics at, in hertz — the app's own fixed tick.
+    const TICK_HZ: f32 = 60.0;
+
+    /// Spends `dt` of frame time (at most 0.1 s of it) in the driver's whole steps.
+    fn advance(world: &mut crate::core::World, dt: f32) {
+        let rate = world.get_resource::<PhysicsWorld>().map(|p| p.substep_rate());
+        let mut stepper = match world.remove_resource::<SceneStepper>() {
+            Some(stepper) if stepper.rate == rate => stepper,
+            _ => {
+                let physics = match world.get_resource::<PhysicsWorld>() {
+                    Some(p) => {
+                        let k = (p.substep_rate() as f32 / Self::TICK_HZ).round().max(1.0) as u32;
+                        FixedPhysics::for_world(&p, k)
+                    }
+                    None => FixedPhysics::new(Self::TICK_HZ as u32),
+                };
+                SceneStepper { rate, physics }
+            }
+        };
+        stepper.physics.advance(world, dt.min(0.1));
+        world.insert_resource(stepper);
+    }
 }
 
 /// A game's `--test`, run: the engine's warnings and errors are printed while it plays, and the
@@ -629,10 +667,20 @@ fn timed(world: &mut crate::core::World, name: &'static str, f: impl FnOnce(&mut
 /// the mouse.
 ///
 /// Every step advances the simulation by exactly [`step`](Self::step) seconds whatever the frame
-/// rate, so the same shot lands in the same place on every machine. `simple_scene_update` does
-/// **not** promise that: it slices the frame delta into ≤16 ms pieces, so the steps it takes
-/// depend on the frame rate. Until this existed, a game that needed the fixed step wrote the
-/// accumulator itself (`kule_yikici`'s `FIXED_DT`/`MAX_STEPS`, `docs/CAPABILITY_GAPS.md` §C9).
+/// rate, so the same shot lands in the same place on every machine. Until this existed, a game
+/// that needed the fixed step wrote the accumulator itself (`kule_yikici`'s `FIXED_DT`/`MAX_STEPS`,
+/// `docs/CAPABILITY_GAPS.md` §C9). `simple_scene_update` steps physics through one too.
+///
+/// # A step is whole substeps of the world
+///
+/// Each step hands the [`PhysicsWorld`] one step of time, and the world spends it in its own
+/// substeps ([`PhysicsWorld::substep_rate`], 240 Hz by default). The step has to be a whole number
+/// of them: [`for_world`](Self::for_world) makes one that is, from the world it will drive. A
+/// driver made with [`new`](Self::new) or [`with_step`](Self::with_step) is checked against the
+/// world on its first `advance`, and a step that does not fit — `new(100)` on a 240 Hz world runs
+/// 2, 3, 2, … substeps a step; `new(480)` runs none every other step — is logged as an error, once,
+/// with the rates that would ([`substeps_per_tick`](crate::systems::substeps_per_tick)). It still
+/// steps: see `TickCheck` in `systems::physics` for why it reports rather than refuses.
 ///
 /// The game owns the value — in its state or a resource — rather than the world holding one,
 /// because the windowed runtime already feeds a [`PhysicsTime`](crate::core::time::PhysicsTime)
@@ -643,7 +691,7 @@ fn timed(world: &mut crate::core::World, name: &'static str, f: impl FnOnce(&mut
 /// # use gizmo::prelude::*;
 /// # use gizmo::simple::{FixedPhysics, SimpleAppExt, SimpleSceneState, sync_transforms};
 /// # let app = App::<SimpleSceneState>::new("x", 1, 1).with_simple_scene(|_, _| {});
-/// let mut physics = FixedPhysics::new(120);
+/// let mut physics = FixedPhysics::new(120); // 2 substeps of the default 240 Hz world
 /// app.set_update(move |world, _state, dt, _input| {
 ///     // …game logic that sets velocities…
 ///     physics.advance(world, dt);
@@ -666,6 +714,8 @@ pub struct FixedPhysics {
     accumulator: f32,
     /// Whether it has said that a `PhysicsPlugin` steps the same world (it says so once).
     warned_double: bool,
+    /// The step and world rate last checked against each other ([`crate::systems::substeps_per_tick`]).
+    tick: systems::physics::TickCheck,
 }
 
 impl FixedPhysics {
@@ -673,9 +723,22 @@ impl FixedPhysics {
     pub const DEFAULT_MAX_STEPS: u32 = 8;
 
     /// A driver that steps `hz` times per simulated second. `hz` of 0 is taken as 1.
+    ///
+    /// `hz` has to divide the world's substep rate (at the default 240 Hz: 240, 120, 80, 60, 48,
+    /// 40, 30, …); the first [`advance`](Self::advance) checks it. [`for_world`](Self::for_world)
+    /// cannot get it wrong.
     #[must_use]
     pub fn new(hz: u32) -> Self {
         Self::with_step(1.0 / hz.max(1) as f32)
+    }
+
+    /// A driver whose step is `substeps` of `world`'s substeps — `k / world.substep_rate()` seconds,
+    /// so every step runs exactly `k` of them, at whatever rate the world was built. 1 steps the
+    /// game once per substep; at the default 240 Hz, 4 is a 60 Hz step. `substeps` of 0 is taken
+    /// as 1.
+    #[must_use]
+    pub fn for_world(world: &PhysicsWorld, substeps: u32) -> Self {
+        Self::with_step(substeps.max(1) as f32 * world.substep_dt())
     }
 
     /// A driver with an explicit step length in seconds — for a step that is not `1/hz` of an
@@ -683,7 +746,13 @@ impl FixedPhysics {
     #[must_use]
     pub fn with_step(step: f32) -> Self {
         let step = if step.is_finite() && step > 0.0 { step } else { 1.0 / 60.0 };
-        Self { step, max_steps: Self::DEFAULT_MAX_STEPS, accumulator: 0.0, warned_double: false }
+        Self {
+            step,
+            max_steps: Self::DEFAULT_MAX_STEPS,
+            accumulator: 0.0,
+            warned_double: false,
+            tick: systems::physics::TickCheck::default(),
+        }
     }
 
     /// Replaces the per-call step ceiling — see the type's docs. 0 is taken as 1.
@@ -694,6 +763,9 @@ impl FixedPhysics {
     }
 
     /// Spends `dt` seconds of frame time in whole steps of physics, and returns how many ran.
+    ///
+    /// The first call on a world checks the step against the world's substeps (see the type's
+    /// docs), and so does the first after the world is replaced by one at another rate.
     ///
     /// Time short of a full step is kept for the next call; a negative or non-finite `dt` adds
     /// nothing. This steps physics only — call [`sync_transforms`] afterwards to make the result
@@ -723,6 +795,9 @@ impl FixedPhysics {
             tracing::warn!(
                 "[Physics] FixedPhysics::advance on a world a PhysicsPlugin already steps: the rigid step runs twice a frame. Use one of the two."
             );
+        }
+        if let Some(physics) = world.get_resource::<PhysicsWorld>() {
+            self.tick.check(&physics, self.step, "FixedPhysics");
         }
         let steps = self.plan(dt);
         // Each driven body's pose now and where the caller wants it after the last step.
@@ -1001,10 +1076,13 @@ pub trait SimpleAppExt {
 ///
 /// The physics world used to be inserted unconditionally, after the setup, so a game that set
 /// its own gravity there had it silently replaced — found writing `lobut`
-/// (`docs/CAPABILITY_GAPS.md` §C11).
+/// (`docs/CAPABILITY_GAPS.md` §C11). The default one is marked as such
+/// ([`DefaultPhysicsWorld`](crate::plugins::DefaultPhysicsWorld)): a `PhysicsPlugin` added after it
+/// (a `HeadlessFrames` run) builds its own in its place, where it keeps a world the game made.
 fn insert_scene_defaults(world: &mut crate::core::World, asset_manager: AssetManager) {
     if world.get_resource::<PhysicsWorld>().is_none() {
         world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+        world.insert_resource(crate::plugins::DefaultPhysicsWorld);
     }
     if world.get_resource::<crate::renderer::Gizmos>().is_none() {
         world.insert_resource(crate::renderer::Gizmos::default());
@@ -1408,9 +1486,16 @@ mod fixed_physics_tests {
     /// was thrown up at 3.7 m/s.
     #[test]
     fn a_kinematic_target_set_once_a_frame_is_spread_over_the_frames_steps() {
+        // One step per substep of the world, at three of its rates: 1, 2 and 4 steps a 60 fps frame.
+        for hz in [60, 120, 240] {
+            kinematic_target_at(hz);
+        }
+    }
+
+    fn kinematic_target_at(hz: u32) {
         use crate::physics::components::{KinematicTarget, RigidBody, Velocity};
         let mut world = crate::core::World::new();
-        world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+        world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)).with_substep_rate(hz).expect("in range"));
         let mut plank = RigidBody::new_kinematic();
         plank.ccd_enabled = false;
         let board = world
@@ -1426,7 +1511,7 @@ mod fixed_physics_tests {
         let col = Collider::sphere(0.3);
         body.update_inertia_from_collider(&col);
         let ball = world.spawn_bundle((Transform::new(Vec3::new(-3.0, 0.4, 0.0)), body, Velocity::default(), col));
-        let mut physics = FixedPhysics::new(240);
+        let mut physics = FixedPhysics::for_world(&world.get_resource::<PhysicsWorld>().unwrap(), 1);
         let frame = 1.0 / 60.0;
         // Settle, then tilt the right edge down at 0.6 rad/s: the ball's side rises.
         for _ in 0..60 {
@@ -1444,10 +1529,10 @@ mod fixed_physics_tests {
         let surface = 0.6 * 3.0;
         assert!(
             fastest_up < surface * 1.25,
-            "a ball on a surface rising at {surface} m/s was thrown up at {fastest_up:.2} m/s"
+            "{hz} Hz: a ball on a surface rising at {surface} m/s was thrown up at {fastest_up:.2} m/s"
         );
         let at = world.query::<&Transform>().get(board).map(|t| t.rotation).unwrap();
-        assert!(at.angle_between(Quat::from_rotation_z(-tilt)) < 1e-5, "the board did not end on its target");
+        assert!(at.angle_between(Quat::from_rotation_z(-tilt)) < 1e-5, "{hz} Hz: the board did not end on its target");
     }
 
     /// A stall runs the ceiling and then forgets the rest instead of owing it.
@@ -1471,6 +1556,86 @@ mod fixed_physics_tests {
         assert_eq!(p.alpha(), 0.0);
         assert_eq!(FixedPhysics::with_step(0.0).step(), 1.0 / 60.0);
         assert_eq!(FixedPhysics::new(0).step(), 1.0);
+    }
+
+    /// A free-falling body in a world at `hz`, with no damping, so each substep adds exactly `g·dt`.
+    fn falling_body(hz: u32) -> (crate::core::World, Entity) {
+        let mut world = crate::core::World::new();
+        world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)).with_substep_rate(hz).expect("in range"));
+        let mut body = crate::physics::RigidBody::new(1.0, true);
+        body.linear_damping = 0.0;
+        let id = world.spawn_bundle((Transform::new(Vec3::new(0.0, 1000.0, 0.0)), body, crate::physics::Velocity::default(), Collider::sphere(0.5)));
+        (world, id)
+    }
+
+    /// **`for_world` steps exactly `k` of the world's substeps a step**, at 60, 120 and 240 Hz:
+    /// the world holds nothing back after any step, and each step adds `k` substeps' worth of
+    /// falling speed — never `k − 1` with the rest carried, never `k + 1`.
+    #[test]
+    fn for_world_steps_exactly_k_substeps_a_step() {
+        for hz in [60, 120, 240] {
+            for k in [1, 2, 4] {
+                let (mut world, id) = falling_body(hz);
+                let substep = world.get_resource::<PhysicsWorld>().unwrap().substep_dt();
+                let mut physics = FixedPhysics::for_world(&world.get_resource::<PhysicsWorld>().unwrap(), k);
+                assert_eq!(physics.step(), k as f32 * substep);
+                let errors = crate::systems::physics::errors_during(|| {
+                    let mut before = 0.0f32;
+                    for step in 0..240 {
+                        assert_eq!(physics.advance(&mut world, physics.step()), 1, "{hz} Hz, k = {k}: step {step}");
+                        assert_eq!(world.get_resource::<PhysicsWorld>().unwrap().accumulator, 0.0, "{hz} Hz, k = {k}: step {step} left time in the world");
+                        let v = world.query::<&crate::physics::Velocity>().get(id).unwrap().linear.y;
+                        let ran = (before - v) / (9.81 * substep);
+                        assert!((ran - k as f32).abs() < 0.01, "{hz} Hz: step {step} ran {ran:.3} substeps, not {k}");
+                        before = v;
+                    }
+                });
+                assert!(errors.is_empty(), "{hz} Hz, k = {k}: {errors:?}");
+            }
+        }
+    }
+
+    /// **`new(hz)` is checked against the world it drives**, on its first step and once: 120 fits a
+    /// 240 Hz world; 100 is 2.4 substeps and 480 half of one, and each is logged with the rates that
+    /// would fit.
+    #[test]
+    fn a_step_that_is_not_whole_substeps_is_reported_once() {
+        let errors = |hz: u32| {
+            let (mut world, _) = falling_body(240);
+            let mut physics = FixedPhysics::new(hz);
+            crate::systems::physics::errors_during(|| {
+                for _ in 0..30 {
+                    physics.advance(&mut world, 1.0 / 60.0);
+                }
+            })
+        };
+        assert!(errors(120).is_empty());
+        let at_100 = errors(100);
+        assert_eq!(at_100.len(), 1, "{at_100:?}");
+        assert!(at_100[0].contains("FixedPhysics") && at_100[0].contains("240 Hz") && at_100[0].contains("not a whole number"), "{}", at_100[0]);
+        let at_480 = errors(480);
+        assert_eq!(at_480.len(), 1, "{at_480:?}");
+        assert!(at_480[0].contains("shorter than one substep"), "{}", at_480[0]);
+    }
+
+    /// **The simple scene steps physics in whole substeps, at any world rate**: a 60 fps frame is
+    /// one step of the substeps nearest 1/60 s, and the world holds nothing back after it. It cut the
+    /// frame into a 16 ms piece and a 0.67 ms one, and on a 60 Hz world the first moved nothing.
+    #[test]
+    fn the_simple_scene_steps_whole_substeps() {
+        for hz in [60, 120, 240] {
+            let (mut world, id) = falling_body(hz);
+            let mut state = SimpleSceneState::default();
+            let input = Input::default();
+            let mut before = 0.0f32;
+            for frame in 0..120 {
+                simple_scene_update(&mut world, &mut state, 1.0 / 60.0, &input);
+                assert_eq!(world.get_resource::<PhysicsWorld>().unwrap().accumulator, 0.0, "{hz} Hz: frame {frame}");
+                let v = world.query::<&crate::physics::Velocity>().get(id).unwrap().linear.y;
+                assert!(((before - v) - 9.81 / 60.0).abs() < 1e-3, "{hz} Hz: frame {frame} gained {} m/s", before - v);
+                before = v;
+            }
+        }
     }
 
     /// The render stage draws and does nothing else: renderer settings forced there every frame
@@ -1542,8 +1707,10 @@ mod fixed_physics_tests {
     fn advance_steps_the_world_independently_of_the_frame_split() {
         fn world_with_ball() -> (crate::core::World, Entity) {
             let mut w = crate::core::World::new();
+            // 256 Hz, so a 128 Hz step is two whole substeps: on the default 240 Hz it was 1.875,
+            // and the steps ran one or two substeps (`FixedPhysics::advance` now says so).
             w.insert_resource(
-                PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)),
+                PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)).with_substep_rate(256).expect("in range"),
             );
             let e = w.spawn_bundle((
                 Transform::new(Vec3::new(0.0, 10.0, 0.0)),

@@ -323,17 +323,22 @@ fn main() {
             // açık entegrasyonu her frame farklı dt görüp normal yükü/şasi yüksekliğini
             // yüksek-frekans SALINDIRIYORDU = hızlandıkça hissedilen TİTREME. Sabit dt ile
             // adımlamak fiziği frame timing jitter'ından tamamen ayırır → titreme biter.
-            const FIXED_DT: f32 = 1.0 / 240.0;
-            state.phys_accum += dt.min(0.1);
-            let mut steps = 0;
-            while state.phys_accum >= FIXED_DT && steps < 32 {
-                // Motorun KANONİK araç sistemi (facade'dan) — vehicle_scene/hill_climb ile aynı.
-                // Weather grip'i içeride PhysicsWorld.weather'dan türetir, kuvvetleri Velocity'ye
-                // yazar; sonraki physics_step onu entegre eder. (Eskiden demo-yerel kopya vardı.)
-                gizmo::physics::vehicle_controller_system(world, FIXED_DT);
-                gizmo::physics::physics_step_system(world, FIXED_DT);
-                state.phys_accum -= FIXED_DT;
-                steps += 1;
+            // Adım, dünyanın kendi alt-adımı (`substep_dt`, varsayılan 1/240 s): araç denetleyicisi
+            // her alt-adımda bir kez koşar ve dünya hızı değişirse onu izler — elle yazılmış bir
+            // 1/240 dünyayı başka hızda kurunca adımların bir kısmını boş geçirirdi.
+            let substep = world.get_resource::<PhysicsWorld>().map(|p| p.substep_dt());
+            if let Some(fixed_dt) = substep {
+                state.phys_accum += dt.min(0.1);
+                let mut steps = 0;
+                while state.phys_accum >= fixed_dt && steps < 32 {
+                    // Motorun KANONİK araç sistemi (facade'dan) — vehicle_scene/hill_climb ile aynı.
+                    // Weather grip'i içeride PhysicsWorld.weather'dan türetir, kuvvetleri Velocity'ye
+                    // yazar; sonraki physics_step onu entegre eder. (Eskiden demo-yerel kopya vardı.)
+                    gizmo::physics::vehicle_controller_system(world, fixed_dt);
+                    gizmo::physics::physics_step_system(world, fixed_dt);
+                    state.phys_accum -= fixed_dt;
+                    steps += 1;
+                }
             }
 
             if state.show_physics_debug {

@@ -26,6 +26,9 @@ impl PhysicsWorld {
             rigid_bodies,
             contact_cache,
             accumulator,
+            // Carried, though chosen when the world is built: the accumulator, the warm-start
+            // impulses and the sleep counters above are in its units.
+            substep_rate,
             gravity_fields,
             fluid_zones,
             joints,
@@ -85,6 +88,7 @@ impl PhysicsWorld {
             rigid_bodies: rigid_bodies.clone(),
             contact_cache: contact_cache.clone(),
             accumulator: *accumulator,
+            substep_rate: *substep_rate,
             gravity_fields: gravity_fields.clone(),
             fluid_zones: fluid_zones.clone(),
             joints: joints.clone(),
@@ -105,6 +109,7 @@ impl PhysicsWorld {
             rigid_bodies,
             contact_cache,
             accumulator,
+            substep_rate,
             gravity_fields,
             fluid_zones,
             joints,
@@ -118,6 +123,7 @@ impl PhysicsWorld {
         self.rigid_bodies.clone_from(rigid_bodies);
         self.contact_cache.clone_from(contact_cache);
         self.accumulator = *accumulator;
+        self.substep_rate = *substep_rate;
         self.gravity_fields.clone_from(gravity_fields);
         self.fluid_zones.clone_from(fluid_zones);
         self.joints.clone_from(joints);
@@ -132,6 +138,9 @@ impl PhysicsWorld {
     /// a fixed-key `DefaultHasher` (NOT RandomState), so the output is consistent ACROSS
     /// PROCESSES.
     ///
+    /// The substep rate is mixed in first, so two worlds stepping at different rates — two peers
+    /// of a rollback session built differently — never hash alike, even before they have moved.
+    ///
     /// The guarantee: on the **same platform and the same binary**, stepping the same initial
     /// state with the same `dt` matches step for step (which is what replay/rollback needs).
     /// Cross-platform bit-exactness is NOT guaranteed (the sim runs on f32/glam; see
@@ -143,6 +152,7 @@ impl PhysicsWorld {
         order.sort_by_key(|&i| self.entities[i].id());
 
         let mut h = std::collections::hash_map::DefaultHasher::new();
+        h.write_u32(self.substep_rate);
         for &i in &order {
             h.write_u32(self.entities[i].id());
             let t = &self.transforms[i];

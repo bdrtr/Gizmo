@@ -216,14 +216,18 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &Input) {
     // `vehicle_controller_system` (Pacejka lastik + süspansiyon kuvvetlerini Velocity'ye yazar)
     // SONRA fizik adımı çalışır; salt `cpu_physics_step_system` VehicleController'ı SÜRMEZ.
     // Sabit dt ayrıca sert süspansiyonun frame-jitter'la titremesini engeller.
-    const FIXED_DT: f32 = 1.0 / 240.0;
-    state.phys_accum += dt.min(0.1);
-    let mut steps = 0;
-    while state.phys_accum >= FIXED_DT && steps < 32 {
-        vehicle_controller_system(world, FIXED_DT);
-        cpu_physics_step_system(world, FIXED_DT);
-        state.phys_accum -= FIXED_DT;
-        steps += 1;
+    // Adım, dünyanın kendi alt-adımı (`substep_dt`, varsayılan 1/240 s): denetleyici her alt-adımda
+    // bir kez koşar, ve dünya başka bir hızda kurulursa adım onu izler.
+    let substep = world.get_resource::<PhysicsWorld>().map(|p| p.substep_dt());
+    if let Some(fixed_dt) = substep {
+        state.phys_accum += dt.min(0.1);
+        let mut steps = 0;
+        while state.phys_accum >= fixed_dt && steps < 32 {
+            vehicle_controller_system(world, fixed_dt);
+            cpu_physics_step_system(world, fixed_dt);
+            state.phys_accum -= fixed_dt;
+            steps += 1;
+        }
     }
 
     // Kasa durumunu oku

@@ -393,7 +393,7 @@ impl JointSolver {
         // world at once, irreversibly (nothing ever clears `is_broken`). Only a joint left at
         // the constructor default `f32::INFINITY` survived, because `inf > inf` is false.
         //
-        // `PhysicsWorld::step` cannot reach this: it substeps at `FIXED_DT` and a paused world
+        // `PhysicsWorld::step` cannot reach this: it substeps at `substep_dt()` and a paused world
         // returns before the accumulator (`world/step.rs`). But `JointSolver` is public, the
         // crate advertises the physics as embeddable, and `solve_joints` uses the dt it is
         // handed — which is how an embedder's paused/zero-length frame gets here.

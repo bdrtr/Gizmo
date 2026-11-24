@@ -44,6 +44,7 @@ impl PhysicsWorld {
 
 
             contact_cache: FxHashMap::default(),
+            substep_rate: super::DEFAULT_SUBSTEP_RATE,
             accumulator: 0.0,
             render_alpha: 1.0,
             metrics: crate::island::PhysicsMetrics::default(),
@@ -78,6 +79,39 @@ impl PhysicsWorld {
     pub fn with_gravity(mut self, gravity: gizmo_math::Vec3) -> Self {
         self.integrator.gravity = gravity;
         self
+    }
+
+    /// This world stepping at `hz` substeps a second instead of
+    /// [`DEFAULT_SUBSTEP_RATE`](super::DEFAULT_SUBSTEP_RATE), each running the whole pipeline once.
+    /// Fewer substeps cost less; each is longer, so a fast body moves further between two looks at
+    /// what it touches. Chosen here, when the world is built, and not changed in play.
+    ///
+    /// # Errors
+    /// [`SubstepRateError::OutOfRange`](super::SubstepRateError::OutOfRange) outside
+    /// [`SUBSTEP_RATES`](super::SUBSTEP_RATES).
+    pub fn with_substep_rate(mut self, hz: u32) -> Result<Self, super::SubstepRateError> {
+        if !super::SUBSTEP_RATES.contains(&hz) {
+            return Err(super::SubstepRateError::OutOfRange { hz });
+        }
+        self.substep_rate = hz;
+        Ok(self)
+    }
+
+    /// The world's substep rate, in hertz.
+    pub fn substep_rate(&self) -> u32 {
+        self.substep_rate
+    }
+
+    /// The length of one substep, in seconds: `1 / substep_rate`. A [`step`](Self::step) of a
+    /// whole number of these runs exactly that many substeps and leaves nothing in the accumulator.
+    pub fn substep_dt(&self) -> f32 {
+        1.0 / self.substep_rate as f32
+    }
+
+    /// The most substeps one [`step`](Self::step) runs: enough for its longest clamped frame and a
+    /// little debt, `MAX_SIMULATED_PER_STEP` of them (64 at 240 Hz, 16 at 60).
+    pub(crate) fn max_substeps(&self) -> u32 {
+        ((super::MAX_SIMULATED_PER_STEP / self.substep_dt()).round() as u32).max(1)
     }
 
 

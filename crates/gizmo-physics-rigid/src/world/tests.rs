@@ -670,3 +670,28 @@ fn raycast_excluding_skips_self_and_finds_ground_behind() {
         .expect("zemin dışlanınca kutu bulunmalı");
     assert_eq!(hit2.entity, BodyHandle::from_id(2));
 }
+
+/// **A step of a whole number of substeps runs that many, at every rate.** A falling body stepped
+/// by `k` substeps a call must leave nothing in the accumulator after each call and gain exactly
+/// `g·k·substep_dt` of speed per call. Without the accumulator's snap, f32 rounding left 0.99999 of
+/// a substep behind at 300 and 600 Hz (three of 1/300 s ran two, then four), and residues crept up
+/// at 480 Hz until a call ran nine.
+#[test]
+fn a_step_of_whole_substeps_runs_exactly_that_many_at_every_rate() {
+    for (hz, k) in [(60, 1), (120, 2), (240, 4), (300, 3), (300, 5), (480, 8), (600, 10), (1000, 7)] {
+        let mut world = PhysicsWorld::new().with_substep_rate(hz).expect("a rate the world accepts");
+        let mut rb = RigidBody::new(1.0, true);
+        rb.linear_damping = 0.0;
+        world.add_body(BodyHandle::from_id(1), rb, Transform::new(Vec3::new(0.0, 1000.0, 0.0)), Velocity::default(), Collider::sphere(0.5));
+        let dt = k as f32 * world.substep_dt();
+        let mut before = 0.0f32;
+        for call in 0..600 {
+            world.step(dt).unwrap();
+            assert_eq!(world.accumulator, 0.0, "{hz} Hz, {k} substeps a call: call {call} left {} s", world.accumulator);
+            let v = world.velocities[0].linear.y;
+            let gained = (before - v) / (9.81 * world.substep_dt());
+            assert!((gained - k as f32).abs() < 0.01, "{hz} Hz: call {call} ran {gained:.3} substeps, not {k}");
+            before = v;
+        }
+    }
+}

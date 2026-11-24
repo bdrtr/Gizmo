@@ -123,14 +123,18 @@ pub(super) fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &
     // Artık her sabit adımda önce `vehicle_controller_system` (Pacejka + süspansiyon → Velocity)
     // sonra fizik adımı çalışır; sabit dt titremeyi de engeller. is_grounded artık gerçek → hava
     // kontrolü yalnızca havadayken devreye girer.
-    const FIXED_DT: f32 = 1.0 / 240.0;
-    state.phys_accum += dt.min(0.1);
-    let mut steps = 0;
-    while state.phys_accum >= FIXED_DT && steps < 32 {
-        gizmo::physics::vehicle_controller_system(world, FIXED_DT);
-        gizmo::systems::cpu_physics_step_system(world, FIXED_DT);
-        state.phys_accum -= FIXED_DT;
-        steps += 1;
+    // Adım, dünyanın kendi alt-adımı (`substep_dt`, varsayılan 1/240 s), elle yazılmış bir 1/240
+    // değil: dünya başka bir hızda kurulursa adım onu izler.
+    let substep = world.get_resource::<gizmo::physics::world::PhysicsWorld>().map(|p| p.substep_dt());
+    if let Some(fixed_dt) = substep {
+        state.phys_accum += dt.min(0.1);
+        let mut steps = 0;
+        while state.phys_accum >= fixed_dt && steps < 32 {
+            gizmo::physics::vehicle_controller_system(world, fixed_dt);
+            gizmo::systems::cpu_physics_step_system(world, fixed_dt);
+            state.phys_accum -= fixed_dt;
+            steps += 1;
+        }
     }
 
     if state.show_physics_debug {

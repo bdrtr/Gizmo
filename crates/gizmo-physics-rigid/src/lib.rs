@@ -121,4 +121,4 @@ pub use joints::{
 pub use solver::{ConstraintSolver, SolveStats};
 #[cfg(feature = "ecs")]
 pub use system::{explosion_step, fracture_step, physics_explosion_system, physics_fracture_system, physics_step_system};
-pub use world::{PhysicsWorld, SnapshotError, WorldSnapshot};
+pub use world::{PhysicsWorld, SnapshotError, SubstepRateError, WorldSnapshot, DEFAULT_SUBSTEP_RATE, SUBSTEP_RATES};

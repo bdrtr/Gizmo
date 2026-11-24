@@ -549,6 +549,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A world's physics substep rate is a choice.** `PhysicsWorld::with_substep_rate(hz)` (30–1000 Hz,
+  `SUBSTEP_RATES`; `SubstepRateError` outside) builds a world that runs its whole pipeline `hz` times a
+  second instead of the 240 it was fixed at — `DEFAULT_SUBSTEP_RATE`, bit-identical (`headless_stress_test`
+  `93AAB528F6249F8B` unchanged). `substep_rate()`, `substep_dt()`; the ceiling on substeps per `step`
+  is a time now (0.267 s, what 64 substeps were at 240 Hz). A snapshot carries the rate and a restore
+  brings it back (the accumulator, warm-start impulses and sleep counters are in its units);
+  `state_hash` mixes it in, so two rollback peers built at different rates never hash alike. The
+  drivers step it in whole substeps: `PhysicsPlugin::with_substep_rate`, which also keeps a world the
+  game inserted itself instead of replacing it; the app's fixed tick, `FixedPhysics` and `PlayLoop`
+  check that their step is a whole number of substeps and log once when it is not
+  (`substeps_per_tick`, `TickMismatch`); `FixedPhysics::for_world(&world, k)`; `simple_scene_update`
+  steps a fixed 60 Hz tick through `FixedPhysics` and draws interpolated, as the `App` path does,
+  instead of cutting the frame into 16 ms slices; Play-in-Editor keeps the edited world's rate; the
+  demos that stepped a literal 1/240 step the world's substep. What a lower rate does to joints,
+  springs, friction and fast bodies is the next step; at 240 Hz nothing changed.
 - **A body at rest falls asleep under any gravity, and after a time rather than a count.** Sleep
   was counted on the velocity a substep had before its contacts were solved, which still held that
   substep's gravity: `g·dt` against the 0.05 m/s threshold is 0.041 under Earth's gravity at the

@@ -698,13 +698,184 @@ fn debris_mesh(d: &gizmo_physics_rigid::components::Debris) -> crate::renderer::
     crate::renderer::components::MeshData::new(out)
 }
 
+/// How much of a substep a fixed tick may be off a whole number of them and still count as one:
+/// f32 rounding (`1/60` is `4 × 1/240` to a few parts in ten million), nothing a game chose. The
+/// world's own step snaps by the same fraction.
+const TICK_SNAP: f64 = 1e-4;
+
+/// A fixed tick that is not a whole number of a physics world's substeps — what
+/// [`substeps_per_tick`] reports, and what every driver of a [`PhysicsWorld`] here logs.
+///
+/// [`PhysicsWorld`]: gizmo_physics_rigid::world::PhysicsWorld
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum TickMismatch {
+    /// The tick is shorter than one substep: some ticks run no physics at all and the next runs
+    /// what they owed.
+    ShorterThanSubstep {
+        /// The tick's rate, in hertz.
+        tick_hz: f32,
+        /// The world's substep rate, in hertz.
+        substep_rate: u32,
+    },
+    /// The tick is longer than a substep but not a whole number of them: ticks run uneven numbers
+    /// of substeps (at 100 Hz under a 60 Hz tick: 1, 2, 2, 1, 2, 2, …).
+    NotWholeSubsteps {
+        /// The tick's rate, in hertz.
+        tick_hz: f32,
+        /// The world's substep rate, in hertz.
+        substep_rate: u32,
+    },
+}
+
+impl TickMismatch {
+    /// What would fit: the world rates that are whole multiples of the tick, nearest the world's
+    /// own, and the tick rates that divide the world's.
+    fn remedy(tick_hz: f32, rate: u32) -> String {
+        let mut out = String::new();
+        let rates = gizmo_physics_rigid::SUBSTEP_RATES;
+        let tick = tick_hz.round() as u32;
+        if tick > 0 && (tick_hz - tick as f32).abs() < 1e-3 {
+            let below = (rate / tick) * tick;
+            let fits: Vec<String> = [below, below + tick]
+                .into_iter()
+                .filter(|r| *r > 0 && rates.contains(r))
+                .map(|r| format!("{r} Hz"))
+                .collect();
+            if !fits.is_empty() {
+                out += &format!("build the world at a whole multiple of the tick ({}, with `with_substep_rate`)", fits.join(" or "));
+            }
+        }
+        let divisors: Vec<u32> = (1..=rate).filter(|k| rate.is_multiple_of(*k)).map(|k| rate / k).collect();
+        let under = divisors.iter().copied().filter(|d| (*d as f32) <= tick_hz).max();
+        let over = divisors.iter().copied().filter(|d| (*d as f32) > tick_hz).min();
+        let ticks: Vec<String> = [under, over].into_iter().flatten().map(|d| format!("{d} Hz")).collect();
+        if !ticks.is_empty() {
+            if !out.is_empty() {
+                out += ", or ";
+            }
+            out += &format!("tick at a rate that divides {rate} Hz ({})", ticks.join(" or "));
+        }
+        out
+    }
+}
+
+impl std::fmt::Display for TickMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::ShorterThanSubstep { tick_hz, substep_rate } => write!(
+                f,
+                "a fixed tick of {tick_hz:.2} Hz is shorter than one substep of the physics world's \
+                 {substep_rate} Hz, so some ticks simulate nothing: {}",
+                Self::remedy(tick_hz, substep_rate)
+            ),
+            Self::NotWholeSubsteps { tick_hz, substep_rate } => write!(
+                f,
+                "a fixed tick of {tick_hz:.2} Hz is not a whole number of the physics world's \
+                 {substep_rate} Hz substeps, so ticks run uneven numbers of them: {}",
+                Self::remedy(tick_hz, substep_rate)
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TickMismatch {}
+
+/// How many of `world`'s substeps a fixed tick of `tick_dt` seconds is: a whole number, one or
+/// more, or the [`TickMismatch`] that says why not.
+///
+/// Every driver of a world — the app's fixed schedule ([`PhysicsStepSystem`]), the play loop and
+/// [`FixedPhysics`](crate::simple::FixedPhysics) — hands [`PhysicsWorld::step`] one tick at a time,
+/// and the world spends it in its own substeps. A tick that is a whole number `k` of them runs
+/// exactly `k` every time. Any other tick runs some ticks with none or with an uneven count: a
+/// kinematic target cut per tick teleports, a force written once a tick acts for a different time,
+/// and the poses drawn between ticks judder.
+///
+/// [`PhysicsWorld::step`]: gizmo_physics_rigid::world::PhysicsWorld::step
+pub fn substeps_per_tick(
+    world: &gizmo_physics_rigid::world::PhysicsWorld,
+    tick_dt: f32,
+) -> Result<u32, TickMismatch> {
+    let substep_rate = world.substep_rate();
+    let ratio = f64::from(tick_dt) * f64::from(substep_rate);
+    let tick_hz = 1.0 / tick_dt;
+    // A NaN tick (a zero or non-finite one) lands here too.
+    if ratio.is_nan() || ratio < 1.0 - TICK_SNAP {
+        return Err(TickMismatch::ShorterThanSubstep { tick_hz, substep_rate });
+    }
+    let k = ratio.round();
+    if !k.is_finite() || (ratio - k).abs() > TICK_SNAP {
+        return Err(TickMismatch::NotWholeSubsteps { tick_hz, substep_rate });
+    }
+    Ok(k as u32)
+}
+
+/// A driver's memory of the tick and world rate it last checked, so a mismatch is logged once per
+/// pairing rather than once a tick — and again if the game changes either.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct TickCheck {
+    checked: Option<(u32, u32)>,
+}
+
+impl TickCheck {
+    /// Checks `tick_dt` against `world` ([`substeps_per_tick`]) the first time this pairing is
+    /// seen, and logs an error naming `driver` when it does not fit. Returns the mismatch it
+    /// logged, if it logged one.
+    ///
+    /// **Reported, not refused.** Refusing to step would freeze the game on a configuration error,
+    /// which is a worse failure than uneven substeps: the world still receives every second of
+    /// simulated time and stays deterministic, only unevenly cut. The error is loud where it counts
+    /// — every `--test` run goes through `run_self_test`, which fails a run that logged one, and the
+    /// editor's console shows it in red.
+    pub(crate) fn check(
+        &mut self,
+        world: &gizmo_physics_rigid::world::PhysicsWorld,
+        tick_dt: f32,
+        driver: &str,
+    ) -> Option<TickMismatch> {
+        let key = (tick_dt.to_bits(), world.substep_rate());
+        if self.checked == Some(key) {
+            return None;
+        }
+        self.checked = Some(key);
+        let mismatch = substeps_per_tick(world, tick_dt).err()?;
+        tracing::error!(driver, "[Physics] {driver}: {mismatch}");
+        Some(mismatch)
+    }
+}
+
 /// Schedulable wrapper around [`cpu_physics_step_system`].
 ///
 /// [`crate::plugins::PhysicsPlugin`] adds this to the app schedule so the physics
 /// step runs automatically at the app's **fixed timestep** (the accumulator loop
 /// driven by `PhysicsTime`) — callers no longer hand-call `cpu_physics_step_system`
 /// every frame, and physics gets a stable fixed step for free.
-pub struct PhysicsStepSystem;
+///
+/// The fixed tick has to be a whole number of the world's substeps (60 Hz is 4 of the default
+/// 240): where it first runs on a world it checks, and logs an error when the two do not fit
+/// ([`substeps_per_tick`]).
+#[derive(Debug, Default)]
+pub struct PhysicsStepSystem {
+    tick: TickCheck,
+    /// The rate the plugin built its world at, when the game asked for one.
+    asked_rate: Option<u32>,
+    /// Whether a world at another rate than `asked_rate` has been reported.
+    rate_reported: bool,
+}
+
+impl PhysicsStepSystem {
+    /// A step system for a world built anywhere.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The one [`PhysicsPlugin`](crate::plugins::PhysicsPlugin) registers: it also says, once, when
+    /// the world it steps is not at the rate the plugin was asked for — a world the game's setup
+    /// inserted after the plugin built its own replaces that one, rate and all.
+    pub(crate) fn for_rate(asked_rate: Option<u32>) -> Self {
+        Self { asked_rate, ..Self::default() }
+    }
+}
 
 impl gizmo_core::system::System for PhysicsStepSystem {
     fn access_info(&self) -> gizmo_core::system::AccessInfo {
@@ -715,7 +886,143 @@ impl gizmo_core::system::System for PhysicsStepSystem {
     }
 
     fn run(&mut self, world: &crate::core::World, dt: f32) {
+        if let Some(physics) = world.get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
+            self.tick.check(&physics, dt, "the app's fixed tick (PhysicsTime)");
+            if let Some(asked) = self.asked_rate.filter(|asked| *asked != physics.substep_rate()) {
+                if !self.rate_reported {
+                    self.rate_reported = true;
+                    tracing::error!(
+                        "[Physics] PhysicsPlugin was asked for {asked} Hz substeps, but the PhysicsWorld it \
+                         steps runs at {} Hz: a world inserted after the plugin (a setup's own) replaced \
+                         the plugin's. Build that world with `with_substep_rate({asked})`, or leave the \
+                         rate to it and ask the plugin for none.",
+                        physics.substep_rate()
+                    );
+                }
+            }
+        }
         cpu_physics_step_system(world, dt);
+    }
+}
+
+/// The messages of the errors logged on this thread while `f` runs — what a test asks of a report
+/// that is a log line and nothing else.
+#[cfg(test)]
+pub(crate) fn errors_during(f: impl FnOnce()) -> Vec<String> {
+    use std::sync::{Arc, Mutex};
+    struct Errors(Arc<Mutex<Vec<String>>>);
+    struct Message(String);
+    impl tracing::field::Visit for Message {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.0 = format!("{value:?}");
+            }
+        }
+    }
+    impl tracing::Subscriber for Errors {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() == tracing::Level::ERROR
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut message = Message(String::new());
+            event.record(&mut message);
+            self.0.lock().expect("not poisoned").push(message.0);
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    tracing::subscriber::with_default(Errors(errors.clone()), f);
+    let logged = errors.lock().expect("not poisoned").clone();
+    logged
+}
+
+#[cfg(test)]
+mod tick_tests {
+    use super::*;
+    use gizmo_physics_rigid::world::PhysicsWorld;
+
+    fn world(hz: u32) -> PhysicsWorld {
+        PhysicsWorld::new().with_substep_rate(hz).expect("a rate a world accepts")
+    }
+
+    /// A 60 Hz tick is 1, 2 and 4 substeps of a 60, 120 and 240 Hz world; a 90, 100 or 144 Hz
+    /// world does not divide it, and a 30 Hz world's substep is longer than it.
+    #[test]
+    fn a_tick_is_a_whole_number_of_substeps_or_says_why_not() {
+        let tick = 1.0 / 60.0;
+        for (hz, k) in [(60, 1), (120, 2), (180, 3), (240, 4), (300, 5), (480, 8), (960, 16)] {
+            assert_eq!(substeps_per_tick(&world(hz), tick), Ok(k), "{hz} Hz");
+        }
+        for hz in [90, 100, 144] {
+            assert!(matches!(substeps_per_tick(&world(hz), tick), Err(TickMismatch::NotWholeSubsteps { substep_rate, .. }) if substep_rate == hz), "{hz} Hz");
+        }
+        assert!(matches!(substeps_per_tick(&world(30), tick), Err(TickMismatch::ShorterThanSubstep { .. })));
+        assert!(matches!(substeps_per_tick(&world(240), f32::NAN), Err(TickMismatch::ShorterThanSubstep { .. })));
+        assert!(matches!(substeps_per_tick(&world(240), 0.0), Err(TickMismatch::ShorterThanSubstep { .. })));
+        assert!(matches!(substeps_per_tick(&world(240), f32::INFINITY), Err(TickMismatch::NotWholeSubsteps { .. })));
+        // A step built from the world's own substep, at a rate a 1/hz would not hit exactly.
+        assert_eq!(substeps_per_tick(&world(300), 3.0 * world(300).substep_dt()), Ok(3));
+    }
+
+    /// The report names both rates and what would fit: the world rates around the tick's multiples,
+    /// and the tick rates that divide the world's.
+    #[test]
+    fn the_report_names_both_rates_and_what_fits() {
+        let text = substeps_per_tick(&world(90), 1.0 / 60.0).unwrap_err().to_string();
+        for expected in ["60.00 Hz", "90 Hz", "60 Hz or 120 Hz", "45 Hz or 90 Hz"] {
+            assert!(text.contains(expected), "{expected:?} is not in: {text}");
+        }
+        let text = substeps_per_tick(&world(30), 1.0 / 60.0).unwrap_err().to_string();
+        assert!(text.contains("shorter than one substep") && text.contains("60 Hz") && text.contains("30 Hz"), "{text}");
+    }
+
+    /// **The app's fixed tick is checked against the world it steps, once.** A 60 Hz tick on a 90 Hz
+    /// world logs one error however many ticks run, and none on a 120 Hz world; a tick changed to
+    /// one that does not fit is reported again.
+    #[test]
+    fn the_step_system_reports_a_tick_that_does_not_fit_once() {
+        use gizmo_core::system::System;
+        let run = |hz: u32, ticks: &[f32]| {
+            let mut w = crate::core::World::new();
+            w.insert_resource(world(hz));
+            let mut system = PhysicsStepSystem::new();
+            errors_during(|| {
+                for &dt in ticks {
+                    system.run(&w, dt);
+                }
+            })
+        };
+        let sixty = [1.0 / 60.0; 10];
+        let errors = run(90, &sixty);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("90 Hz") && errors[0].contains("PhysicsTime"), "{}", errors[0]);
+        assert!(run(120, &sixty).is_empty(), "a 60 Hz tick fits a 120 Hz world");
+        let errors = run(120, &[1.0 / 60.0, 1.0 / 60.0, 1.0 / 100.0, 1.0 / 100.0]);
+        assert_eq!(errors.len(), 1, "the tick changed to one that does not fit: {errors:?}");
+    }
+
+    /// The plugin's step says when the world it steps is not at the rate the plugin was asked for.
+    #[test]
+    fn the_plugins_step_reports_a_world_at_another_rate_than_it_asked() {
+        use gizmo_core::system::System;
+        let mut w = crate::core::World::new();
+        w.insert_resource(world(240));
+        let mut system = PhysicsStepSystem::for_rate(Some(120));
+        let errors = errors_during(|| {
+            for _ in 0..5 {
+                system.run(&w, 1.0 / 60.0);
+            }
+        });
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("asked for 120 Hz") && errors[0].contains("240 Hz"), "{}", errors[0]);
+        let mut system = PhysicsStepSystem::for_rate(Some(240));
+        assert!(errors_during(|| system.run(&w, 1.0 / 60.0)).is_empty());
     }
 }
 
@@ -746,7 +1053,7 @@ mod physics_step_tests {
         world.add_component(body, Collider::sphere(0.5));
 
         let y0 = world.query::<&Transform>().get(body).unwrap().position.y;
-        let mut sys = PhysicsStepSystem;
+        let mut sys = PhysicsStepSystem::new();
         for _ in 0..30 {
             sys.run(&world, 1.0 / 60.0);
         }

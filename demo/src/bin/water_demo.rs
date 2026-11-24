@@ -277,15 +277,22 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
     }
 
     // ── Sabit-adım fizik: yüzme kontrolcüsü + rigid buoyancy ────────────────
-    const FIXED_DT: f32 = 1.0 / 120.0;
-    state.phys_accum += dt.min(0.1);
-    let mut steps = 0;
-    while state.phys_accum >= FIXED_DT && steps < 16 {
-        gizmo::physics::character_controller_system(world, FIXED_DT); // dalgıcı yüzdürür
-        gizmo::physics::oxygen_system(world, FIXED_DT); // kafa batıksa hava tüken, yüzeyde dol
-        gizmo::systems::cpu_physics_step_system(world, FIXED_DT); // yüzen kutulara buoyancy
-        state.phys_accum -= FIXED_DT;
-        steps += 1;
+    // Adım ~1/120 s, ama dünyanın alt-adımlarının tam katı (varsayılan 240 Hz'de 2 alt-adım): dünya
+    // başka bir hızda kurulursa adım onu izler, hiçbir adım boş geçmez.
+    let tick = world.get_resource::<PhysicsWorld>().map(|p| {
+        let substeps = (p.substep_rate() as f32 / 120.0).round().max(1.0);
+        substeps * p.substep_dt()
+    });
+    if let Some(fixed_dt) = tick {
+        state.phys_accum += dt.min(0.1);
+        let mut steps = 0;
+        while state.phys_accum >= fixed_dt && steps < 16 {
+            gizmo::physics::character_controller_system(world, fixed_dt); // dalgıcı yüzdürür
+            gizmo::physics::oxygen_system(world, fixed_dt); // kafa batıksa hava tüken, yüzeyde dol
+            gizmo::systems::cpu_physics_step_system(world, fixed_dt); // yüzen kutulara buoyancy
+            state.phys_accum -= fixed_dt;
+            steps += 1;
+        }
     }
 
     // Oksijeni HUD'a oku.

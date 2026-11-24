@@ -21,6 +21,12 @@ use gizmo_core::Entity;
 use crate::core::World;
 
 /// The fixed simulation step: 60 Hz, and the value both paths have always used.
+///
+/// It is the **gameplay** tick: the fight clock counts its frames, hit detection runs once in it,
+/// and the physics world is handed one of it at a time, which the world spends in its own substeps
+/// (4 at the default 240 Hz). So the world's rate has to be a whole multiple of 60 — 60, 120, 180,
+/// 240, … — and the loop checks, on the first step it takes on a world, logging an error naming the
+/// rates that fit when it is not ([`substeps_per_tick`](crate::systems::substeps_per_tick)).
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 
 /// Ceiling on the steps one frame may take **and** on the debt the accumulator may carry.
@@ -469,6 +475,8 @@ pub struct PlayLoop {
     /// The scene's UI systems (`gizmo_ui::register`): built on the first step the world has a UI.
     #[cfg(feature = "ui")]
     ui: Option<UiPass>,
+    /// [`FIXED_DT`] and the world's rate, checked against each other.
+    tick: crate::systems::physics::TickCheck,
 }
 
 /// `gizmo_ui`'s layout and interaction systems on a schedule of their own, the play loop's.
@@ -735,6 +743,9 @@ impl PlayLoop {
     /// every exported game alike.
     fn physics_pass(&mut self, world: &mut World, dt: f32) -> u32 {
         ensure_physics_world(world);
+        if let Some(physics) = world.get_resource::<crate::physics::world::PhysicsWorld>() {
+            self.tick.check(&physics, FIXED_DT, "PlayLoop (the editor's Play and the exported game)");
+        }
         // The scripts read the physics events of every step since their last update, each once
         // (`PhysicsEventLog`): kept only when there are scripts to read it.
         #[cfg(feature = "scripting")]
@@ -767,6 +778,12 @@ impl PlayLoop {
 /// the editor's ▶ and every exported game run on. Bodies in a world without one stood still, with a
 /// warning on every step. A world with no `RigidBody` gets none, so a game without physics carries
 /// no physics world.
+///
+/// It is built at [`DEFAULT_SUBSTEP_RATE`](gizmo_physics_rigid::DEFAULT_SUBSTEP_RATE), the one rate
+/// this loop can know nothing better than: a scene file carries no physics settings yet, so a game
+/// that wants another rate under ▶ and in its export inserts its own world (the studio's ▶ builds the
+/// play world at the edited world's rate). That world is kept, whatever its rate; [`FIXED_DT`] is
+/// checked against it.
 fn ensure_physics_world(world: &mut World) {
     use crate::physics::world::PhysicsWorld;
     if world.get_resource::<PhysicsWorld>().is_some() {

@@ -148,9 +148,16 @@ fn rack(world: &mut World) {
 
 fn setup(world: &mut World, font: FontId, balls: impl FnOnce(&mut World) -> Entity) -> Game {
     world.init_events::<TriggerEvent>();
-    let mut physics = gizmo::physics::world::PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
+    // Dünyanın kendisi 480 Hz'de: `FixedPhysics::new(480)` 240 Hz'lik bir dünyada yalnız dış adımı
+    // kısaltıyordu — her iki adımdan biri hiç fizik koşmuyordu, toplar hiç 480 Hz'de benzetilmedi.
+    let mut physics = gizmo::physics::world::PhysicsWorld::new()
+        .with_gravity(Vec3::new(0.0, -9.81, 0.0))
+        .with_substep_rate(PHYSICS_HZ)
+        .expect("480 Hz, bir dünyanın kabul ettiği bir hız");
     // Masanın ölçeğinde: çuhada duran bir topun bir adımdaki düşüşü (g·dt) 2 cm/s'dir.
     physics.solver.restitution_velocity_threshold = 0.1;
+    // Oyunun bir adımı dünyanın bir alt-adımı.
+    let driver = FixedPhysics::for_world(&physics, 1);
     world.insert_resource(physics);
     world.spawn_bundle((
         Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-1.3)),
@@ -167,7 +174,7 @@ fn setup(world: &mut World, font: FontId, balls: impl FnOnce(&mut World) -> Enti
     build_table(world);
     let cue = balls(world);
     let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
-    Game { physics: FixedPhysics::new(PHYSICS_HZ), cue, aim: 0.0, potted: Vec::new(), hud }
+    Game { physics: driver, cue, aim: 0.0, potted: Vec::new(), hud }
 }
 
 /// Beyaz topa `speed` m/s'lik bir vuruş, nişanın yönünde.

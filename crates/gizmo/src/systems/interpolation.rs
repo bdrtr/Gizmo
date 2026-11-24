@@ -14,8 +14,10 @@
 //! The driver records the poses ([`begin_step`](InterpolationHistory::begin_step) and
 //! [`end_step`](InterpolationHistory::end_step) around each step) and the coefficient
 //! ([`set_alpha`](InterpolationHistory::set_alpha)): `PhysicsPlugin` does with systems around its
-//! `physics_step`, and `FixedPhysics::advance` does in its loop. `simple_scene_update` steps physics
-//! by the frame's own time, so what it draws is what it simulated, and keeps no history.
+//! `physics_step`, and `FixedPhysics::advance` does in its loop — `simple_scene_update`'s too, which
+//! steps physics through one. The blend is right only when each step is a whole number of the
+//! world's substeps, so that the world holds nothing back between steps: every driver checks that
+//! (`systems::physics::substeps_per_tick`).
 //!
 //! **What is drawn.** [`render_overrides`] works out each recorded body's drawn world matrix — its
 //! parent's as it is, times its own pose blended — and its descendants moved with it, by the same

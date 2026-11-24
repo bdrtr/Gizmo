@@ -17,7 +17,8 @@
 //!    them, `register_editor_component`).
 //! 2. The edited world's resources are **moved** there — the input, the clock, the asset caches,
 //!    the editor's own state — except the two a play session starts afresh: the physics world (a
-//!    new one, with the edited one's gravity) and the script engine (a new Lua state).
+//!    new one, with the edited one's gravity and substep rate) and the script engine (a new Lua
+//!    state).
 //! 3. The editor camera and the grid are copied over, so the Scene view goes on working; the
 //!    editor's selection, undo history and clipboard are set aside
 //!    ([`EditorState::enter_play`]), since their entity ids mean nothing in the new world.
@@ -58,6 +59,27 @@ fn starts_afresh(type_id: TypeId) -> bool {
     type_id == TypeId::of::<gizmo::physics::world::PhysicsWorld>() || type_id == TypeId::of::<gizmo::scripting::ScriptEngine>()
 }
 
+/// The play world's physics: a new world with the edited one's gravity and substep rate, or Earth's
+/// gravity at the default rate when the edited world has none. The rate is chosen when a world is
+/// built, so it is copied here or lost: ▶ used to play every game at the default 240 Hz whatever the
+/// game's own world ran at, which is not what its export runs.
+fn play_physics(edited: Option<&gizmo::physics::world::PhysicsWorld>) -> gizmo::physics::world::PhysicsWorld {
+    use gizmo::physics::world::PhysicsWorld;
+    let Some(edited) = edited else {
+        return PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
+    };
+    let fresh = PhysicsWorld::new().with_gravity(edited.integrator.gravity);
+    match fresh.with_substep_rate(edited.substep_rate()) {
+        Ok(world) => world,
+        // A world's rate is one a world accepts unless it was read from a file that said otherwise;
+        // ▶ still plays, at the default, and says so.
+        Err(e) => {
+            tracing::error!("[Play] the edited world's substep rate cannot be copied ({e}); the play world runs at the default");
+            PhysicsWorld::new().with_gravity(edited.integrator.gravity)
+        }
+    }
+}
+
 /// ▶ — builds the play world and swaps it in. See the [module](self).
 pub fn start_play(world: &mut World, state: &mut StudioState) {
     let registry = gizmo::scene_registry_for(world);
@@ -68,10 +90,7 @@ pub fn start_play(world: &mut World, state: &mut StudioState) {
     let mut play = World::new();
     let ids = scene.instantiate(&mut play, &registry);
     let moved = world.move_resources_to(&mut play, |t| !starts_afresh(t));
-    let gravity = world
-        .get_resource::<gizmo::physics::world::PhysicsWorld>()
-        .map_or(Vec3::new(0.0, -9.81, 0.0), |p| p.integrator.gravity);
-    play.insert_resource(gizmo::physics::world::PhysicsWorld::new().with_gravity(gravity));
+    play.insert_resource(play_physics(world.get_resource::<gizmo::physics::world::PhysicsWorld>().as_deref()));
     if let Ok(engine) = gizmo::scripting::ScriptEngine::new() {
         play.insert_resource(engine);
     }
@@ -248,5 +267,29 @@ mod tests {
         );
         assert_eq!(world.get_resource::<String>().map(|s| s.clone()).as_deref(), Some("the host's"));
         assert!(world.get_resource::<EditorState>().is_some_and(|ed| ed.selection.primary == Some(crates[1])), "the selection is back");
+    }
+
+    /// **▶ plays at the edited world's substep rate.** The play world is built afresh, and it was
+    /// built at the default 240 Hz with only the gravity copied: a game whose world runs at 120 Hz
+    /// played in the editor at another rate than its export runs at. ⏹ gives the edited world back
+    /// at its own rate.
+    #[test]
+    fn play_keeps_the_edited_worlds_substep_rate() {
+        use gizmo::physics::world::PhysicsWorld;
+        for hz in [60, 120, 240] {
+            let mut world = World::new();
+            world.insert_resource(EditorState::new());
+            let edited = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -3.0, 0.0)).with_substep_rate(hz).expect("a rate a world accepts");
+            world.insert_resource(edited);
+            let editor_camera = world.spawn();
+            world.add_component(editor_camera, EntityName("Editor Camera".into()));
+            let mut state = studio_state(editor_camera, editor_camera);
+
+            start_play(&mut world, &mut state);
+            let play = world.get_resource::<PhysicsWorld>().map(|p| (p.substep_rate(), p.integrator.gravity));
+            assert_eq!(play, Some((hz, Vec3::new(0.0, -3.0, 0.0))), "the play world at {hz} Hz");
+            stop_play(&mut world, &mut state);
+            assert_eq!(world.get_resource::<PhysicsWorld>().map(|p| p.substep_rate()), Some(hz), "the edited world back at its rate");
+        }
     }
 }

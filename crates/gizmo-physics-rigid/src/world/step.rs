@@ -1,4 +1,4 @@
-use super::{PhysicsWorld, PhysicsStateSnapshot, FIXED_DT, MAX_SUBSTEPS};
+use super::{PhysicsWorld, PhysicsStateSnapshot, MAX_FRAME_DT};
 use gizmo_physics_core::{CollisionEvent, TriggerEvent};
 
 // PhysicsMetrics per-phase timing. `std::time::Instant::now()` panics on wasm
@@ -10,8 +10,9 @@ use web_time::Instant;
 use std::time::Instant;
 
 impl PhysicsWorld {
-    /// The main physics step — with fixed 120 Hz sub-stepping.
-    /// Converts the (variable) render dt into the fixed internal physics dt.
+    /// Advances the world by `dt` seconds of frame time, in whole substeps of
+    /// [`substep_dt`](Self::substep_dt): what is left over waits in the accumulator for the next
+    /// call. A `dt` that is a whole number of substeps runs exactly that many.
     #[tracing::instrument(skip_all, name = "physics_frame")]
     pub fn step(
         &mut self,
@@ -73,9 +74,9 @@ impl PhysicsWorld {
         let frame_dt = if self.step_once {
             self.step_once = false;
             self.accumulator = 0.0; // Reset accumulator so we step exactly once
-            FIXED_DT
+            self.substep_dt()
         } else {
-            dt.min(0.25) // Maksimum 250ms — death-spiral koruması
+            dt.min(MAX_FRAME_DT) // the spiral of death: a frame takes in at most this much
         };
 
         // Olayları her render frame'de temizle
@@ -126,11 +127,25 @@ impl PhysicsWorld {
         // caught there. See `settled_bounds`.
         self.settled_bounds.clear();
 
+        let (substep, max_substeps) = (self.substep_dt(), self.max_substeps());
+        // A substep runs once the accumulator holds all of one but `SUBSTEP_SNAP` of it, and a
+        // balance within that of zero, either side, is zero. Without it a `dt` of a whole number of
+        // substeps did not run as that many in f32: three substeps of a 300 Hz world, added and
+        // drained, leave 0.99999 of one, so the call ran two and carried a whole substep into the
+        // next (2, 4, 3, …) — and of all the pairings of a rate in `SUBSTEP_RATES` with a step of
+        // up to 64 substeps, 39 % went uneven within 3000 calls. Measured in an f32 model of this
+        // loop, 2026-11-24: with the snap, none did. Time is not gained or lost but by rounding
+        // noise: the snap is a ten-thousandth of a substep, and a variable `dt` lands that close to
+        // a whole substep about once in five thousand calls.
+        let snap = substep * super::SUBSTEP_SNAP;
         let mut steps = 0u32;
-        while self.accumulator >= FIXED_DT && steps < MAX_SUBSTEPS {
-            self.step_internal(FIXED_DT)?;
-            self.accumulator -= FIXED_DT;
+        while self.accumulator >= substep - snap && steps < max_substeps {
+            self.step_internal(substep)?;
+            self.accumulator -= substep;
             steps += 1;
+        }
+        if self.accumulator.abs() < snap {
+            self.accumulator = 0.0;
         }
 
         // Forces are drained ONCE PER FRAME, here, not once per substep.
@@ -171,23 +186,24 @@ impl PhysicsWorld {
             total_ms = self.metrics.total_ms(),
             "physics frame stepped"
         );
-        if steps == MAX_SUBSTEPS {
+        if steps == max_substeps {
             // Hit the substep ceiling: this frame stopped stepping with time still in the
             // accumulator, so the sim is behind wall-clock.
             //
             // **Nothing is lost, though** — the old text here said "time lost" in the same breath
             // as "the accumulator still holds unspent time", which cannot both be true. This
             // accumulator is never clamped: the leftover carries into the next frame. Nor does it
-            // run away, and the two numbers are why: intake is `dt.min(0.25)` per frame while a
-            // saturated frame drains 64 x 1/240 = 0.2667 s, so every ceiling-hitting frame pays
-            // off 1/60 s of debt. That is the opposite arrangement from `PhysicsTime`, which
-            // clamps and genuinely drops time — see its docs on which ceiling governs where.
+            // run away, and the two durations are why: intake is at most `MAX_FRAME_DT` (0.25 s)
+            // a frame while a saturated frame drains `MAX_SIMULATED_PER_STEP` (0.267 s), so every
+            // ceiling-hitting frame pays off 1/60 s of debt, at any rate. That is the opposite
+            // arrangement from `PhysicsTime`, which clamps and genuinely drops time — see its docs
+            // on which ceiling governs where.
             //
             // Through the ECS this branch is unreachable: `physics_step_system` is handed a fixed
-            // 1/60 s, which is 4 substeps of the 64. It is for a game driving `step` itself with a
-            // large variable delta.
+            // step of a few substeps. It is for a game driving `step` itself with a large variable
+            // delta.
             tracing::warn!(
-                max_substeps = MAX_SUBSTEPS,
+                max_substeps,
                 accumulator = self.accumulator,
                 "Physics hit the substep ceiling — simulation is behind real time (the leftover \
                  carries to the next frame; it is not dropped)"
@@ -207,7 +223,7 @@ impl PhysicsWorld {
             self.metrics.narrowphase_manifold_ms = Phases::ms(&PHASES.manifold);
         }
 
-        self.render_alpha = self.accumulator / FIXED_DT;
+        self.render_alpha = self.accumulator / substep;
 
         // Record history snapshot at the end of the frame.
         //
@@ -228,7 +244,7 @@ impl PhysicsWorld {
         Ok(())
     }
 
-    /// The inner physics step — always called with the fixed FIXED_DT.
+    /// The inner physics step — always called with the world's [`substep_dt`](Self::substep_dt).
     /// A modular pipeline: each stage lives in its own function (pipeline.rs).
     #[tracing::instrument(skip_all, name = "physics_substep")]
     fn step_internal(
@@ -294,7 +310,7 @@ impl PhysicsWorld {
     /// The consecutive quiet substeps a body needs before it may sleep:
     /// [`RigidBody::SLEEP_TIME`](crate::RigidBody::SLEEP_TIME) of this world's substep.
     pub fn sleep_steps(&self) -> u32 {
-        crate::RigidBody::sleep_steps(FIXED_DT)
+        crate::RigidBody::sleep_steps(self.substep_dt())
     }
 
     /// Get collision events from last step
