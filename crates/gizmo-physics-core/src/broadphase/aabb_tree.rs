@@ -333,42 +333,79 @@ impl DynamicAabbTree {
     ///   direct_cost    = SA(merge(leaf, node))
     ///   inherited_cost = inherited cost from ancestors (delta SA propagated up)
     fn find_best_sibling(&self, leaf_aabb: &Aabb) -> usize {
-        let mut best_cost = f32::INFINITY;
-        let mut best = self.root;
+        // One greedy path from the root (Box2D v3's `b2FindBestSibling`): at each internal node the
+        // cost of making it the sibling is weighed, then the walk goes down into the child whose
+        // lower bound is cheaper, and stops once neither child can beat the best found. It visits
+        // about the tree's height in nodes. The branch-and-bound search it replaced was exact, and
+        // in a dense pile its bound pruned little: 130 nodes an insertion in a 4000-body tree,
+        // 2 µs, on the one thread every reinsertion of a substep waits on.
+        //
+        // The tree's shape decides which pairs of boxes are candidates, never which bodies touch:
+        // every box a body can touch from is inside its leaf whatever the shape, and the candidates
+        // are sorted before anything reads them.
+        let center = |a: &Aabb| (a.min + a.max) * 0.5;
+        let leaf_center = center(leaf_aabb);
+        let leaf_area = surface_area(leaf_aabb);
 
-        // Stack: (node_idx, inherited_cost)
-        let mut stack = Vec::with_capacity(32);
-        stack.push((self.root, 0.0f32));
+        let mut index = self.root;
+        let mut area_base = surface_area(&self.nodes[index].aabb);
+        let mut direct_cost = surface_area(&merge_aabb(&self.nodes[index].aabb, leaf_aabb));
+        let mut inherited_cost = 0.0f32;
+        let mut best = index;
+        let mut best_cost = direct_cost;
 
-        while let Some((idx, inherited)) = stack.pop() {
-            if idx == NULL {
-                continue;
+        while !self.nodes[index].is_leaf() {
+            let (child1, child2) = (self.nodes[index].left, self.nodes[index].right);
+            // The cost of a new parent for this node and the leaf.
+            let cost = direct_cost + inherited_cost;
+            if cost < best_cost {
+                best = index;
+                best_cost = cost;
             }
+            // What every node below grows by when the leaf goes under this one.
+            inherited_cost += direct_cost - area_base;
 
-            let node_sa = surface_area(&self.nodes[idx].aabb);
-            let merged_sa = surface_area(&merge_aabb(leaf_aabb, &self.nodes[idx].aabb));
-            let direct = merged_sa;
-            let total_cost = direct + inherited;
-
-            if total_cost < best_cost {
-                best_cost = total_cost;
-                best = idx;
-            }
-
-            if !self.nodes[idx].is_leaf() {
-                // FIX-7: child'ın inherited cost'u = parent'ın (merged_sa - node_sa) + inherited
-                // Bu, yaprağı bu node'un altına eklersek ancestor AABB'lerinin ne kadar büyüyeceğini gösterir
-                let child_inherited = (merged_sa - node_sa) + inherited;
-
-                // Lower bound: leaf_sa + child_inherited (node SA = 0 olsa bile en az bu kadar maliyet)
-                let lower_bound = surface_area(leaf_aabb) + child_inherited;
-                if lower_bound < best_cost {
-                    stack.push((self.nodes[idx].left, child_inherited));
-                    stack.push((self.nodes[idx].right, child_inherited));
+            // The cheapest the leaf could cost under a child: a leaf child is a sibling candidate in
+            // itself; an internal one is a lower bound to descend by.
+            let side = |child: usize, best: &mut usize, best_cost: &mut f32| -> (f32, f32, f32, bool) {
+                let node = &self.nodes[child];
+                let direct = surface_area(&merge_aabb(&node.aabb, leaf_aabb));
+                if node.is_leaf() {
+                    let cost = direct + inherited_cost;
+                    if cost < *best_cost {
+                        *best = child;
+                        *best_cost = cost;
+                    }
+                    (f32::MAX, direct, 0.0, true)
+                } else {
+                    let area = surface_area(&node.aabb);
+                    (inherited_cost + direct + (leaf_area - area).min(0.0), direct, area, false)
                 }
+            };
+            let (mut lower1, direct1, area1, leaf1) = side(child1, &mut best, &mut best_cost);
+            let (mut lower2, direct2, area2, leaf2) = side(child2, &mut best, &mut best_cost);
+            if leaf1 && leaf2 {
+                break;
+            }
+            // Can going down still beat what was found?
+            if best_cost <= lower1 && best_cost <= lower2 {
+                break;
+            }
+            if lower1 == lower2 && !leaf1 {
+                // No choice by area — both children hold the leaf, say: the nearer one.
+                lower1 = (center(&self.nodes[child1].aabb) - leaf_center).length_squared();
+                lower2 = (center(&self.nodes[child2].aabb) - leaf_center).length_squared();
+            }
+            if lower1 < lower2 && !leaf1 {
+                index = child1;
+                area_base = area1;
+                direct_cost = direct1;
+            } else {
+                index = child2;
+                area_base = area2;
+                direct_cost = direct2;
             }
         }
-
         best
     }
 
