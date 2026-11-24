@@ -149,84 +149,36 @@ pub(crate) fn compose_module_with(
     shader_defs: HashMap<String, ShaderDefValue>,
     custom_surface: Option<&str>,
 ) -> Result<(naga::Module, naga::valid::ModuleInfo), String> {
-    use naga_oil::compose::{
-        ComposableModuleDescriptor, Composer, NagaModuleDescriptor, ShaderLanguage,
-    };
+    use naga_oil::compose::{ComposableModuleDescriptor, NagaModuleDescriptor, ShaderLanguage};
 
-    let mut composer = Composer::default();
-    composer
-        .add_composable_module(ComposableModuleDescriptor {
-            source: COMMON_WGSL,
-            file_path: "gizmo/common.wgsl",
-            language: ShaderLanguage::Wgsl,
-            ..Default::default()
-        })
-        .map_err(|e| format!("composing common.wgsl failed: {e}"))?;
-    // pbr_ext imports gizmo::common, so it must be registered after common. Only shaders that
-    // `#import gizmo::pbr_ext` pull it in; registering it here is otherwise inert.
-    composer
-        .add_composable_module(ComposableModuleDescriptor {
-            source: PBR_EXT_WGSL,
-            file_path: "gizmo/pbr_ext.wgsl",
-            language: ShaderLanguage::Wgsl,
-            ..Default::default()
-        })
-        .map_err(|e| format!("composing pbr_ext.wgsl failed: {e}"))?;
-    composer
-        .add_composable_module(ComposableModuleDescriptor {
-            source: SURFACE_WGSL,
-            file_path: "gizmo/surface.wgsl",
-            language: ShaderLanguage::Wgsl,
-            ..Default::default()
-        })
-        .map_err(|e| format!("composing surface.wgsl failed: {e}"))?;
-    // After `surface`, which it imports.
-    composer
-        .add_composable_module(ComposableModuleDescriptor {
-            source: MATERIAL_WGSL,
-            file_path: "gizmo/material.wgsl",
-            language: ShaderLanguage::Wgsl,
-            ..Default::default()
-        })
-        .map_err(|e| format!("composing material.wgsl failed: {e}"))?;
-    composer
-        .add_composable_module(ComposableModuleDescriptor {
-            source: IRRADIANCE_WGSL,
-            file_path: "gizmo/irradiance.wgsl",
-            language: ShaderLanguage::Wgsl,
-            ..Default::default()
-        })
-        .map_err(|e| format!("composing irradiance.wgsl failed: {e}"))?;
-    composer
-        .add_composable_module(ComposableModuleDescriptor {
-            source: REFLECTION_PROBES_WGSL,
-            file_path: "gizmo/reflection_probes.wgsl",
-            language: ShaderLanguage::Wgsl,
-            ..Default::default()
-        })
-        .map_err(|e| format!("composing reflection_probes.wgsl failed: {e}"))?;
-    // Last: it may import anything above. Named by the engine, so a game's file needs no
-    // `#define_import_path` and cannot register itself over one of the engine's modules.
-    if let Some(surface) = custom_surface {
-        composer
-            .add_composable_module(ComposableModuleDescriptor {
-                source: surface,
+    let module = with_engine_composer(|composer| {
+        // Last: it may import anything the engine registers. Named by the engine, so a game's file
+        // needs no `#define_import_path` and cannot register itself over one of the engine's
+        // modules. Registered for this composition only, and taken out again whatever happens.
+        if let Some(surface) = custom_surface {
+            composer
+                .add_composable_module(ComposableModuleDescriptor {
+                    source: surface,
+                    file_path: label,
+                    language: ShaderLanguage::Wgsl,
+                    as_name: Some(CUSTOM_SURFACE_MODULE.to_string()),
+                    ..Default::default()
+                })
+                .map_err(|e| format!("composing the surface of '{label}' failed: {e}"))?;
+        }
+        let module = composer
+            .make_naga_module(NagaModuleDescriptor {
+                source,
                 file_path: label,
-                language: ShaderLanguage::Wgsl,
-                as_name: Some(CUSTOM_SURFACE_MODULE.to_string()),
+                shader_defs,
                 ..Default::default()
             })
-            .map_err(|e| format!("composing the surface of '{label}' failed: {e}"))?;
-    }
-
-    let module = composer
-        .make_naga_module(NagaModuleDescriptor {
-            source,
-            file_path: label,
-            shader_defs,
-            ..Default::default()
-        })
-        .map_err(|e| format!("naga_oil compose of '{label}' failed: {e}"))?;
+            .map_err(|e| format!("naga_oil compose of '{label}' failed: {e}"));
+        if custom_surface.is_some() {
+            composer.remove_composable_module(CUSTOM_SURFACE_MODULE);
+        }
+        module
+    })?;
 
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
@@ -236,6 +188,53 @@ pub(crate) fn compose_module_with(
     .map_err(|e| format!("validating composed '{label}' failed: {e:?}"))?;
 
     Ok((module, info))
+}
+
+/// Runs `f` with the process's one composer, the engine's modules registered in it once.
+///
+/// It was a composer per shader until 2026-11-24, and registering the six modules is most of what
+/// composing costs — parsed, preprocessed and with naga_oil's regexes built again for every shader,
+/// eighteen or so at every start. Measured with eu-stack on a windowed start: nine of eleven samples
+/// in the composer, against two in the driver's pipeline creation (Mesa keeps its own cache), and
+/// the start 0.6 s against Godot 4.7.2's 0.33. One composer for every shader is how naga_oil is
+/// meant to be used; it keeps each import's composition per set of defs.
+///
+/// Behind a lock: composing is a few milliseconds a shader, and a renderer composes on one thread.
+fn with_engine_composer<R>(f: impl FnOnce(&mut naga_oil::compose::Composer) -> Result<R, String>) -> Result<R, String> {
+    use std::sync::{Mutex, OnceLock};
+    static COMPOSER: OnceLock<Mutex<Option<naga_oil::compose::Composer>>> = OnceLock::new();
+    let mut slot = COMPOSER.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|p| p.into_inner());
+    if slot.is_none() {
+        *slot = Some(engine_composer()?);
+    }
+    f(slot.as_mut().expect("just filled"))
+}
+
+/// A composer with the engine's importable modules registered, each after those it imports.
+fn engine_composer() -> Result<naga_oil::compose::Composer, String> {
+    use naga_oil::compose::{ComposableModuleDescriptor, Composer, ShaderLanguage};
+    let mut composer = Composer::default();
+    // pbr_ext imports gizmo::common, so it must be registered after common. Only shaders that
+    // `#import gizmo::pbr_ext` pull it in; registering it is otherwise inert. Material after
+    // `surface`, which it imports.
+    for (source, file_path) in [
+        (COMMON_WGSL, "gizmo/common.wgsl"),
+        (PBR_EXT_WGSL, "gizmo/pbr_ext.wgsl"),
+        (SURFACE_WGSL, "gizmo/surface.wgsl"),
+        (MATERIAL_WGSL, "gizmo/material.wgsl"),
+        (IRRADIANCE_WGSL, "gizmo/irradiance.wgsl"),
+        (REFLECTION_PROBES_WGSL, "gizmo/reflection_probes.wgsl"),
+    ] {
+        composer
+            .add_composable_module(ComposableModuleDescriptor {
+                source,
+                file_path,
+                language: ShaderLanguage::Wgsl,
+                ..Default::default()
+            })
+            .map_err(|e| format!("composing {} failed: {e}", file_path.trim_start_matches("gizmo/")))?;
+    }
+    Ok(composer)
 }
 
 /// Compose a shader source (`#import gizmo::common`, `#ifdef`, `#{DEF}`) into flat WGSL text

@@ -549,6 +549,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A renderer starts in half the time.** Every shader was composed by a composer of its own,
+  which parsed and preprocessed the engine's six importable modules again — eighteen or so shaders,
+  at every start. Sampled with eu-stack: nine of eleven samples of a windowed start in the composer,
+  two in the driver's pipeline creation. One composer now serves every shader, its modules
+  registered once (a game's surface module is added for its composition and taken out after). A
+  windowed start to the first frame 0.63 → 0.29 s; Godot 4.7.2's is 0.33. Golden render tests on
+  both paths unchanged.
 - **The draw's per-object cache works in a windowed game.** The draw reads a copy of the game
   world, and nothing ran a schedule on the copy, so its change tick stood at 1 for ever: every
   "what changed since I last looked" asked of it answered "everything", and the cache that lets a
