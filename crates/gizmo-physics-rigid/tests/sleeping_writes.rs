@@ -14,9 +14,11 @@
 //!
 //! The engine had already fixed one instance of this by waking at the writer (the explosion
 //! system, pinned by `explosion.rs`). That made the contract in `RigidBody::wake_up`'s doc — change
-//! a velocity, wake the body — true of one caller. `sync_bodies` now enforces it for all of them:
-//! a velocity written to a sleeping dynamic body is **dropped** rather than banked, so a writer
-//! that forgets loses the write immediately and visibly instead of arming a trap.
+//! a velocity, wake the body — true of one caller. `PhysicsWorld::update_bodies` enforces it for
+//! all of them: a velocity handed to a sleeping dynamic body is **dropped** rather than banked.
+//! And since 2026-11-25 the ECS sync keeps the contract for the writer: a sleeping body whose
+//! `Velocity` or `Transform` was written through the ECS is woken (`moved_by_hand`), so the write
+//! takes effect at once — as Box2D's `SetLinearVelocity` wakes a body — instead of being lost.
 //!
 //! # What each test would catch
 //!
@@ -68,13 +70,13 @@ fn is_asleep(world: &World, e: gizmo_core::entity::Entity) -> bool {
     world.query::<&RigidBody>().get(e).expect("body").is_sleeping
 }
 
-/// Writing a velocity to a sleeping body and walking away must not arm anything.
+/// A velocity written to a sleeping body through the ECS wakes it and moves it at once — and arms
+/// nothing for later: once it has come to rest again, waking it moves it by nothing.
 ///
-/// The assertion that fails without the guard is the **last** one: before the fix the 5 m/s sat in
-/// the physics world until the wake, and the body then coasted metres from a push the player made
-/// long before. With the guard the write is dropped, so waking the body later moves it by nothing.
+/// Before the guard the 5 m/s sat in the physics world until something woke the body, which then
+/// coasted metres from a push made long before; with the guard alone the write was dropped.
 #[test]
-fn a_velocity_written_to_a_sleeping_body_does_not_fire_when_something_else_wakes_it() {
+fn a_velocity_written_to_a_sleeping_body_wakes_it_and_fires_nothing_later() {
     let (mut world, body) = settled_box();
     assert!(
         is_asleep(&world, body),
@@ -83,18 +85,25 @@ fn a_velocity_written_to_a_sleeping_body_does_not_fire_when_something_else_wakes
     let x0 = x_of(&world, body);
 
     // Gameplay writes a velocity and does NOT wake the body — the mistake three writers in this
-    // engine used to make.
+    // engine used to make. The sync wakes it.
     {
         let mut vels = world.query_mut::<&mut Velocity>();
         vels.get_mut(body).expect("velocity").linear = Vec3::new(5.0, 0.0, 0.0);
     }
 
-    // One step: the write should have gone nowhere.
+    // One step: the write moves it now.
     physics_step_system(&world, 1.0 / 60.0);
     assert!(
-        (x_of(&world, body) - x0).abs() < 1e-4,
-        "a sleeping body moved from a velocity write that did not wake it"
+        x_of(&world, body) - x0 > 0.03,
+        "a sleeping body did not move from a velocity written to it"
     );
+
+    // It slides to rest and sleeps again.
+    for _ in 0..400 {
+        physics_step_system(&world, 1.0 / 60.0);
+    }
+    assert!(is_asleep(&world, body), "scenario invalid: the box did not settle again");
+    let x0 = x_of(&world, body);
 
     // Now something unrelated wakes it — the editor's button, a neighbour, a blast.
     {
@@ -108,9 +117,8 @@ fn a_velocity_written_to_a_sleeping_body_does_not_fire_when_something_else_wakes
     let travelled = (x_of(&world, body) - x0).abs();
     assert!(
         travelled < 0.05,
-        "the body travelled {travelled:.3} m after being woken — the velocity written while it \
-         slept was banked and fired as a stale impulse. It should have been dropped at the point \
-         of the write."
+        "the body travelled {travelled:.3} m after being woken — a velocity was banked while it \
+         slept and fired as a stale impulse"
     );
 }
 

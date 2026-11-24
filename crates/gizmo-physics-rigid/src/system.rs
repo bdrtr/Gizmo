@@ -263,6 +263,7 @@ impl EcsSync {
         self.flags[i] |= Self::WRITTEN;
     }
 
+
     /// Enters `id` in this step's body set and says whether it must be brought over: when the
     /// record does not vouch for it (`full` was asked, it is new to the set, it was written, it
     /// lost a material or its children) or `always`. A body with children always is: what moves
@@ -517,6 +518,18 @@ fn mark_written_since(world: &World, sync: &mut EcsSync) {
     }
 }
 
+/// Whether a body's ECS pose or velocity is not what the physics world holds for it: someone put it
+/// somewhere, or set it moving, since the sync last wrote it back. A velocity counts only past
+/// 1 mm/s apart (a sleeping body's ECS velocity and its row may differ by rounding).
+fn moved_by_hand(physics_world: &PhysicsWorld, id: u32, transform: &Transform, vel: &Velocity) -> bool {
+    let Some(&i) = physics_world.entity_index_map.get(&id) else { return false };
+    let row = &physics_world.velocities[i];
+    physics_world.transforms[i].position != transform.position
+        || physics_world.transforms[i].rotation != transform.rotation
+        || (row.linear - vel.linear).length_squared() > 1e-6
+        || (row.angular - vel.angular).length_squared() > 1e-6
+}
+
 /// Step 3: the bodies with a `Velocity` that need bringing over (`EcsSync::needs`), with their
 /// compound collider, their inertia when it was never set, this step's forces, and a kinematic
 /// body's velocity toward its target or its pose.
@@ -559,6 +572,16 @@ fn gather_bodies(world: &World, physics_world: &PhysicsWorld, sync: &mut EcsSync
         // with the body, so this runs once; an inertia set by hand is anything but the
         // placeholder and is left alone.
         let mut rb = *rb;
+        // A sleeping body put somewhere by hand, or set moving, wakes — where it was put is not
+        // where it came to rest (Box2D's `SetTransform` wakes too). It stayed asleep: a seesaw's
+        // plank asleep at a round's end and set back level hung level in the air (`tahterevalli`,
+        // 2026-11-25). Told by its pose or velocity differing from the physics world's copy, which
+        // the sync wrote back last step — so it works on a full sync too. A body new to the world
+        // keeps the sleep it was given: to put one somewhere asleep, spawn it so, or set it asleep
+        // on a later frame.
+        if rb.is_dynamic() && rb.is_sleeping && moved_by_hand(physics_world, id.id(), transform, vel) {
+            rb.wake_up();
+        }
         if !rb.is_static() && rb.local_inertia == RigidBody::UNSET_INERTIA {
             rb.update_inertia_from_collider(&final_collider);
         }

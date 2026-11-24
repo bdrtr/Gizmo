@@ -258,6 +258,9 @@ impl PhysicsWorld {
                 // is the contract `RigidBody::wake_up` states: change a velocity, wake the body.
                 // This guard makes the contract enforceable instead of advisory — a writer that
                 // forgets now loses its write immediately and visibly, rather than banking it.
+                // (The ECS sync keeps the contract for its writers: a sleeping body whose pose or
+                // velocity was written through the ECS is woken before it gets here,
+                // `system::moved_by_hand`.)
                 //
                 // Dynamic only, deliberately: `new_static` presets `is_sleeping = true`, and a
                 // kinematic body is *driven* by the velocity written here. Both must keep syncing

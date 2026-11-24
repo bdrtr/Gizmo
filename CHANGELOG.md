@@ -549,6 +549,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A sleeping body put somewhere by hand wakes.** Its `Transform` or `Velocity` written through the
+  ECS, it stayed asleep where it was put: `tahterevalli` set its plank back level at a round's end,
+  and when the plank had gone to sleep by then it hung level in the air. The sync now wakes a
+  sleeping body whose pose or velocity differs from the physics world's copy — as Box2D's
+  `SetTransform` does — on a full sync as on an incremental one. A body new to the world keeps the
+  sleep it was spawned with. A velocity written to a sleeping body through the ECS so takes effect
+  at once, where it was dropped (`sleeping_writes.rs` now asserts the move, and still that nothing
+  is banked for later). `moved_by_hand.rs`, red with the rule taken out.
 - **A solid contact that goes on reports `Persisting` only when asked for.**
   `PhysicsWorld::persisting_contact_events`, off by default: `collision_events` carries a contact's
   `Started` and `Ended`, and its `Persisting` on every substep between only with the flag on, as it
