@@ -51,8 +51,8 @@ fn worth_parallel_jobs(items: usize, at_least: usize) -> bool {
 const PARALLEL_MIN_PAIRS: usize = 64;
 /// See [`worth_parallel_jobs`].
 const PARALLEL_MIN_MANIFOLDS: usize = 32;
-/// See [`worth_parallel_jobs`]: a check of a candidate pair — whether it is dormant, where it falls
-/// in the sorted list — is two id lookups or a comparison, tens of nanoseconds.
+/// See [`worth_parallel_jobs`]: placing a pair's contacts in the sorted list is a few comparisons,
+/// tens of nanoseconds.
 const PARALLEL_MIN_PAIR_CHECKS: usize = 2048;
 
 
@@ -92,6 +92,13 @@ fn collect_fracture_events(
             });
         }
     }
+}
+
+/// What the narrow phase made of a candidate pair (`PhysicsWorld::examine_pair`).
+enum Examined {
+    /// Both bodies at rest: not tested, its cache entry kept.
+    Dormant((BodyHandle, BodyHandle)),
+    Found(PairContacts),
 }
 
 /// What the narrowphase found for one candidate pair, on the worker that tested it.
@@ -422,7 +429,7 @@ impl PhysicsWorld {
     /// Returns the set of [`ContactManifold`]s to be fed into the solver.
     #[tracing::instrument(skip_all, name = "narrowphase_collision")]
     pub(crate) fn narrowphase_and_collision_step(&mut self, dt: f32) -> (Vec<ContactManifold>, Vec<ManifoldEnds>) {
-        let (active_pairs, dormant_pairs) = self.partition_pairs();
+        let candidates = self.spatial_hash.query_pairs();
         let disabled_joint_pairs = self.collision_disabled_joint_pairs();
 
         // Kapsam paralel bölümün TAMAMINI sarar, çift başına değil. Eskiden çift başınaydı:
@@ -432,13 +439,43 @@ impl PhysicsWorld {
         // motorda kimsenin okumadığı bir sayaç için kalıcı bir vergi, ve buradan okunan sayı
         // (duvar saati) zaten daha kullanışlı — CPU-ms yerine fazın gerçekte ne kadar sürdüğü.
         let _t = crate::profile::Scope::new(&crate::profile::PHASES.dispatch);
-        let pair_contacts = |&pair: &(BodyHandle, BodyHandle)| self.pair_contacts(pair, &disabled_joint_pairs, dt);
+        let examine = |&pair: &(BodyHandle, BodyHandle)| self.examine_pair(pair, &disabled_joint_pairs, dt);
         // On the calling thread when there are few pairs (`worth_parallel_jobs`); order is kept.
-        let narrowphase_results: Vec<PairContacts> = if worth_parallel_jobs(active_pairs.len(), PARALLEL_MIN_PAIRS) {
-            active_pairs.par_iter().filter_map(pair_contacts).collect()
+        let examined: Vec<Examined> = if worth_parallel_jobs(candidates.len(), PARALLEL_MIN_PAIRS) {
+            candidates.par_iter().filter_map(examine).collect()
         } else {
-            active_pairs.iter().filter_map(pair_contacts).collect()
+            candidates.iter().filter_map(examine).collect()
         };
+        drop(_t);
+        let candidate_count = candidates.len();
+        drop(candidates);
+        let mut dormant_pairs: Vec<(BodyHandle, BodyHandle)> = Vec::new();
+        let mut narrowphase_results: Vec<PairContacts> = Vec::with_capacity(examined.len());
+        for found in examined {
+            match found {
+                Examined::Dormant(pair) => dormant_pairs.push(pair),
+                Examined::Found(contacts) => narrowphase_results.push(contacts),
+            }
+        }
+        // **In id order, not the tree's.** The broadphase hands its pairs over in whatever order
+        // its trees' shapes walk them, and that order became the collision events' order — which
+        // what reacts to them (the fracture system spawning debris, a game's own handler) turns
+        // into entity ids and onward into a different simulation. The island solve does not care
+        // (`support_ordering`), the events did: splitting the broadphase into a static and a
+        // moving tree changed which blocks `vinc`'s wrecking ball broke, and a rollback, which
+        // restores bodies but not the tree's history, could replay a step's events in another
+        // order. Sorted, they are a function of the bodies alone.
+        //
+        // The pairs that touch are sorted, not all the candidates (2.6 times as many in a pile of
+        // spheres): the test keeps the candidates' order, so the touching ones come out the same
+        // either way. A pair is in the list once, so any sort leaves one list — on several threads
+        // when it is long.
+        let key = |c: &PairContacts| (c.entity_a.id(), c.entity_b.id());
+        if worth_parallel_jobs(narrowphase_results.len(), PARALLEL_MIN_PAIR_CHECKS) {
+            narrowphase_results.par_sort_unstable_by_key(key);
+        } else {
+            narrowphase_results.sort_unstable_by_key(key);
+        }
 
         // ── Contacts of bodies removed since the last step: ended ─────────
         // Reported first, before this step's own events: the body that took the id may be in the
@@ -489,8 +526,8 @@ impl PhysicsWorld {
         // expensive SAT/GJK test ran, so a sudden collapse in that ratio (everything active)
         // explains a narrowphase cost spike. Counts are O(1) reads.
         tracing::debug!(
-            candidate_pairs = active_pairs.len() + dormant_pairs.len(),
-            active_pairs = active_pairs.len(),
+            candidate_pairs = candidate_count,
+            active_pairs = candidate_count - dormant_pairs.len(),
             dormant_skipped = dormant_pairs.len(),
             manifold_count = manifolds.len(),
             "narrowphase complete"
@@ -499,12 +536,16 @@ impl PhysicsWorld {
         (manifolds, ends)
     }
 
-    /// This step's candidate pairs, split into the ones the narrowphase tests (in id order) and
-    /// the dormant ones it skips.
-    fn partition_pairs(&self) -> (Vec<(BodyHandle, BodyHandle)>, Vec<(BodyHandle, BodyHandle)>) {
-        let entity_map = &self.entity_index_map;
-        let potential_pairs = self.spatial_hash.query_pairs();
-
+    /// One candidate pair, on whichever thread takes it: dormant — both bodies at rest, so it can
+    /// make no new contact and is not tested (`keep_dormant_cache` keeps its entry) — or tested
+    /// (`pair_contacts`). The two id lookups are made once for both questions; asking dormancy in a
+    /// pass of its own made them twice.
+    fn examine_pair(
+        &self,
+        pair: (BodyHandle, BodyHandle),
+        disabled_joint_pairs: &FxHashSet<(u32, u32)>,
+        dt: f32,
+    ) -> Option<Examined> {
         // ── Dormant-çift atlama (geniş-sahne perf) ────────────────────────
         // İki cisim de DORMANT ise (statik VEYA uyuyan dinamik VEYA hareketsiz kinematik)
         // yeni temas ÜRETEMEZ → pahalı narrowphase ATLANIR. (Not: eski "~%82" ölçümü
@@ -514,9 +555,11 @@ impl PhysicsWorld {
         // Cache aşağıda KORUNUR (yoksa ended-
         // collision wake sahte tetiklenir). En az biri aktifse normal narrowphase çalışır
         // (temas + wake yakalanır), böylece düşen/itilen cisim uyuyan komşuyu uyandırır.
-        let is_active_body = |e: BodyHandle| -> bool {
-            match entity_map.get(&e.id()) {
-                Some(&i) => {
+        let entity_map = &self.entity_index_map;
+        let (a, b) = (entity_map.get(&pair.0.id()).copied(), entity_map.get(&pair.1.id()).copied());
+        let is_active = |i: Option<usize>| -> bool {
+            match i {
+                Some(i) => {
                     let rb = &self.rigid_bodies[i];
                     (rb.is_dynamic() && !rb.is_sleeping)
                         || (rb.is_kinematic()
@@ -527,46 +570,12 @@ impl PhysicsWorld {
                 None => true,
             }
         };
-        // Which pairs are dormant is asked on every thread for a big list — two id lookups a
-        // pair, scattered over the whole map — and the list is split on this one, in its order.
-        let is_active_pair = |&(a, b): &(BodyHandle, BodyHandle)| is_active_body(a) || is_active_body(b);
-        let active: Vec<bool> = if worth_parallel_jobs(potential_pairs.len(), PARALLEL_MIN_PAIR_CHECKS) {
-            potential_pairs.par_iter().map(is_active_pair).collect()
-        } else {
-            potential_pairs.iter().map(is_active_pair).collect()
-        };
-        let mut dormant_pairs: Vec<(BodyHandle, BodyHandle)> = Vec::new();
-        let mut active_pairs: Vec<(BodyHandle, BodyHandle)> = Vec::with_capacity(potential_pairs.len());
-        for (pair, active) in potential_pairs.into_iter().zip(active) {
-            if active {
-                active_pairs.push(pair);
-            } else {
-                dormant_pairs.push(pair);
-            }
+        if !is_active(a) && !is_active(b) {
+            return Some(Examined::Dormant(pair));
         }
-        // **In id order, not the tree's.** The broadphase hands its pairs over in whatever order
-        // its trees' shapes walk them, and that order became the collision events' order — which
-        // what reacts to them (the fracture system spawning debris, a game's own handler) turns
-        // into entity ids and onward into a different simulation. The island solve does not care
-        // (`support_ordering`), the events did: splitting the broadphase into a static and a
-        // moving tree changed which blocks `vinc`'s wrecking ball broke, and a rollback, which
-        // restores bodies but not the tree's history, could replay a step's events in another
-        // order. Sorted, they are a function of the bodies alone.
-        // A pair is in the list once, so any sort leaves the same list: on several threads when it is
-        // long.
-        if worth_parallel_jobs(active_pairs.len(), PARALLEL_MIN_PAIR_CHECKS) {
-            active_pairs.par_sort_unstable_by_key(|&(a, b)| (a.id(), b.id()));
-        } else {
-            active_pairs.sort_unstable_by_key(|&(a, b)| (a.id(), b.id()));
-        }
-        (active_pairs, dormant_pairs)
+        self.pair_contacts(pair, (a?, b?), disabled_joint_pairs, dt).map(Examined::Found)
     }
 
-    /// The pairs of bodies joined by a collision-disabled joint, by ordered id pair.
-    ///
-    /// frame (keyed by ordered id pair), instead of re-scanning every joint for every
-    /// candidate contact pair inside the parallel narrowphase — that was O(pairs × joints).
-    /// Empty (the common jointless case) ⇒ the per-pair check below short-circuits for free.
     fn collision_disabled_joint_pairs(&self) -> FxHashSet<(u32, u32)> {
         self
             .joints
@@ -586,12 +595,10 @@ impl PhysicsWorld {
     fn pair_contacts(
         &self,
         (entity_a, entity_b): (BodyHandle, BodyHandle),
+        (idx_a, idx_b): (usize, usize),
         disabled_joint_pairs: &FxHashSet<(u32, u32)>,
         dt: f32,
     ) -> Option<PairContacts> {
-        let entity_map = &self.entity_index_map;
-        let idx_a = *entity_map.get(&entity_a.id())?;
-        let idx_b = *entity_map.get(&entity_b.id())?;
 
         let collider_a = &self.colliders[idx_a];
         let collider_b = &self.colliders[idx_b];
