@@ -56,6 +56,11 @@ pub struct PostProcessState {
     pub streak_params_bind_groups: Vec<wgpu::BindGroup>,
     /// The bloom and the depth buffer, as the composite pass reads them.
     pub composite_bloom_bind_group: wgpu::BindGroup,
+    /// The bloom strength last written to the post uniforms ([`Renderer::update_post_process`]), as
+    /// `f32` bits: [`run_bloom`] skips the chain when it is 0 and there is no flare.
+    ///
+    /// [`Renderer::update_post_process`]: crate::Renderer::update_post_process
+    pub(crate) bloom_written: std::sync::atomic::AtomicU32,
 }
 
 /// The bloom's three passes, all drawn from `post_process.wgsl`: the first level from the frame's bright
@@ -178,6 +183,12 @@ impl LensFlare {
             let threshold = if n == 0 { past } else { 0.0 };
             [4f32.powi(n as i32), attenuation, direction, threshold, scale[0], scale[1], scale[2], 0.0]
         })
+    }
+
+    /// Whether this flare adds nothing: no ghosts or halo, and no streaks.
+    fn is_dark(&self) -> bool {
+        let streak = self.streak.is_finite() && self.streak > 0.0 && self.streak_tint.iter().any(|&c| c.is_finite() && c > 0.0);
+        self.params()[0] <= 0.0 && !streak
     }
 
     /// What its pass reads, every number made safe: `[intensity, threshold, halo, chromatic]`.
@@ -372,6 +383,23 @@ impl BloomChain {
 }
 
 impl PostProcessState {
+    /// Clears what the composite reads of the bloom and the flare, for a frame that draws neither.
+    pub fn clear_bloom(&self, encoder: &mut wgpu::CommandEncoder) {
+        for (label, view) in [("Bloom Clear", &self.bloom.view), ("Lens Flare Clear", &self.bloom.flare)] {
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+        }
+    }
+
     /// Records the bloom: the bright part of the HDR target filtered down the chain level by level and
     /// back up, each level on the way up taking `scatter` (0–1) of the one below it and keeping the rest
     /// of its own — weights that add to one, so the bloom holds the bright part's light at any scatter,
@@ -647,6 +675,7 @@ pub fn build_post_process_resources(
     );
 
     PostProcessState {
+        bloom_written: std::sync::atomic::AtomicU32::new(PostProcessUniforms::default().bloom_intensity.to_bits()),
         post_bind_group_layout,
         composite_bloom_bind_group_layout,
         post_params_buffer,
@@ -1116,9 +1145,27 @@ pub fn run_post_processing(
     run_composite(renderer, encoder, output_view, region);
 }
 
+/// Whether the bloom's chain adds anything to a frame whose composite weighs it by `intensity`: a
+/// bloom above 0, or a lens flare, which is drawn from the chain's first level.
+fn bloom_needed(intensity: f32, flare: &LensFlare) -> bool {
+    intensity > 0.0 || !flare.is_dark()
+}
+
 /// The bloom ([`PostProcessState::record_bloom`]), spread as [`Renderer::bloom_scatter`](crate::Renderer::bloom_scatter)
-/// says. The forward-only path has none.
+/// says. The forward-only path has none, and a frame it would add nothing to — a bloom of 0 and no lens
+/// flare — skips it ([`PostProcessState::clear_bloom`] instead).
 pub fn run_bloom(renderer: &crate::Renderer, encoder: &mut wgpu::CommandEncoder) {
+    // A bloom the composite multiplies by 0, and no flare: the chain would be drawn for nothing — 0.35
+    // ms a frame at 1080p on a laptop's integrated GPU, measured 2026-11-24. What the composite reads
+    // is cleared instead, so a level left from a frame that bloomed is not multiplied (`0 × ∞`).
+    if renderer.post.bloom_pipelines.is_none() {
+        return; // The forward-only path has no bloom; its composite never samples the texel it binds.
+    }
+    let written = f32::from_bits(renderer.post.bloom_written.load(std::sync::atomic::Ordering::Relaxed));
+    if !bloom_needed(written, &renderer.lens_flare) {
+        renderer.post.clear_bloom(encoder);
+        return;
+    }
     renderer.post.record_bloom(&renderer.queue, encoder, renderer.bloom_scatter, renderer.lens_flare);
 }
 
@@ -1229,6 +1276,25 @@ crate::view_targets::screen_targets! {
         hdr_bind_group: wgpu::BindGroup,
         bloom: BloomChain,
         composite_bloom_bind_group: wgpu::BindGroup,
+    }
+}
+
+#[cfg(test)]
+mod bloom_skip_tests {
+    use super::{bloom_needed, LensFlare};
+
+    /// The chain runs while it adds anything: a bloom above 0, or a flare's ghosts, halo or streaks,
+    /// which are drawn from its first level. Not for a bloom of 0 with the default (dark) flare — the
+    /// case of every game that turns its bloom off.
+    #[test]
+    fn the_bloom_chain_runs_only_while_it_adds_something() {
+        let dark = LensFlare::default();
+        assert!(!bloom_needed(0.0, &dark));
+        assert!(!bloom_needed(-1.0, &dark));
+        assert!(bloom_needed(0.04, &dark));
+        assert!(bloom_needed(0.0, &dark.with_intensity(0.5)), "a flare needs the chain's first level");
+        assert!(bloom_needed(0.0, &dark.with_streaks(1.0)), "so do its streaks");
+        assert!(!bloom_needed(0.0, &dark.with_streaks(f32::NAN)), "a streak that is not a number is none");
     }
 }
 

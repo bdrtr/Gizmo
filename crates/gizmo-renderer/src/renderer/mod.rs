@@ -1746,6 +1746,7 @@ impl Renderer {
 
     /// Uploads the post-process parameters for this frame.
     pub fn update_post_process(&self, queue: &wgpu::Queue, params: PostProcessUniforms) {
+        self.post.bloom_written.store(params.bloom_intensity.to_bits(), std::sync::atomic::Ordering::Relaxed);
         queue.write_buffer(
             &self.post.post_params_buffer,
             0,

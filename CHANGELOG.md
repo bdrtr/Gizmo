@@ -549,6 +549,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A bloom of 0 costs nothing.** The chain was drawn whatever its strength and then multiplied by
+  it: 0.33 ms a frame at 1080p on an integrated GPU for a game that had turned bloom off. Skipped now
+  when the strength written for the frame is 0 and there is no lens flare (which is drawn from the
+  chain's first level); what the composite reads is cleared instead (0.04 ms). Ten thousand cubes,
+  effects off, 2.0 → 1.73 ms. `the_bloom_chain_runs_only_while_it_adds_something`,
+  `a_bloom_of_zero_is_drawn_as_none_and_leaves_nothing_of_the_last_frame`.
 - **A renderer starts in half the time.** Every shader was composed by a composer of its own,
   which parsed and preprocessed the engine's six importable modules again — eighteen or so shaders,
   at every start. Sampled with eu-stack: nine of eleven samples of a windowed start in the composer,

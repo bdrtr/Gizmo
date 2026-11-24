@@ -3517,6 +3517,77 @@ fn rain_ripples_the_water_it_falls_on_and_still_water_is_a_mirror() {
     });
 }
 
+#[cfg(not(gizmo_forward_only))] // The forward-only path has no bloom.
+/// **A bloom of 0 is drawn as none, and leaves nothing of the last frame's.** The chain is skipped when
+/// the composite would multiply it by 0 and there is no lens flare (`post_process::run_bloom`, 0.35 ms a
+/// frame at 1080p on an integrated GPU; the decision is `bloom_skip_tests`'). A panel thirty times over
+/// white on a dark wall: with bloom 2 the wall beside it glows; with bloom 0 on the same renderer
+/// straight after, the frame is a fresh renderer's with bloom 0, to the byte. (What the composite reads
+/// is also cleared when the chain is skipped, against a level left holding an infinity — `0 × ∞` — which
+/// a finite scene like this one cannot make.)
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_bloom_of_zero_is_drawn_as_none_and_leaves_nothing_of_the_last_frame() {
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    const W: usize = 128;
+    async fn scene(renderer: &mut Renderer) -> World {
+        renderer.taa = None;
+        renderer.fxaa = None;
+        renderer.smaa = None;
+        renderer.ssr = None;
+        renderer.ssgi = None;
+        renderer.ssao = None;
+        renderer.volumetric = None;
+        let mut assets = AssetManager::new();
+        let layout = renderer.scene.texture_bind_group_layout.clone();
+        let white = assets.create_white_texture(&renderer.device, &renderer.queue, &layout);
+        let mut world = World::new();
+        for (at, half, material) in [
+            (Vec3::new(0.0, 0.0, -1.0), Vec3::new(10.0, 10.0, 0.1), Material::new(white.clone()).with_baked_lit(Vec4::new(0.03, 0.03, 0.03, 1.0))),
+            (Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.3, 0.3, 0.1), Material::new(white.clone()).with_baked_lit(Vec4::new(30.0, 30.0, 30.0, 1.0))),
+        ] {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(at).with_scale(half));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, material);
+            world.add_component(e, MeshRenderer::new());
+        }
+        world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 4.0), yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+        world
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(W as u32, W as u32).await;
+        let mut world = scene(&mut renderer).await;
+        renderer.bloom_intensity = 2.0;
+        let bloomed = render_world(&mut renderer, &mut world).await;
+        renderer.bloom_intensity = 0.0;
+        let after = render_world(&mut renderer, &mut world).await;
+
+        let mut fresh_renderer = crate::test_gpu::headless_renderer(W as u32, W as u32).await;
+        let mut fresh_world = scene(&mut fresh_renderer).await;
+        fresh_renderer.bloom_intensity = 0.0;
+        let fresh = render_world(&mut fresh_renderer, &mut fresh_world).await;
+
+        let px = |f: &[u8], x: usize, y: usize| f[(y * W + x) * 4];
+        // The wall a ring around the panel, a few pixels out from its edge.
+        let ring: Vec<(usize, usize)> = (0..W * W)
+            .map(|i| (i % W, i / W))
+            .filter(|&(x, y)| (16..30).contains(&(x as i32 - 64).abs().max((y as i32 - 64).abs())))
+            .collect();
+        let glow = ring.iter().map(|&(x, y)| px(&bloomed, x, y).saturating_sub(px(&fresh, x, y))).max().unwrap_or(0);
+        assert!(glow >= 20, "the setup: bloom 2 lights the wall around the panel ({glow} over the plain frame)");
+        let worst = after.iter().zip(&fresh).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        assert_eq!(worst, 0, "bloom 0 after a frame that bloomed differs from a fresh renderer's by {worst}");
+    });
+}
+
 #[cfg(not(gizmo_forward_only))] // The forward-only composite has no local exposure.
 /// **Local exposure keeps a burning patch from burning and leaves the dark around it alone.** A dark
 /// wall, and in front of it a small panel thirty times over the frame's white, checkered, as a car's
