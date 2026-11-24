@@ -49,9 +49,11 @@ fn with_ccd_sets_flag_and_prevents_tunnel_end_to_end() {
 }
 
 #[test]
-fn without_ccd_the_same_bullet_tunnels() {
-    // Negatif kontrol: aynı mermi .with_ccd() OLMADAN tüneller — bayrağın gerçekten
-    // fark yarattığının kanıtı (yoksa Rung yukarıdaki her zaman geçer, anlamsız olurdu).
+fn without_ccd_the_flag_stays_off_and_the_bullet_still_stops() {
+    // The same bullet without `.with_ccd()`: the flag stays off — so the test above is about the
+    // flag reaching the archetype — and the bullet stops at the wall all the same. Until 2026-11-24
+    // it went through (this was the contrast); a pair closing faster than its own size allows now
+    // gets a speculative contact whether or not either body asked for CCD (`closes_fast`).
     let mut w = World::new();
     w.insert_resource(PhysicsWorld::new().with_gravity(Vec3::ZERO));
 
@@ -67,11 +69,12 @@ fn without_ccd_the_same_bullet_tunnels() {
             .with_collider(Collider::sphere(0.05))
             .with_velocity(Vec3::new(2400.0, 0.0, 0.0)), // .with_ccd() YOK
     ));
+    assert!(!w.query::<&RigidBody>().get(bullet).unwrap().ccd_enabled);
 
     let mut peak = f32::MIN;
     for _ in 0..30 {
         cpu_physics_step_system(&w, 1.0 / 240.0);
         peak = peak.max(w.query::<&Transform>().get(bullet).unwrap().position.x);
     }
-    assert!(peak > 1.0, "CCD'siz idiomatik mermi tünellemeli (kontrast), tepe_x={peak}");
+    assert!(peak < 0.0, "CCD'siz idiomatik mermi de duvarın önünde durmalı, tepe_x={peak}");
 }

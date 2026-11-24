@@ -748,7 +748,7 @@ impl ConstraintSolver {
             // (pen0≥0, speculative değil), eşiği aşan çarpmada — sönümlü/clamp'li.
             let target_vn = if apply_restitution
                 && p.restitution > 0.0
-                && p.pen0 >= 0.0
+                && (p.pen0 >= 0.0 || p.acc_n > 0.0)
                 && p.vn0 < -self.restitution_velocity_threshold
             {
                 -p.restitution * p.vn0
@@ -911,7 +911,7 @@ impl ConstraintSolver {
             };
             let tvn = if apply_restitution
                 && p.restitution > 0.0
-                && p.pen0 >= 0.0
+                && (p.pen0 >= 0.0 || p.acc_n > 0.0)
                 && p.vn0 < -self.restitution_velocity_threshold
             {
                 -p.restitution * p.vn0
@@ -1033,7 +1033,7 @@ impl ConstraintSolver {
             };
             let tvn = if apply_restitution
                 && p.restitution > 0.0
-                && p.pen0 >= 0.0
+                && (p.pen0 >= 0.0 || p.acc_n > 0.0)
                 && p.vn0 < -self.restitution_velocity_threshold
             {
                 -p.restitution * p.vn0

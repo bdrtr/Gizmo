@@ -24,7 +24,8 @@
 //!
 //! Gerisi ilk denemede çalıştı: eklemler uçuşta ve çarpmada en çok 6 mm açılıyor, ragdoll zemini
 //! delmiyor, yerde birkaç saniyede duruyor. 40°'de 14,9 m/s ile atılan ragdoll hedefin 1,3 m
-//! önüne iniyor ve yuvarlanıp 8,6 m daha gidiyor — onu hesaba katmak oyunun kendisi.
+//! önüne iniyor ve yuvarlanıp 12,2 m daha gidiyor (2026-11-24 ölçümü; 8,6 m yazıyordu) — onu hesaba
+//! katmak oyunun kendisi.
 
 use gizmo::core::input::Input;
 use gizmo::physics::ragdoll::{RagdollBuilder, RagdollInstance};

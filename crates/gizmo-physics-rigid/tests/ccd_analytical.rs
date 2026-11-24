@@ -128,15 +128,18 @@ fn ccd_r1_slow_body_stops_at_thick_wall_without_ccd() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Rung 2 — SORUN VAR: hızlı cisim, ince duvar, CCD YOK → TÜNELLER (kanıt).
+// Rung 2 — hızlı cisim, ince duvar, CCD YOK → artık TÜNELLEMEZ.
+// Bu basamak 2026-11-24'e kadar tünellemeyi KANITLIYORDU (tepe_x > 1). Bir alt adımda iki
+// cismin en küçük yarı boylarının toplamının yarısından fazla yaklaşan çift artık CCD'li gibi
+// spekülatif temas alıyor (`pipeline::closes_fast`), yani aynı geometri duvarın önünde duruyor.
 // ═══════════════════════════════════════════════════════════════════════════
 #[test]
-fn ccd_r2_fast_body_tunnels_thin_wall_without_ccd() {
+fn ccd_r2_a_fast_body_without_ccd_does_not_tunnel_a_thin_wall() {
     let mut w = scene();
     wall(&mut w, 0.0, 0.02); // ince: yakalama bandı 2·(0.02+0.05)=0.14 m
-    let b = bullet(&mut w, -5.0, 2400.0, 0.05, false); // 10 m/alt-adım ≫ 0.14 → hiçbir örnek banda düşmez
+    let b = bullet(&mut w, -5.0, 2400.0, 0.05, false); // 10 m/alt-adım ≫ 0.14
     let (peak, _, _) = run(&w, b, 30);
-    assert!(peak > 1.0, "CCD'siz mach cisim ince duvarı TÜNELLEMELİ (sorun burada), tepe_x={peak}");
+    assert!(peak < 0.0, "CCD'siz mach cisim de duvar merkezinden önce durmalı, tepe_x={peak}");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -165,12 +168,12 @@ fn ccd_r4_speed_sweep_ccd_holds_where_discrete_fails() {
         let d = speed / 240.0;
         assert!(d > band, "test öncülü: {speed} m/s ayrığı aşmalı (d={d} > bant={band})");
 
-        // CCD KAPALI → tüneller
+        // CCD KAPALI → artık o da tutar (hızlı yaklaşan çift kendiliğinden temas alıyor, `closes_fast`)
         let mut w = scene();
         wall(&mut w, 0.0, half);
         let off = bullet(&mut w, -5.0, speed, r, false);
         let (peak_off, _, _) = run(&w, off, 20);
-        assert!(peak_off > 0.5, "CCD'siz {speed} m/s tünellemeli, tepe={peak_off}");
+        assert!(peak_off < half, "CCD'siz {speed} m/s de tutmalı, tepe={peak_off}");
 
         // CCD AÇIK → tutar
         let mut w2 = scene();

@@ -315,7 +315,10 @@ impl PhysicsWorld {
             // `!is_static()` covers both dynamic AND kinematic movers — new_kinematic()
             // turns CCD on by default, so a fast scripted platform/blade must be swept
             // too (testing is_dynamic() here silently dropped every kinematic CCD body).
-            let aabb = if rb.ccd_enabled && !rb.is_static() && !rb.is_sleeping {
+            // A dynamic body moving a fair part of its own size in one substep is swept too (and
+            // given speculative contacts, `pair_contacts`), CCD or not: see `moves_fast`.
+            let fast = rb.is_dynamic() && !rb.is_sleeping && moves_fast(vel.linear.length() * dt, &base_aabb);
+            let aabb = if (rb.ccd_enabled && !rb.is_static() && !rb.is_sleeping) || fast {
                 let sweep_dt = if vel.linear.length() > 100.0 {
                     // High-speed: guarantee at least one full 60 Hz frame is covered.
                     dt.max(1.0 / 60.0)
@@ -545,10 +548,17 @@ impl PhysicsWorld {
             let rb_a = &self.rigid_bodies[idx_a];
             let rb_b = &self.rigid_bodies[idx_b];
 
-            if rb_a.ccd_enabled || rb_b.ccd_enabled {
-                let vel_a = &self.velocities[idx_a];
-                let vel_b = &self.velocities[idx_b];
-
+            let vel_a = &self.velocities[idx_a];
+            let vel_b = &self.velocities[idx_b];
+            // A CCD body's, and a pair closing fast for its size (`closes_fast`), CCD or not.
+            let moving = |rb: &RigidBody| rb.is_dynamic() && !rb.is_sleeping;
+            let fast = (moving(rb_a) || moving(rb_b))
+                && closes_fast(
+                    (vel_a.linear - vel_b.linear).length() * dt,
+                    thickness(collider_a, transform_a),
+                    thickness(collider_b, transform_b),
+                );
+            if rb_a.ccd_enabled || rb_b.ccd_enabled || fast {
                 if let Some(sc) = gizmo_physics_core::Gjk::speculative_contact(
                     &collider_a.shape,
                     transform_a.position,
@@ -1692,5 +1702,65 @@ impl PhysicsWorld {
             }
         }
         normal
+    }
+}
+
+/// How far through its own size a body may move in one substep before discrete collision detection
+/// can miss what is in its way, as a share of its smallest half-extent.
+const FAST_SHARE: f32 = 0.5;
+
+/// Whether a body travelling `travel` metres this substep, with world bounds `aabb`, moves far enough
+/// for its own size that the broad phase sweeps it, as it does a CCD body: a pair it could pass through
+/// between two looks must reach the narrow phase, which decides with `closes_fast`. A slower body
+/// never pays for it.
+pub(crate) fn moves_fast(travel: f32, aabb: &gizmo_physics_core::Aabb) -> bool {
+    let half = (aabb.max - aabb.min) * 0.5;
+    travel > FAST_SHARE * half.min_element()
+}
+
+/// Whether two shapes, `thickness_a` and `thickness_b` their smallest half-extents, close `travel`
+/// metres on each other this substep — far enough that discrete detection could see them only once
+/// they overlap by more than half of what lies between their centres, and push them out the wrong
+/// side: then the pair has a speculative contact as a CCD body's does, whether either asked for CCD.
+///
+/// The world's 240 Hz used to be all that kept a 0.5 m sphere from passing through another at
+/// 320 m/s; at 60 Hz the same sphere passed at 320 (2026-11-24). A share of the pair's own size is
+/// the same test at every rate. It is the pair's and not each body's: a thin limb falling at 15 m/s
+/// onto thick ground meets it however coarse the step, and a contact with no lever arm (what a
+/// speculative contact is) landing it there bounced and slid a ragdoll (`topcu`) on.
+pub(crate) fn closes_fast(travel: f32, thickness_a: f32, thickness_b: f32) -> bool {
+    travel > FAST_SHARE * (thickness_a + thickness_b)
+}
+
+/// A collider's smallest half-extent in the world, as far as passing through it goes: a triangle mesh
+/// or a heightfield is a surface, as thin as a wall can be, whatever its bounds.
+fn thickness(collider: &Collider, t: &Transform) -> f32 {
+    match collider.shape {
+        gizmo_physics_core::ColliderShape::TriMesh(_) | gizmo_physics_core::ColliderShape::Heightfield(_) => 0.0,
+        _ => {
+            let aabb = collider.compute_aabb(t.position, t.rotation);
+            ((aabb.max - aabb.min) * 0.5).min_element()
+        }
+    }
+}
+
+#[cfg(test)]
+mod closes_fast_tests {
+    use super::closes_fast;
+
+    /// `topcu`'s case: a 5 cm limb falling at 15 m/s onto ground half a metre thick is not a fast
+    /// pair even at the coarsest rate (a sixtieth of a second, 0.25 m of travel). Judged by the limb
+    /// alone, it was — and the contact with no lever arm it got bounced and slid the ragdoll on.
+    #[test]
+    fn a_thin_limb_onto_thick_ground_is_not_a_fast_pair() {
+        assert!(!closes_fast(15.0 / 60.0, 0.05, 0.5));
+    }
+
+    /// `ccd_analytical`'s bullet: 5 cm at 2400 m/s onto a 2 cm wall is a fast pair at every rate.
+    #[test]
+    fn a_bullet_onto_a_thin_wall_is_a_fast_pair_at_every_rate() {
+        for hz in [60.0f32, 240.0, 1000.0] {
+            assert!(closes_fast(2400.0 / hz, 0.05, 0.02), "{hz} Hz");
+        }
     }
 }

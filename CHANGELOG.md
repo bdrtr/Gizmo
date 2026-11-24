@@ -549,6 +549,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A fast body does not tunnel, at any substep rate, CCD or not.** Discrete detection only kept up
+  because the world ran at 240 Hz: at 60 Hz a 0.5 m sphere struck at 320 m/s passed the one it struck.
+  A pair now closing more than half the sum of its two smallest half-extents in one substep
+  (`closes_fast`) gets the speculative contact a CCD body gets, and the broad phase sweeps a body that
+  moves more than half of its own (`moves_fast`) so the pair reaches it. It is the pair's size and not
+  the body's: a 5 cm limb falling at 15 m/s onto thick ground meets it however coarse the step, and
+  judged alone it took a lever-less speculative contact that slid `topcu`'s ragdoll on. A speculative
+  contact that took an impulse now carries restitution too (Box2D's rule). `ccd_analytical`'s rungs 2
+  and 4 and `ccd_bundle`'s contrast test proved the tunnelling; they now prove the stop. `fast_bodies.rs`
+  at 60/120/240 Hz: a 2400 m/s bullet stops at a 4 cm wall; the striking ball never passes the struck one.
+  **Not closed:** a body set moving inside a substep's solve — the second ball of a row — has no contact
+  with the next until the step after, so it keeps order only while a substep's travel stays under
+  4/3 m (80 m/s at 60 Hz, what 240 Hz gave at 320); closing it is a contact distance with real
+  manifold points, a narrow-phase piece of its own. At 240 Hz `headless_stress_test` is unchanged.
 - **A convex hull comes to rest, and sleeps.** A hull against a box or another hull went to GJK/EPA,
   which gives one contact point a step: a hull resting on a face had one support at a time, wandering
   between its corners, and rocked for ever. Six debris-shaped hulls dropped on a floor: none slept in
