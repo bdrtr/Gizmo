@@ -50,6 +50,9 @@ fn worth_parallel_jobs(items: usize, at_least: usize) -> bool {
 const PARALLEL_MIN_PAIRS: usize = 64;
 /// See [`worth_parallel_jobs`].
 const PARALLEL_MIN_MANIFOLDS: usize = 32;
+/// See [`worth_parallel_jobs`]: a check of a candidate pair — whether it is dormant, where it falls
+/// in the sorted list — is two id lookups or a comparison, tens of nanoseconds.
+const PARALLEL_MIN_PAIR_CHECKS: usize = 2048;
 
 
 /// The fracture events one manifold's strongest contact produces.
@@ -512,18 +515,23 @@ impl PhysicsWorld {
                 None => true,
             }
         };
+        // Which pairs are dormant is asked on every thread for a big list — two id lookups a
+        // pair, scattered over the whole map — and the list is split on this one, in its order.
+        let is_active_pair = |&(a, b): &(BodyHandle, BodyHandle)| is_active_body(a) || is_active_body(b);
+        let active: Vec<bool> = if worth_parallel_jobs(potential_pairs.len(), PARALLEL_MIN_PAIR_CHECKS) {
+            potential_pairs.par_iter().map(is_active_pair).collect()
+        } else {
+            potential_pairs.iter().map(is_active_pair).collect()
+        };
         let mut dormant_pairs: Vec<(BodyHandle, BodyHandle)> = Vec::new();
-        let mut active_pairs: Vec<(BodyHandle, BodyHandle)> = potential_pairs
-            .into_iter()
-            .filter(|&(a, b)| {
-                if !is_active_body(a) && !is_active_body(b) {
-                    dormant_pairs.push((a, b));
-                    false
-                } else {
-                    true
-                }
-            })
-            .collect();
+        let mut active_pairs: Vec<(BodyHandle, BodyHandle)> = Vec::with_capacity(potential_pairs.len());
+        for (pair, active) in potential_pairs.into_iter().zip(active) {
+            if active {
+                active_pairs.push(pair);
+            } else {
+                dormant_pairs.push(pair);
+            }
+        }
         // **In id order, not the tree's.** The broadphase hands its pairs over in whatever order
         // its trees' shapes walk them, and that order became the collision events' order — which
         // what reacts to them (the fracture system spawning debris, a game's own handler) turns
@@ -532,7 +540,13 @@ impl PhysicsWorld {
         // moving tree changed which blocks `vinc`'s wrecking ball broke, and a rollback, which
         // restores bodies but not the tree's history, could replay a step's events in another
         // order. Sorted, they are a function of the bodies alone.
-        active_pairs.sort_unstable_by_key(|&(a, b)| (a.id(), b.id()));
+        // A pair is in the list once, so any sort leaves the same list: on several threads when it is
+        // long.
+        if worth_parallel_jobs(active_pairs.len(), PARALLEL_MIN_PAIR_CHECKS) {
+            active_pairs.par_sort_unstable_by_key(|&(a, b)| (a.id(), b.id()));
+        } else {
+            active_pairs.sort_unstable_by_key(|&(a, b)| (a.id(), b.id()));
+        }
         (active_pairs, dormant_pairs)
     }
 

@@ -10,9 +10,11 @@ const PREDICTION: f32 = 4.0;
 /// it saves: split from height 6, the 200-box tower of `headless_stress_test` ran 140 → 215 ms.
 #[cfg(not(target_arch = "wasm32"))]
 const PARALLEL_HEIGHT: i32 = 8;
-/// See [`PARALLEL_HEIGHT`].
+/// See [`PARALLEL_HEIGHT`]. Lowered from 1024 on 2026-11-25, measured on piles of tumbling boxes at
+/// 60 Hz (narrow phase, ms a frame, 1024 → 256): 300 boxes 0.29 → 0.21, 500 0.46 → 0.34, 800
+/// 0.75 → 0.52, 1000 0.81 → 0.57 — the 1000-box pile had been just under the old gate.
 #[cfg(not(target_arch = "wasm32"))]
-const PARALLEL_LEAVES: usize = 1024;
+const PARALLEL_LEAVES: usize = 256;
 
 #[derive(Clone)]
 struct Node {

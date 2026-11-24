@@ -30,6 +30,18 @@ impl<T> ParSliceIter<T> for [T] {
     }
 }
 
+/// `[T]::par_sort_unstable_by_key` → `sort_unstable_by_key`.
+pub trait ParSliceSort<T> {
+    fn par_sort_unstable_by_key<K: Ord, F: Fn(&T) -> K>(&mut self, key: F);
+}
+
+impl<T> ParSliceSort<T> for [T] {
+    #[inline]
+    fn par_sort_unstable_by_key<K: Ord, F: Fn(&T) -> K>(&mut self, key: F) {
+        self.sort_unstable_by_key(key)
+    }
+}
+
 /// `Vec<T>::into_par_iter` / `Range<usize>::into_par_iter` → `into_iter`.
 pub trait IntoParIterSeq {
     type Iter: Iterator;
