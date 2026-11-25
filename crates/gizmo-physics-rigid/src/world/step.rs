@@ -279,7 +279,7 @@ impl PhysicsWorld {
 
         // 3. Narrowphase — çarpışma tespiti ve olayları
         let t2 = Instant::now();
-        let (manifolds, ends) = self.narrowphase_and_collision_step(dt);
+        let (manifolds, ends, pending_triggers) = self.narrowphase_and_collision_step(dt);
         self.metrics.narrowphase_ms += ms(t2);
         self.metrics.contact_count += manifolds.iter().map(|m| m.contacts.len()).sum::<usize>();
 
@@ -287,6 +287,8 @@ impl PhysicsWorld {
         let t3 = Instant::now();
         let bounces = self.constraint_solve_step(manifolds, ends, dt);
         self.metrics.solver_ms += ms(t3);
+        // Triggers found by a speculative contact only, now that the substep's motion is known.
+        self.confirm_triggers(pending_triggers, dt);
 
         // 5-6. Pozisyon entegrasyonu ve uyku durumu
         let t4 = Instant::now();

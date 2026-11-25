@@ -793,6 +793,15 @@ pub(crate) struct CachedPair {
     /// Found by this substep's narrow phase, or kept as a dormant pair's. Cleared by the sweep at
     /// the narrow phase's end, which takes out the entries without it: false between substeps.
     pub(crate) seen: bool,
+    /// The pair has touched since it was found: a contact at or past zero depth, a speculative one
+    /// the solve leant on (a solid pair), or a reach the substep's motion makes (a trigger,
+    /// `PhysicsWorld::confirm_triggers`). `Started` goes out when it becomes true, and `Ended` only
+    /// for a pair it is true of.
+    ///
+    /// A speculative contact is a constraint, not an overlap: a pair found by one only may never
+    /// meet. A CCD ball landing on a floor fired `Started` and `Ended` on the kill-zone trigger 2 cm
+    /// under it, which it never entered (2026-11-25).
+    pub(crate) touched: bool,
 }
 
 /// [`PhysicsWorld`]'s contact cache: each pair's [`CachedPair`] in a slot of its own, found by the
@@ -852,7 +861,7 @@ impl ContactCache {
     pub(crate) fn remove(&mut self, pair: &(BodyHandle, BodyHandle)) -> Option<CachedPair> {
         let slot = self.slot_of.remove(pair)?;
         self.free.push(slot);
-        Some(std::mem::replace(&mut self.slots[slot as usize], CachedPair { is_trigger: false, manifold: None, seen: false }))
+        Some(std::mem::replace(&mut self.slots[slot as usize], CachedPair { is_trigger: false, manifold: None, seen: false, touched: false }))
     }
 
     /// Keeps the pairs `keep` says yes to, walking them in the map's order.
@@ -883,7 +892,7 @@ mod contact_cache_tests {
     fn entry(tag: u32) -> CachedPair {
         let mut manifold = ContactManifold::new(BodyHandle::from_id(tag), BodyHandle::from_id(tag + 1));
         manifold.lifetime = tag;
-        CachedPair { is_trigger: tag.is_multiple_of(5), manifold: Some(manifold), seen: true }
+        CachedPair { is_trigger: tag.is_multiple_of(5), manifold: Some(manifold), seen: true, touched: true }
     }
 
     /// Through a churn of new pairs, replaced entries, removals and sweeps, the slotted cache holds

@@ -337,7 +337,7 @@ impl PhysicsWorld {
     /// fixed subdivision, so the sweep cannot step over a thin target — the classic failure
     /// of a naive fixed-sample sweep.
     #[allow(clippy::too_many_arguments)]
-    fn sweep_against(
+    pub(crate) fn sweep_against(
         &self,
         shape: &ColliderShape,
         pos: Vec3,

@@ -367,7 +367,8 @@ impl PhysicsWorld {
         let departed: Vec<(BodyHandle, BodyHandle)> =
             self.contact_cache.keys().filter(|(a, b)| *a == entity || *b == entity).copied().collect();
         for pair in departed {
-            if let Some(entry) = self.contact_cache.remove(&pair) {
+            // Reported `Ended` only if it had touched (`CachedPair::touched`).
+            if let Some(entry) = self.contact_cache.remove(&pair).filter(|e| e.touched) {
                 self.departed_contacts.push((pair, entry.is_trigger));
             }
         }

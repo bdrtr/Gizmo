@@ -445,11 +445,14 @@ fn dist_sq_to_line(point: Vec3, origin: Vec3, dir: Vec3) -> f32 {
 /// Whether a collision pair has just begun, is ongoing, or has ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CollisionEventType {
-    /// First frame the pair is in contact.
+    /// First frame the pair is in contact: a solid pair's contact reaches zero depth, or the solve
+    /// holds the two at one that was speculative; a trigger is overlapped, or entered within the
+    /// substep. A pair found only by a speculative contact — near, closing, but not yet met — sends
+    /// nothing until it meets, and nothing at all if it never does.
     Started,
     /// Pair was already in contact last frame.
     Persisting,
-    /// Pair is no longer in contact.
+    /// Pair is no longer in contact — sent only for a pair that sent `Started`.
     Ended,
 }
 

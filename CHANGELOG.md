@@ -1170,6 +1170,18 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A speculative contact no longer reports a meeting that does not happen.** A pair found only by
+  one — near and closing this substep — has not touched yet, and something else may stop it first,
+  but it fired `Started` (and later `Ended`) at once. A CCD ball landing on a floor fired both on the
+  kill-zone trigger 2 cm under it, which it never entered, and a collision `Started` with a body
+  under the floor it never reached. Now each cache entry knows whether its pair has touched
+  (`CachedPair::touched`): a solid pair when a contact reaches zero depth or the solve leans on a
+  speculative one, a trigger when overlapped or when the substep's motion — known after the solve —
+  sweeps into it (`PhysicsWorld::confirm_triggers`, the narrow phase's overlap test marched along
+  it). `Started` goes out when it becomes true, `Ended` only for a pair that touched. A ball
+  through a 10 cm trigger at up to 160 m/s at 60 Hz still enters and leaves it once
+  (`tests/speculative_events.rs`).
+
 - **A shape resting on a floor rests on what lies along it, not on one point.** GJK/EPA gives one
   contact point a step, and a triangle mesh or a heightfield is tested a triangle at a time. A box
   inside one mesh triangle had a single support, two across an edge; a cylinder, a cone, a lying

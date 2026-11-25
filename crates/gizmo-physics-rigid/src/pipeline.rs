@@ -94,6 +94,15 @@ fn collect_fracture_events(
     }
 }
 
+/// A trigger pair the narrow phase found by a speculative contact only (`record_trigger`), to be
+/// asked again after the solve (`PhysicsWorld::confirm_triggers`): its cache slot, its bodies' rows
+/// and which of them is the trigger.
+pub(crate) struct PendingTrigger {
+    slot: u32,
+    bodies: [u32; 2],
+    trigger_is_a: bool,
+}
+
 /// What the narrow phase made of a candidate pair (`PhysicsWorld::examine_pair`).
 enum Examined {
     /// Both bodies at rest: not tested, its cache entry kept.
@@ -428,7 +437,7 @@ impl PhysicsWorld {
     ///
     /// Returns the set of [`ContactManifold`]s to be fed into the solver.
     #[tracing::instrument(skip_all, name = "narrowphase_collision")]
-    pub(crate) fn narrowphase_and_collision_step(&mut self, dt: f32) -> (Vec<ContactManifold>, Vec<ManifoldEnds>) {
+    pub(crate) fn narrowphase_and_collision_step(&mut self, dt: f32) -> (Vec<ContactManifold>, Vec<ManifoldEnds>, Vec<PendingTrigger>) {
         let candidates = self.spatial_hash.query_pairs();
         let disabled_joint_pairs = self.collision_disabled_joint_pairs();
 
@@ -517,10 +526,11 @@ impl PhysicsWorld {
         let mut manifolds = Vec::with_capacity(narrowphase_results.len());
         // Each manifold's bodies' rows and cache slot, beside it (`ManifoldEnds`).
         let mut ends: Vec<ManifoldEnds> = Vec::with_capacity(narrowphase_results.len());
+        let mut pending_triggers: Vec<PendingTrigger> = Vec::new();
         let _mani = crate::profile::Scope::new(&crate::profile::PHASES.manifold);
         for found in narrowphase_results {
             if found.is_trigger_a || found.is_trigger_b {
-                self.record_trigger(&found);
+                pending_triggers.extend(self.record_trigger(&found));
             } else {
                 let bodies = found.bodies;
                 let (manifold, cache) = self.record_solid_contact(found);
@@ -535,10 +545,11 @@ impl PhysicsWorld {
         // What the last step's cache holds and this step's does not.
         // What was in the cache and was not found again has ended; what was found is unmarked for
         // the next substep.
+        // A pair that never touched ends silently (`CachedPair::touched`).
         let mut ended: Vec<((BodyHandle, BodyHandle), bool)> = Vec::new();
         self.contact_cache.retain(|pair, entry| {
             let seen = std::mem::take(&mut entry.seen);
-            if !seen {
+            if !seen && entry.touched {
                 ended.push((*pair, entry.is_trigger));
             }
             seen
@@ -559,7 +570,7 @@ impl PhysicsWorld {
             "narrowphase complete"
         );
 
-        (manifolds, ends)
+        (manifolds, ends, pending_triggers)
     }
 
     /// One candidate pair, on whichever thread takes it: dormant — both bodies at rest, so it can
@@ -817,27 +828,76 @@ impl PhysicsWorld {
     }
 
     /// A trigger overlap: cached without a manifold, and its event.
-    fn record_trigger(&mut self, found: &PairContacts) {
+    /// A trigger pair the narrow phase found: its entry kept, and its event sent when it overlaps
+    /// (or overlapped and is still near). Found by a speculative contact only — a body that may reach
+    /// it this substep — it is handed back to be asked again after the solve, when the substep's
+    /// motion is known (`confirm_triggers`).
+    fn record_trigger(&mut self, found: &PairContacts) -> Option<PendingTrigger> {
         let PairContacts { entity_a, entity_b, is_trigger_a, .. } = *found;
         let pair = (entity_a, entity_b);
-        // ── Trigger ───────────────────────────────────────────────
-        let existed = self.contact_cache.insert(pair, CachedPair { is_trigger: true, manifold: None, seen: true }).1.is_some();
-
-        let event_type = if existed {
-            CollisionEventType::Persisting
-        } else {
-            CollisionEventType::Started
+        let overlaps = found.contacts.iter().any(|c| c.penetration >= 0.0);
+        let (slot, was_touched) = match self.contact_cache.slot(&pair) {
+            Some(slot) => {
+                let entry = self.contact_cache.at_mut(slot);
+                let was = entry.is_trigger && entry.touched;
+                *entry = CachedPair { is_trigger: true, manifold: None, seen: true, touched: was };
+                (slot, was)
+            }
+            None => (self.contact_cache.insert(pair, CachedPair { is_trigger: true, manifold: None, seen: true, touched: false }).0, false),
         };
+        if !overlaps && !was_touched {
+            return Some(PendingTrigger { slot, bodies: found.bodies, trigger_is_a: is_trigger_a });
+        }
+        self.contact_cache.at_mut(slot).touched = true;
+        let event_type = if was_touched { CollisionEventType::Persisting } else { CollisionEventType::Started };
         self.trigger_events.push(TriggerEvent {
             trigger_entity: if is_trigger_a { entity_a } else { entity_b },
             other_entity: if is_trigger_a { entity_b } else { entity_a },
             event_type,
         });
+        None
     }
 
-    /// A solid contact: its manifold with the pair's combined material and warm start, the cache's
-    /// entry for the next step, and its event.
-    /// The manifold of a solid pair's contacts, and its pair's slot in the contact cache.
+    /// The trigger pairs the narrow phase found by a speculative contact only, asked again now that
+    /// the solve has given every body the velocity it moves with this substep: a pair the motion
+    /// carries into contact has touched, and its `Started` goes out. One that does not — a ball
+    /// stopped by the floor above a kill zone — stays found but untouched, and is never reported.
+    ///
+    /// The motion is swept with the narrow phase's own overlap test (`sweep_against`), stepping by
+    /// half the thinner shape so a thin trigger is not stepped over. Not by
+    /// `Gjk::conservative_advancement`: its certified gap is a lower bound, never late but often
+    /// early — for a ball 3.6 cm over a 20 m trigger it reported contact at once, the GJK normal
+    /// 0.15° off tipping the far corners into the bound.
+    pub(crate) fn confirm_triggers(&mut self, pending: Vec<PendingTrigger>, dt: f32) {
+        for p in pending {
+            let [a, b] = p.bodies.map(|i| i as usize);
+            let moves = |i: usize| {
+                let rb = &self.rigid_bodies[i];
+                if rb.is_static() || rb.is_sleeping { Vec3::ZERO } else { self.velocities[i].linear }
+            };
+            let (ta, tb) = (&self.transforms[a], &self.transforms[b]);
+            // B held still, A moving by the difference: the same meeting, under translation.
+            let travel = (moves(a) - moves(b)) * dt;
+            let distance = travel.length();
+            let reaches = distance > 1e-9
+                && self
+                    .sweep_against(&self.colliders[a].shape, ta.position, ta.rotation, travel / distance, distance, &self.colliders[b].shape, tb.position, tb.rotation)
+                    .is_some();
+            if !reaches {
+                continue;
+            }
+            self.contact_cache.at_mut(p.slot).touched = true;
+            let (ea, eb) = (self.entities[a], self.entities[b]);
+            self.trigger_events.push(TriggerEvent {
+                trigger_entity: if p.trigger_is_a { ea } else { eb },
+                other_entity: if p.trigger_is_a { eb } else { ea },
+                event_type: CollisionEventType::Started,
+            });
+        }
+    }
+
+    /// A solid contact: its manifold with the pair's combined material and warm start, and the
+    /// pair's slot in the contact cache (its entry kept for the next step), and its event.
     fn record_solid_contact(&mut self, found: PairContacts) -> (ContactManifold, u32) {
         let PairContacts { entity_a, entity_b, contacts, material_a: mat_a, material_b: mat_b, warm, .. } = found;
         let pair = (entity_a, entity_b);
@@ -865,8 +925,17 @@ impl PhysicsWorld {
         // Only when an event can be sent: a new pair's (`Started`), or any pair's when a contact going
         // on is reported (`persisting_contact_events`). A pair with no warm start is new to the
         // solid contacts; one with a warm start is going on.
-        let event_points: Option<ContactPoints> =
-            (warm.is_none() || self.persisting_contact_events).then(|| contacts.iter().copied().take(4).collect());
+        let real = contacts.iter().any(|c| c.penetration >= 0.0);
+        let was_touched = self.contact_cache.get(&pair).is_some_and(|e| !e.is_trigger && e.touched);
+        // A pair touches when a contact reaches zero depth; one found by speculative contacts only
+        // is asked again after the solve (`write_back_island`, `CachedPair::touched`).
+        let touched = was_touched || real;
+        let event_type = match (was_touched, touched, self.persisting_contact_events) {
+            (false, true, _) => Some(CollisionEventType::Started),
+            (true, _, true) => Some(CollisionEventType::Persisting),
+            _ => None,
+        };
+        let event_points: Option<ContactPoints> = event_type.map(|_| contacts.iter().copied().take(4).collect());
 
         // Warm-start: the impulses were already carried across on the worker that found
         // these contacts (see `NpResult`'s last field). What is left is the part that
@@ -897,22 +966,22 @@ impl PhysicsWorld {
         // impulses over them again: two passes over memory scattered across the whole cache.
         //
         // Whether there was an entry is what decides the event below (`Persisting` or `Started`).
-        let (slot, existed) = match self.contact_cache.slot(&pair) {
+        let slot = match self.contact_cache.slot(&pair) {
             Some(slot) => {
                 let entry = self.contact_cache.at_mut(slot);
+                // A trigger made solid starts touching afresh.
+                if entry.is_trigger {
+                    entry.touched = false;
+                }
                 entry.is_trigger = false;
                 entry.seen = true;
-                (slot, true)
+                entry.touched |= touched;
+                slot
             }
-            None => (self.contact_cache.insert(pair, CachedPair { is_trigger: false, manifold: None, seen: true }).0, false),
+            None => self.contact_cache.insert(pair, CachedPair { is_trigger: false, manifold: None, seen: true, touched }).0,
         };
 
         // A contact going on is reported only when asked for (`persisting_contact_events`).
-        let event_type = match (existed, self.persisting_contact_events) {
-            (false, _) => Some(CollisionEventType::Started),
-            (true, true) => Some(CollisionEventType::Persisting),
-            (true, false) => None,
-        };
         if let (Some(event_type), Some(contact_points)) = (event_type, event_points) {
             self.collision_events.push(CollisionEvent { entity_a, entity_b, event_type, contact_points });
         }
@@ -1501,7 +1570,16 @@ impl PhysicsWorld {
                 }
             }
 
-            // Straight to the pair's slot, which `record_solid_contact` handed over.
+            // Straight to the pair's slot, which `record_solid_contact` handed over. A pair found by
+            // speculative contacts only has touched if the solve leant on one: it brought the two to
+            // meet by the substep's end (`CachedPair::touched`).
+            let entry = self.contact_cache.at_mut(end.cache);
+            let met = !entry.touched && manifold.contacts.iter().any(|c| c.normal_impulse > 0.0);
+            if met {
+                entry.touched = true;
+                let contact_points = manifold.contacts.iter().copied().take(4).collect();
+                self.collision_events.push(CollisionEvent { entity_a: manifold.entity_a, entity_b: manifold.entity_b, event_type: CollisionEventType::Started, contact_points });
+            }
             replaced.extend(self.contact_cache.at_mut(end.cache).manifold.replace(manifold));
         }
         retired.push(replaced);
