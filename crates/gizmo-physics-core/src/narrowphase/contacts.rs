@@ -66,44 +66,66 @@ pub(super) fn mk_contact(point: Vec3, normal: Vec3, penetration: f32) -> Contact
 //  Sutherland–Hodgman clipping — up to 4 contact points
 // ============================================================================
 
-/// Reduce `contacts` to the 4 points that best represent the contact patch:
-/// deepest point first, then 3 more selected for maximum area coverage.
-fn select_4_contacts(mut contacts: Vec<ContactPoint>) -> Vec<ContactPoint> {
+/// Reduce `contacts` to the 4 points that best represent the contact patch: the deepest, the one
+/// farthest from it, the one making the largest triangle with those two, and the one making the
+/// largest quadrilateral with all three (the largest diagonal cross product, as Bullet's
+/// `calcArea4Points` measures it).
+///
+/// **By area, not by distance.** The three after the deepest were each the point farthest from the
+/// nearest one already chosen. On a regular patch every candidate ties, and the pick fell where the
+/// ties broke: a hexagonal prism on a floor kept the corners at 120°, 180°, 240° and 300°, half its
+/// base, with its centre of mass on the edge of the four — it tipped onto the open side when it
+/// landed and fell asleep 2° over (2026-11-25). The largest quadrilateral of a symmetric patch holds
+/// its centre.
+pub(super) fn select_4_contacts(mut contacts: Vec<ContactPoint>) -> Vec<ContactPoint> {
     if contacts.len() <= 4 {
         return contacts;
     }
 
     let n = contacts.len();
+    let at = |i: usize| contacts[i].point;
 
     // Step 1 — deepest.
     let i0 = (0..n)
         .max_by(|&a, &b| contacts[a].penetration.total_cmp(&contacts[b].penetration))
         .unwrap();
+    // The best of the points not yet chosen by `score`, the first of equals.
+    let best = |chosen: &[usize], score: &dyn Fn(Vec3) -> f32| -> Option<usize> {
+        let mut found: Option<(usize, f32)> = None;
+        for i in (0..n).filter(|i| !chosen.contains(i)) {
+            let s = score(at(i));
+            if found.is_none_or(|(_, b)| s > b) {
+                found = Some((i, s));
+            }
+        }
+        found.map(|(i, _)| i)
+    };
 
     // Inline, because this branch keeps exactly 4 out of more than 4 — the index set cannot
     // outgrow the array. `vec![i0]` allocated for a single `usize` and then reallocated 1 -> 4
     // on the first push below, two allocations per reduced contact set per substep.
-    //
-    // The `chosen.len() == n` guard the loop used to carry is gone with it: `n > 4` on this
-    // branch and the capacity is 4, so it could never fire.
     let mut chosen: arrayvec::ArrayVec<usize, 4> = arrayvec::ArrayVec::new();
     chosen.push(i0);
-
-    // Steps 2-4 — greedily maximise minimum distance to already-chosen set.
-    for _ in 0..3 {
-        let next = (0..n).filter(|i| !chosen.contains(i)).max_by(|&a, &b| {
-            let da = chosen
-                .iter()
-                .map(|&c| (contacts[c].point - contacts[a].point).length_squared())
-                .fold(f32::INFINITY, f32::min);
-            let db = chosen
-                .iter()
-                .map(|&c| (contacts[c].point - contacts[b].point).length_squared())
-                .fold(f32::INFINITY, f32::min);
-            da.total_cmp(&db)
-        });
-        if let Some(idx) = next {
-            chosen.push(idx);
+    let p0 = at(i0);
+    // Step 2 — farthest from the deepest.
+    if let Some(i1) = best(&chosen, &|p| (p - p0).length_squared()) {
+        chosen.push(i1);
+        let p1 = at(i1);
+        // Step 3 — the largest triangle with those two.
+        if let Some(i2) = best(&chosen, &|p| (p1 - p0).cross(p - p0).length_squared()) {
+            chosen.push(i2);
+            let p2 = at(i2);
+            // Step 4 — the largest quadrilateral with all three: of the three ways to pair four
+            // points into diagonals, the convex hull's are the ones with the largest cross product.
+            let area4 = |p: Vec3| {
+                let a = (p0 - p1).cross(p2 - p);
+                let b = (p0 - p2).cross(p1 - p);
+                let c = (p0 - p).cross(p1 - p2);
+                a.length_squared().max(b.length_squared()).max(c.length_squared())
+            };
+            if let Some(i3) = best(&chosen, &area4) {
+                chosen.push(i3);
+            }
         }
     }
 
@@ -364,6 +386,67 @@ pub(super) fn polyhedral_face(shape: &ColliderShape, pos: Vec3, rot: Quat, dir: 
     Some(PolyFace { normal, offset: normal.dot(corners[0]), corners })
 }
 
+/// The part of a convex shape, in world space, that faces `dir` and that a contact along `dir` can
+/// lie all along: a box's or a hull's face (`polyhedral_face`), the flat end of a cylinder or a cone
+/// (eight points of its rim), or a line down the side of a cylinder, a cone or a lying capsule (its
+/// two ends). `None` for a shape that touches at a point whatever its pose — a sphere, a capsule
+/// end-on, a cone on its apex — and for the rest when a point is what faces `dir`.
+///
+/// A round shape at rest on a floor touches it along one of these, and GJK/EPA reports one point of
+/// it a step. On that one point a cylinder or a lying capsule rocked and sank: at 60 Hz, 7 to 14 cm
+/// into a plane or a box, and through a triangle mesh altogether (2026-11-25).
+pub(super) fn support_feature(shape: &ColliderShape, pos: Vec3, rot: Quat, dir: Vec3) -> Option<Vec<Vec3>> {
+    /// How far off a round shape's axis `dir` may lean (as `|dir · axis|`, the cosine) for its flat
+    /// end to face it rather than its side: past 60°, the side does.
+    const END_ON: f32 = 0.5;
+    let d = (rot.inverse() * dir).normalize_or_zero();
+    if d == Vec3::ZERO {
+        return None;
+    }
+    // Eight points round a circle of `radius` at height `y`, and the point of the rim nearest `d`.
+    let rim = |radius: f32, y: f32| -> Vec<Vec3> {
+        (0..8)
+            .map(|k| {
+                let a = k as f32 * std::f32::consts::TAU / 8.0;
+                Vec3::new(radius * a.cos(), y, radius * a.sin())
+            })
+            .collect()
+    };
+    let towards = |radius: f32| -> Option<Vec3> {
+        let side = Vec3::new(d.x, 0.0, d.z).normalize_or_zero();
+        (side != Vec3::ZERO).then_some(side * radius)
+    };
+    let local: Vec<Vec3> = match shape {
+        ColliderShape::Box(_) | ColliderShape::ConvexHull(_) => return polyhedral_face(shape, pos, rot, dir).map(|f| f.corners),
+        ColliderShape::Cylinder(c) => {
+            if d.y.abs() >= END_ON {
+                rim(c.radius, c.half_height * d.y.signum())
+            } else {
+                let side = towards(c.radius)?;
+                vec![side + Vec3::Y * c.half_height, side - Vec3::Y * c.half_height]
+            }
+        }
+        ColliderShape::Cone(c) => {
+            if d.y <= -END_ON {
+                rim(c.radius, -c.half_height)
+            } else {
+                let side = towards(c.radius)?;
+                vec![Vec3::Y * c.half_height, side - Vec3::Y * c.half_height]
+            }
+        }
+        ColliderShape::Capsule(c) => {
+            if d.y.abs() >= END_ON {
+                return None;
+            }
+            // The two end spheres' points facing `d`: the line the capsule lies along.
+            let out = d * c.radius;
+            vec![Vec3::Y * c.half_height + out, -Vec3::Y * c.half_height + out]
+        }
+        _ => return None,
+    };
+    Some(local.into_iter().map(|p| pos + rot * p).collect())
+}
+
 /// The contact patch of two polyhedra touching along `normal` (A towards B, from GJK/EPA): the face
 /// of either most aligned with it is the reference, the other's most opposed face is clipped to the
 /// reference face's sides, and what of it lies behind the reference face is in contact — up to four
@@ -378,17 +461,62 @@ pub(super) fn clip_polyhedra(
     (shape_b, pos_b, rot_b): (&ColliderShape, Vec3, Quat),
     normal: Vec3,
 ) -> Vec<ContactPoint> {
-    const SLAB_TOLERANCE: f32 = 1e-3;
-    const DEPTH_TOLERANCE: f32 = 1e-4;
-    let (Some(face_a), Some(face_b)) = (polyhedral_face(shape_a, pos_a, rot_a, normal), polyhedral_face(shape_b, pos_b, rot_b, -normal)) else {
+    let (reference, incident) = match (polyhedral_face(shape_a, pos_a, rot_a, normal), polyhedral_face(shape_b, pos_b, rot_b, -normal)) {
+        (Some(face_a), Some(face_b)) => {
+            if face_a.normal.dot(normal) >= face_b.normal.dot(-normal) {
+                (face_a, face_b.corners)
+            } else {
+                (face_b, face_a.corners)
+            }
+        }
+        // A round shape against a box or a hull: the polyhedron's face is the reference, and what of
+        // the round shape faces it (`support_feature`) is clipped to it.
+        (Some(face_a), None) => match support_feature(shape_b, pos_b, rot_b, -normal) {
+            Some(feature) => (face_a, feature),
+            None => return Vec::new(),
+        },
+        (None, Some(face_b)) => match support_feature(shape_a, pos_a, rot_a, normal) {
+            Some(feature) => (face_b, feature),
+            None => return Vec::new(),
+        },
+        (None, None) => return Vec::new(),
+    };
+    clip_to_reference(incident, &reference.corners, reference.normal, reference.offset, normal)
+}
+
+/// The patch of a shape on one triangle of a surface — a mesh's or a terrain's — whose face it
+/// touches along `normal` (the shape towards the surface, the triangle's face normal reversed): what
+/// of the shape faces `normal` (`support_feature`), clipped to the triangle's sides, and what
+/// of it lies below the triangle's plane, at its depth below it — up to four points. `triangle` is
+/// wound with its normal towards the shape. Empty for a shape that touches at a point, and the
+/// caller keeps the one point it had.
+///
+/// A triangle was one convex body to GJK/EPA, which gives one point: a box resting inside a
+/// triangle had one support, two across an edge, and rocked on them. At 60 Hz a 10 cm box dropped
+/// on a mesh floor took back less than gravity's `g·dt` each step, sank 16 cm a second, and fell
+/// through once its centre crossed the plane (2026-11-25); at 240 Hz the four-times-tighter step had
+/// hidden it.
+pub(super) fn clip_on_triangle(shape: &ColliderShape, pos: Vec3, rot: Quat, triangle: [Vec3; 3], normal: Vec3) -> Vec<ContactPoint> {
+    let Some(incident) = support_feature(shape, pos, rot, normal) else {
         return Vec::new();
     };
-    let (reference, incident) = if face_a.normal.dot(normal) >= face_b.normal.dot(-normal) { (face_a, face_b) } else { (face_b, face_a) };
-    let ref_n = reference.normal;
-    let mut polygon = incident.corners;
-    let k = reference.corners.len();
+    let up = (triangle[1] - triangle[0]).cross(triangle[2] - triangle[0]).normalize_or_zero();
+    if up == Vec3::ZERO {
+        return Vec::new();
+    }
+    clip_to_reference(incident, &triangle, up, up.dot(triangle[0]), normal)
+}
+
+/// `polygon` (the incident face's corners) clipped to the sides of the `reference` face — its
+/// corners counter-clockwise about `ref_n`, its outward normal, with `ref_n · x = ref_offset` on
+/// it — and the points of what is left that lie behind the reference face, as contacts along
+/// `normal` at their depth behind it: up to four.
+fn clip_to_reference(mut polygon: Vec<Vec3>, reference: &[Vec3], ref_n: Vec3, ref_offset: f32, normal: Vec3) -> Vec<ContactPoint> {
+    const SLAB_TOLERANCE: f32 = 1e-3;
+    const DEPTH_TOLERANCE: f32 = 1e-4;
+    let k = reference.len();
     for i in 0..k {
-        let (a, b) = (reference.corners[i], reference.corners[(i + 1) % k]);
+        let (a, b) = (reference[i], reference[(i + 1) % k]);
         let side = (b - a).cross(ref_n).normalize_or_zero();
         if side == Vec3::ZERO {
             continue;
@@ -416,9 +544,32 @@ pub(super) fn clip_polyhedra(
     let contacts: Vec<ContactPoint> = polygon
         .into_iter()
         .filter_map(|p| {
-            let behind = reference.offset - p.dot(ref_n);
+            let behind = ref_offset - p.dot(ref_n);
             (behind >= -DEPTH_TOLERANCE).then(|| mk_contact(p, normal, (behind / along).max(0.0)))
         })
         .collect();
+    // A side's crossing comes out twice when the incident feature is a line (two points): one
+    // contact of it.
+    let mut contacts = contacts;
+    contacts.dedup_by(|a, b| a.point.distance_squared(b.point) < 1e-12);
+    if contacts.len() > 1 && contacts[0].point.distance_squared(contacts[contacts.len() - 1].point) < 1e-12 {
+        contacts.pop();
+    }
     select_4_contacts(contacts)
+}
+
+/// The contacts of a shape with a plane (`normal · x = offset`, the solid side behind it): every
+/// point of what faces the plane (`support_feature`) that is behind it, at the plane, and the
+/// shape's deepest point, which a rim's eight points can miss — up to four. Empty when nothing is
+/// behind the plane; `None` for a shape that touches at a point, and the caller keeps its one point.
+pub(super) fn feature_on_plane(shape: &ColliderShape, pos: Vec3, rot: Quat, normal: Vec3, offset: f32, deepest: ContactPoint) -> Option<Vec<ContactPoint>> {
+    let feature = support_feature(shape, pos, rot, -normal)?;
+    let mut contacts = vec![deepest];
+    for p in feature {
+        let depth = offset - p.dot(normal);
+        if depth > 0.0 && !contacts.iter().any(|c| c.point.distance_squared(p + normal * depth) < 1e-12) {
+            contacts.push(mk_contact(p + normal * depth, -normal, depth));
+        }
+    }
+    Some(select_4_contacts(contacts))
 }

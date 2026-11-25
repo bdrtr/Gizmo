@@ -1170,6 +1170,26 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A shape resting on a floor rests on what lies along it, not on one point.** GJK/EPA gives one
+  contact point a step, and a triangle mesh or a heightfield is tested a triangle at a time. A box
+  inside one mesh triangle had a single support, two across an edge; a cylinder, a cone, a lying
+  capsule and a convex hull had one on a plane too. At 60 Hz they rocked on it and sank — a 10 cm
+  box, a cylinder and a lying capsule fell through a mesh floor, a hull sank 7 cm into a plane, a
+  cylinder 10–14 cm into a box. The 240 Hz default's step had hidden it. Now what faces the floor
+  (`support_feature`: a face, a flat end's rim, a line down the side) is the contact patch:
+  - on a plane, every point of it below the plane, with the deepest;
+  - on a mesh or heightfield triangle, clipped to the triangle (`clip_on_triangle`);
+  - against a box or a hull, clipped to its face (`clip_polyhedra`, which took only two
+    polyhedra).
+
+  The four points a patch keeps are chosen by area (Bullet's `calcArea4Points`), not by distance:
+  a hexagonal hull kept half its base and tipped 2° onto the open side. Every shape tested — box,
+  hull, standing and lying cylinder, lying capsule, cone — rests within 3 mm of its height and
+  sleeps on a plane, a mesh, a heightfield and a box, at 60 and 240 Hz
+  (`tests/resting_on_surfaces.rs`). Still open: a lying cylinder or capsule on a mesh at 240 Hz
+  rests in place but does not sleep in 5 s, and a ball on a mesh or a heightfield keeps rolling —
+  both as before.
+
 - **A body a joint holds and contacts touch is solved against both at once.** A substep solved
   every contact island to the end and then every joint, each blind to the other. A box or a ball
   resting on a hinged seesaw shook at 5–6 cm/s, whatever the masses, and neither ever slept. Now:

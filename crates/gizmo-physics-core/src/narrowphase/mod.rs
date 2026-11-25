@@ -243,6 +243,23 @@ impl NarrowPhase {
             .collect()
     }
 
+    /// [`shape_plane`](Self::shape_plane)'s contact and, for a shape that can lie along the plane,
+    /// the rest of what it rests on (`contacts::feature_on_plane`).
+    fn shape_plane_contacts(shape: &ColliderShape, pos: Vec3, rot: Quat, plane_n: Vec3, plane_d: f32) -> Vec<ContactPoint> {
+        let Some(deepest) = Self::shape_plane(shape, pos, rot, plane_n, plane_d) else {
+            return Vec::new();
+        };
+        feature_on_plane(shape, pos, rot, plane_n, plane_d, deepest).unwrap_or_else(|| vec![deepest])
+    }
+
+    /// Whether a pair's contact is a patch clipped from the faces (`clip_polyhedra`): a box or a hull
+    /// against a hull, or against a cylinder, a cone or a capsule, which can lie along its face.
+    fn clips_faces(a: &ColliderShape, b: &ColliderShape) -> bool {
+        let polyhedron = |s: &ColliderShape| matches!(s, ColliderShape::Box(_) | ColliderShape::ConvexHull(_));
+        let lies = |s: &ColliderShape| polyhedron(s) || matches!(s, ColliderShape::Cylinder(_) | ColliderShape::Cone(_) | ColliderShape::Capsule(_));
+        (polyhedron(a) || polyhedron(b)) && lies(a) && lies(b)
+    }
+
     /// Generic shape–plane using a GJK support point.  Returns at most one
     /// contact (the deepest support point against the plane).
     pub fn shape_plane(
@@ -524,6 +541,7 @@ impl NarrowPhase {
         }
 
         let mut out: Vec<ContactPoint> = Vec::new();
+        let mut patched = false;
 
         // The triangle-as-a-hull wrapper is built ONCE and refilled per triangle. It used to be
         // constructed inside the loop, which cost three allocations per candidate triangle, per
@@ -581,12 +599,47 @@ impl NarrowPhase {
                 // Turned over, corners 1 and 2 swap, and with them the edges opposite them.
                 let ridge = |edge: usize| mesh.edge_kind(t, if front { edge } else { [0, 2, 1][edge] }) == ridge_kind;
                 if let Some(c) = Self::terrain_contact(c, shape, pos, rot, tri_w, ridge) {
-                    out.push(c);
+                    patched |= Self::push_surface_contact(&mut out, c, shape, pos, rot, tri_w);
                 }
             }
         }
 
-        Self::four_deepest(out)
+        Self::surface_contacts(out, patched)
+    }
+
+    /// Adds one triangle's contact with a surface's shape to `out`: for a box or a convex hull on the
+    /// triangle's face, the patch it rests on (`clip_on_triangle`), else the one point. Says whether
+    /// it was a patch.
+    fn push_surface_contact(out: &mut Vec<ContactPoint>, c: ContactPoint, shape: &ColliderShape, pos: Vec3, rot: Quat, triangle: [Vec3; 3]) -> bool {
+        let n = (triangle[1] - triangle[0]).cross(triangle[2] - triangle[0]).normalize_or_zero();
+        // On the face, not over an edge: the contact pushes the shape straight off the plane.
+        if n != Vec3::ZERO && n.dot(c.normal).abs() > 1.0 - 1e-4 {
+            // Wound with its normal towards the shape, which is where the contact pushes it.
+            let towards = if n.dot(c.normal) < 0.0 { triangle } else { [triangle[0], triangle[2], triangle[1]] };
+            let patch = clip_on_triangle(shape, pos, rot, towards, c.normal);
+            if !patch.is_empty() {
+                out.extend(patch);
+                return true;
+            }
+        }
+        out.push(c);
+        false
+    }
+
+    /// The contacts a surface keeps of its triangles': the four deepest, or, when a box or a hull
+    /// lay on a face (`push_surface_contact`), the four that span the most of its patch — four of
+    /// a resting box's corners at one depth are no use bunched in one triangle.
+    fn surface_contacts(out: Vec<ContactPoint>, patched: bool) -> Vec<ContactPoint> {
+        if !patched {
+            return Self::four_deepest(out);
+        }
+        let mut kept: Vec<ContactPoint> = Vec::with_capacity(out.len());
+        for c in out {
+            if !kept.iter().any(|k| k.point.distance_squared(c.point) < 1e-8 && k.normal.dot(c.normal) > 0.9999) {
+                kept.push(c);
+            }
+        }
+        select_4_contacts(kept)
     }
 
     /// The four deepest of a surface's per-triangle contacts — what the solver keeps — with a
@@ -665,6 +718,7 @@ impl NarrowPhase {
         }
 
         let mut out: Vec<ContactPoint> = Vec::new();
+        let mut patched = false;
 
         // One hull wrapper, refilled per triangle — hoisted for the reason the mesh path spells
         // out: building it inside the loop costs three allocations per candidate triangle.
@@ -686,14 +740,14 @@ impl NarrowPhase {
                         let ridge = |edge: usize| Self::heightfield_edge_is_ridge(hf, row, col, k, edge);
                         let world = tri.map(|v| hf_pos + hf_rot * v);
                         if let Some(c) = Self::terrain_contact(c, shape, pos, rot, world, ridge) {
-                            out.push(c);
+                            patched |= Self::push_surface_contact(&mut out, c, shape, pos, rot, world);
                         }
                     }
                 }
             }
         }
 
-        Self::four_deepest(out)
+        Self::surface_contacts(out, patched)
     }
 
     /// The contact a shape makes with one triangle of a **surface that goes on past it** — a
@@ -936,21 +990,15 @@ impl NarrowPhase {
 
 
             // Generic – Plane (A is arbitrary, B is plane)
-            (_, ColliderShape::Plane(p)) => {
-                Self::shape_plane(shape_a, pos_a, rot_a, p.normal, p.distance)
-                    .into_iter()
-                    .collect()
-            }
+            (_, ColliderShape::Plane(p)) => Self::shape_plane_contacts(shape_a, pos_a, rot_a, p.normal, p.distance),
 
             // Plane – Generic (A is plane, B is arbitrary; flip normal)
             (ColliderShape::Plane(p), _) => {
-                Self::shape_plane(shape_b, pos_b, rot_b, p.normal, p.distance)
-                    .map(|mut c| {
-                        c.normal = -c.normal;
-                        c
-                    })
-                    .into_iter()
-                    .collect()
+                let mut cs = Self::shape_plane_contacts(shape_b, pos_b, rot_b, p.normal, p.distance);
+                for c in &mut cs {
+                    c.normal = -c.normal;
+                }
+                cs
             }
 
             // Anything – TriMesh, and its mirror. Position matters twice over. **Below the two
@@ -1005,10 +1053,10 @@ impl NarrowPhase {
                 None => Gjk::get_contact(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b).into_iter().collect(),
             },
 
-            // A convex hull against a hull or a box: EPA's normal, then the faces clipped to a patch
-            // of up to four points (`clip_polyhedra`); EPA's one point when the faces give none.
-            (ColliderShape::ConvexHull(_), ColliderShape::ConvexHull(_) | ColliderShape::Box(_))
-            | (ColliderShape::Box(_), ColliderShape::ConvexHull(_)) => {
+            // A convex hull against a hull or a box, or a cylinder, a cone or a capsule against either:
+            // EPA's normal, then the faces clipped to a patch of up to four points (`clip_polyhedra`);
+            // EPA's one point when the faces give none.
+            (a, b) if Self::clips_faces(a, b) => {
                 match Gjk::get_contact(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b) {
                     Some(epa) => {
                         let patch = clip_polyhedra((shape_a, pos_a, rot_a), (shape_b, pos_b, rot_b), epa.normal);
@@ -1226,7 +1274,7 @@ mod trimesh_tests {
 // The contact-generation helpers moved to `contacts`; import the ones the pair methods above
 // call so their bodies stay verbatim. The 377-line test suite moved to `tests`.
 mod contacts;
-use contacts::{box_corners, clip_box_box, clip_polyhedra, mk_contact, sat_penetration};
+use contacts::{box_corners, clip_box_box, clip_on_triangle, clip_polyhedra, feature_on_plane, mk_contact, sat_penetration, select_4_contacts};
 
 #[cfg(test)]
 mod tests;
