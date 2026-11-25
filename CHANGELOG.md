@@ -560,6 +560,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`PhysicsWorld::state_hash` covers what a snapshot carries and no pose shows**, so its values
+  change: the time not yet stepped, the weather, each body's sleep counter and gathered forces, and
+  what a joint's solve leaves in it — its reference pose, a hinge's angle, a slider's travel. Two
+  worlds that differed only in one of these hashed alike and stepped apart, and two rollback peers
+  agreed on them. The joint's were in `settings_hash` instead, so a world with a hinge changed its
+  *settings* by stepping; they are out of it, and so is a fluid zone's fog, which only the picture
+  reads. `tests/settings_hash.rs`.
+
 - **A coloured island's blocks are solved four at a time with SIMD.** The blocks of a colour share no
   dynamic body, so `solver/wide.rs` packs them four to a `WideBlock` — a lane each, every row quantity
   laid out across the lanes as a `glam::Vec4` (SSE, NEON) — and runs the block step on the four at

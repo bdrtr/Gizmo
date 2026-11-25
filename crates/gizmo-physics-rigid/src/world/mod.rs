@@ -768,10 +768,8 @@ pub struct WorldSnapshot {
     //     (ball-socket / slider / D6). Bütün koni/twist/swing limitleri ona göre ölçülüyor,
     //     dolayısıyla bayat bir referans eklemin dinlenme pozunu sessizce yeniden tanımlar.
     //
-    // `is_broken` artık `state_hash`'e giriyor (uç handle çifti ve `JointScratch`'in λ
-    // yuvalarıyla birlikte), yani ondaki bir desync anında görünür.
-    // `initial_relative_rotation` GİRMİYOR: snapshot onu taşıyor ama hash görmüyor, dolayısıyla
-    // bayat bir referans pozu ancak limit hesabından hızlara sızdıktan sonra fark edilir.
+    // İkisi de `state_hash`'e giriyor (uç handle çifti, `JointScratch`'in λ yuvaları ve
+    // hinge/slider'ın ölçtüğü açı/konumla birlikte), yani ondaki bir desync anında görünür.
     joints: Vec<crate::joints::Joint>,
     // `weather` girdiği için: rigid pipeline onu okumuyor ama araç lastik modeli okuyor
     // (sürtünme dairesi limitini ölçekliyor) ve transform/velocity'den TÜRETİLEMİYOR — yani
