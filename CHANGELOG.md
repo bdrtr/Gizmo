@@ -1170,6 +1170,29 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **GJK's distance is exact between separated shapes.** It was centimetres off whenever the
+  Minkowski difference had a large flat side — a ball or a box near a big box — and it gave the gap
+  every speculative contact takes, so a CCD body could be stopped well short of what it was falling
+  onto, or not stopped in time:
+  - the tetrahedron step went to the first face whose winding pointed at the origin, assuming
+    every face wound outwards, which the order the vertices arrive in does not give: a 0.1 m ball
+    3.6 cm over a 1 m box measured 5.8 cm. It now takes the closest of the four faces, and the
+    origin is inside only for a tetrahedron with a volume and the origin behind every face (a new
+    support point in an old face's plane, which a box face gives every time, made the side test
+    rounding noise);
+  - inside a face the closest point came from barycentrics, differences of products of the edges'
+    dot products, which on a 16 m sliver cancel to a point millimetres off the plane: the
+    direction tipped, the next support came from a corner 11 m to the side, and the search
+    stopped 1.5 mm short. It is now the plane's foot along the normal;
+  - a rounded support against a large face converges only linearly, and in `f32` stops short
+    (0.33 mm on a capsule by a 16 m box). The new `Gjk::shape_distance` hands a sphere to GJK as
+    its centre and a capsule as its segment and takes the radii off after, as Box2D, Bullet and
+    Jolt do; speculative contacts and `Gjk::conservative_advancement` use it.
+  Measured against shapes moved along GJK's axis until they overlap: 16 mm or more off before, for
+  every shape, boxes included; under 0.1 mm now. Property tests over 2000 seeded boxes from 5 cm to
+  40 m each (`gjk::tests::the_distance_from_*_to_a_box_is_exact`: a sphere, a capsule, a box, and
+  a ball given whole) hold it to 0.2 mm, and catch each of the three faults alone.
+
 - **A speculative contact no longer reports a meeting that does not happen.** A pair found only by
   one — near and closing this substep — has not touched yet, and something else may stop it first,
   but it fired `Started` (and later `Ended`) at once. A CCD ball landing on a floor fired both on the

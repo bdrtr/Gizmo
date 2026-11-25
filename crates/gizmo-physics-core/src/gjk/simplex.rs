@@ -58,8 +58,52 @@ impl Gjk {
         None
     }
 
+    /// The distance between two separated convex shapes, and the direction from B to A: GJK's
+    /// [`distance`](Self::distance) between their *cores*, less the radii around them. A sphere's
+    /// core is its centre and a capsule's its segment; any other shape is its own core, with no
+    /// radius. Overlapping shapes give zero, as `distance` does.
+    ///
+    /// A rounded support is where GJK is weakest. Against a large flat face every support point it
+    /// asks for comes from the face's far rim, the step each one offers shrinks with the square of
+    /// the rim's distance, and in `f32` the search stops short: a 0.34 m capsule 0.367 m from a
+    /// 16 m box came out 0.33 mm far (2026-11-25). A point or a segment against a polytope is a
+    /// polytope, and GJK ends on one exactly, in a few steps. Box2D, Bullet and Jolt split a
+    /// shape's convex radius off the same way.
+    #[allow(clippy::too_many_arguments)]
+    pub fn shape_distance(
+        shape_a: &ColliderShape,
+        pos_a: Vec3,
+        rot_a: gizmo_math::Quat,
+        shape_b: &ColliderShape,
+        pos_b: Vec3,
+        rot_b: gizmo_math::Quat,
+    ) -> Option<(f32, Vec3)> {
+        let (core_a, core_b) = (Self::rounded_core(shape_a), Self::rounded_core(shape_b));
+        let (shape_a, radius_a) = core_a.as_ref().map_or((shape_a, 0.0), |(s, r)| (s, *r));
+        let (shape_b, radius_b) = core_b.as_ref().map_or((shape_b, 0.0), |(s, r)| (s, *r));
+        let (gap, axis) = Self::distance(|dir: Vec3| {
+            Self::support_point(shape_a, pos_a, rot_a, dir) - Self::support_point(shape_b, pos_b, rot_b, -dir)
+        })?;
+        Some(((gap - radius_a - radius_b).max(0.0), axis))
+    }
+
+    /// A rounded shape as its core and the radius around it: a sphere as its centre, a capsule as
+    /// its segment. `None` for a shape that is its own core.
+    fn rounded_core(shape: &ColliderShape) -> Option<(ColliderShape, f32)> {
+        match shape {
+            ColliderShape::Sphere(s) => Some((ColliderShape::Sphere(SphereShape { radius: 0.0 }), s.radius)),
+            ColliderShape::Capsule(c) => {
+                Some((ColliderShape::Capsule(CapsuleShape { radius: 0.0, half_height: c.half_height }), c.radius))
+            }
+            _ => None,
+        }
+    }
+
     /// Compute distance and closest points using GJK (for non-intersecting shapes)
     /// Returns (distance, normal_from_b_to_a)
+    ///
+    /// For two shapes rather than a support function, ask
+    /// [`shape_distance`](Self::shape_distance): it hands a rounded shape to this as its core.
     /// # Overlapping input
     ///
     /// Defined for **non-intersecting** shapes only. When the Minkowski difference contains
@@ -250,44 +294,67 @@ impl Gjk {
                     }
                 }
 
-                // Guarded barycentric: a collinear/zero-area triangle makes (va+vb+vc)≈0,
-                // and a bare `1.0/0.0` would return a NaN closest point that poisons the
-                // GJK distance search. Fall back to the newest vertex (a finite, valid
-                // point) — `Gjk::distance` keeps the best iterate, so this stays correct.
-                match gizmo_math::safe_recip(1.0, va + vb + vc) {
-                    Some(denom) => a + ab * (vb * denom) + ac * (vc * denom),
+                // Inside the face: the foot of the origin on the triangle's plane, taken along the
+                // plane's normal. Not from the barycentrics `vb`, `vc`: they are differences of
+                // products of the edges' dot products, and for a sliver — two support points 6 cm
+                // apart and a third 16 m away, as a box's far corners give — they cancel to a
+                // point off the plane by millimetres. Its length is still right, but its direction
+                // is tipped, and the next support, asked along it, comes from a corner 11 m to the
+                // side: GJK stalled 1.5 mm short (2026-11-25). The cross product of the edges
+                // keeps its direction at any aspect.
+                // A collinear/zero-area triangle has no normal: fall back to the newest vertex (a
+                // finite, valid point) — `Gjk::distance` keeps the best iterate, so this stays
+                // correct.
+                let n = ab.cross(ac);
+                match gizmo_math::safe_recip(n.dot(a), n.length_squared()) {
+                    Some(along) => n * along,
                     None => a,
                 }
             }
             4 => {
-                let d = simplex[0];
-                let c = simplex[1];
-                let b = simplex[2];
-                let a = simplex[3];
-
-                let abc = (b - a).cross(c - a);
-                let acd = (c - a).cross(d - a);
-                let adb = (d - a).cross(b - a);
-                let bdc = (c - b).cross(d - b);
-
-                if abc.dot(-a) > 0.0 {
-                    *simplex = vec![c, b, a];
-                    return Self::closest_point_on_simplex(simplex);
+                // The closest point of a tetrahedron the origin lies outside of is the closest of
+                // its four faces' closest points: the boundary is their union (Ericson, *Real-Time
+                // Collision Detection* §5.1.6 takes only the faces whose planes separate the
+                // origin, which is an economy, and a fragile one — see below).
+                //
+                // This took the first face whose `cross` pointed at the origin, assuming every
+                // face wound outwards, which the order the vertices arrive in does not give: for a
+                // 0.1 m ball 3.6 cm over a 1 m box it went from a triangle 5.8 cm away to one
+                // 1.2 m away, and the search, seeing no progress, stopped at 5.8. Telling a face's
+                // side against its opposite vertex fixes the winding, but not a flat tetrahedron —
+                // a new support point in an old face's plane, which a box face gives every time —
+                // where that side is rounding noise and the face holding the answer can be
+                // skipped. So every face is asked, and the origin is inside only for a tetrahedron
+                // with a volume and the origin behind all four faces (2026-11-25).
+                let points = [simplex[0], simplex[1], simplex[2], simplex[3]];
+                let mut behind_all = true;
+                let mut widest = 0.0f32;
+                let mut longest = 0.0f32;
+                let mut best: Option<(f32, Vec3, Vec<Vec3>)> = None;
+                for (i, j, k, opposite) in [(0, 1, 2, 3), (0, 1, 3, 2), (0, 2, 3, 1), (1, 2, 3, 0)] {
+                    let (a, b, c, d) = (points[i], points[j], points[k], points[opposite]);
+                    let n = (b - a).cross(c - a);
+                    behind_all &= n.dot(-a) * n.dot(d - a) > 0.0;
+                    widest = widest.max(n.length());
+                    longest = longest.max((b - a).length()).max((c - a).length()).max((c - b).length());
+                    let mut face = vec![a, b, c];
+                    let p = Self::closest_point_on_simplex(&mut face);
+                    let d2 = p.length_squared();
+                    if best.as_ref().is_none_or(|(b2, _, _)| d2 < *b2) {
+                        best = Some((d2, p, face));
+                    }
                 }
-                if acd.dot(-a) > 0.0 {
-                    *simplex = vec![d, c, a];
-                    return Self::closest_point_on_simplex(simplex);
+                // Six times the volume, against the widest face times the longest edge: the
+                // tetrahedron's height over that face, relative to its size.
+                let volume = (points[1] - points[0]).dot((points[2] - points[0]).cross(points[3] - points[0]));
+                let has_volume = volume.abs() > 1e-5 * widest * longest;
+                match best {
+                    Some((_, p, face)) if !(behind_all && has_volume) => {
+                        *simplex = face;
+                        p
+                    }
+                    _ => Vec3::ZERO,
                 }
-                if adb.dot(-a) > 0.0 {
-                    *simplex = vec![b, d, a];
-                    return Self::closest_point_on_simplex(simplex);
-                }
-                if bdc.dot(-b) > 0.0 {
-                    *simplex = vec![d, c, b];
-                    return Self::closest_point_on_simplex(simplex);
-                }
-
-                Vec3::ZERO
             }
             _ => Vec3::ZERO,
         }
@@ -378,7 +445,7 @@ impl Gjk {
                 sa - sb
             };
 
-            let (_, axis) = Self::distance(support)?;
+            let (_, axis) = Self::shape_distance(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b)?;
             let Some(n) = axis.try_normalize() else {
                 break;
             };
@@ -434,7 +501,7 @@ impl Gjk {
             Self::support_point(shape_a, pos_a, rot_a, dir)
                 - Self::support_point(shape_b, pos_b, rot_b, -dir)
         };
-        if let Some((_, axis)) = Self::distance(support) {
+        if let Some((_, axis)) = Self::shape_distance(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b) {
             if let Some(n) = axis.try_normalize() {
                 if support(-n).dot(n) <= 1e-2 {
                     return Some((t, reliable_n.unwrap_or(n)));
@@ -590,12 +657,7 @@ impl Gjk {
         }
 
         // Separation distance + separating axis at the *current* configuration.
-        let support = |dir: Vec3| {
-            Self::support_point(shape_a, pos_a, rot_a, dir)
-                - Self::support_point(shape_b, pos_b, rot_b, -dir)
-        };
-        let (gap, axis) = Self::distance(support)?;
-        let gap = gap.max(0.0);
+        let (gap, axis) = Self::shape_distance(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b)?;
 
         let rel_vel = vel_a - vel_b;
 

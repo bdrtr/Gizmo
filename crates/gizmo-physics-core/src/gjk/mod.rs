@@ -129,6 +129,150 @@ mod tests {
     use super::*;
     use gizmo_math::{Quat, Vec3};
 
+    /// Seeded boxes from 5 cm to 40 m, turned every way, and a gap of 0.5 mm to 2 m off a random
+    /// face, edge or corner: what the property tests below place a shape against.
+    struct BoxCase {
+        half: Vec3,
+        turn: Quat,
+        at: Vec3,
+    }
+
+    fn seeded(seed: &mut u32) -> f32 {
+        *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (*seed >> 8) as f32 / (1u32 << 24) as f32
+    }
+
+    impl BoxCase {
+        fn new(seed: &mut u32) -> Self {
+            let mut u = || seeded(seed);
+            let half = Vec3::new(0.025 + 20.0 * u() * u(), 0.025 + 20.0 * u() * u(), 0.025 + 20.0 * u() * u());
+            let turn = Quat::from_euler(gizmo_math::EulerRot::XYZ, 6.3 * u(), 6.3 * u(), 6.3 * u());
+            let at = Vec3::new(10.0 * u() - 5.0, 10.0 * u() - 5.0, 10.0 * u() - 5.0);
+            Self { half, turn, at }
+        }
+
+        /// A point `gap` outside the box, in the box's frame, off the point of its surface along
+        /// a random direction.
+        fn outside(&self, seed: &mut u32, gap: f32) -> Vec3 {
+            let mut u = || seeded(seed);
+            let dir = Vec3::new(u() - 0.5, u() - 0.5, u() - 0.5).normalize_or(Vec3::Y);
+            let on_box = dir * (self.half / dir.abs().max(Vec3::splat(1e-6))).min_element();
+            on_box + dir * gap
+        }
+
+        /// The distance from a point in the box's frame to the box.
+        fn distance_local(&self, p: Vec3) -> f32 {
+            (p - p.clamp(-self.half, self.half)).length()
+        }
+
+        fn gjk_against(&self, shape: &crate::components::ColliderShape, pos: Vec3, rot: Quat) -> f32 {
+            let bx = crate::components::Collider::box_collider(self.half).shape;
+            Gjk::shape_distance(shape, pos, rot, &bx, self.at, self.turn).unwrap().0
+        }
+    }
+
+    /// [`Gjk::shape_distance`] between a sphere and a box is the exact one — the distance from the
+    /// sphere's centre to the box, less the radius — to within the search's stopping tolerance.
+    ///
+    /// For a 0.1 m ball 3.6 cm over a 1 m box it was 5.8 cm: the tetrahedron step took the first
+    /// face whose winding pointed at the origin. Once that was fixed, a ball by a 17 m box came
+    /// out 1.5 mm far: the face step's barycentrics cancelled on a 16 m sliver of the Minkowski
+    /// difference and tipped the search direction.
+    #[test]
+    fn the_distance_from_a_sphere_to_a_box_is_exact() {
+        use crate::components::Collider;
+        let mut seed = 7u32;
+        for _ in 0..2000 {
+            let case = BoxCase::new(&mut seed);
+            let r = 0.02 + 0.5 * seeded(&mut seed);
+            let gap = 0.0005 + 2.0 * seeded(&mut seed) * seeded(&mut seed);
+            let centre_local = case.outside(&mut seed, gap + r);
+            let exact = case.distance_local(centre_local) - r;
+            if exact <= 1e-4 {
+                continue;
+            }
+            let d = case.gjk_against(&Collider::sphere(r).shape, case.at + case.turn * centre_local, Quat::IDENTITY);
+            assert!((d - exact).abs() <= 2e-4, "a {r} m ball against a box of half extents {:?}: GJK {d}, exact {exact}", case.half);
+        }
+    }
+
+    /// The same for a box turned with the big one — the one pair of boxes whose distance is exact by
+    /// hand, axis by axis — whose Minkowski difference has slivers of the big box's size, which
+    /// [`Gjk::distance`] must carry without a radius to split off. And for a ball given to
+    /// `distance` whole, rounded support and all, as a caller with a support function of its own
+    /// does: within a millimetre, not the 1.5 mm the face step's barycentrics cost on a 17 m box.
+    #[test]
+    fn the_distance_from_a_box_to_a_box_is_exact() {
+        use crate::components::Collider;
+        let mut seed = 13u32;
+        for _ in 0..2000 {
+            let case = BoxCase::new(&mut seed);
+            let small = Vec3::new(0.02 + 0.6 * seeded(&mut seed), 0.02 + 0.6 * seeded(&mut seed), 0.02 + 0.6 * seeded(&mut seed));
+            let gap = 0.0005 + 2.0 * seeded(&mut seed) * seeded(&mut seed);
+            let centre_local = case.outside(&mut seed, gap);
+            // Pushed out by its own half extents along the side it is on, so it clears the box.
+            let centre_local = centre_local + centre_local.signum() * small;
+            let per_axis = (centre_local.abs() - case.half - small).max(Vec3::ZERO);
+            let exact = per_axis.length();
+            if exact <= 1e-4 {
+                continue;
+            }
+            let d = case.gjk_against(&Collider::box_collider(small).shape, case.at + case.turn * centre_local, case.turn);
+            assert!((d - exact).abs() <= 2e-4, "a box of half extents {small:?} against one of {:?}: GJK {d}, exact {exact}", case.half);
+        }
+        let mut seed = 17u32;
+        for _ in 0..2000 {
+            let case = BoxCase::new(&mut seed);
+            let r = 0.02 + 0.5 * seeded(&mut seed);
+            let gap = 0.0005 + 2.0 * seeded(&mut seed) * seeded(&mut seed);
+            let centre_local = case.outside(&mut seed, gap + r);
+            let exact = case.distance_local(centre_local) - r;
+            if exact <= 1e-4 {
+                continue;
+            }
+            let (ball, bx) = (Collider::sphere(r).shape, Collider::box_collider(case.half).shape);
+            let centre = case.at + case.turn * centre_local;
+            let (d, _) = Gjk::distance(|v: Vec3| Gjk::support_point(&ball, centre, Quat::IDENTITY, v) - Gjk::support_point(&bx, case.at, case.turn, -v)).unwrap();
+            assert!((d - exact).abs() <= 1e-3, "a {r} m ball, whole, against a box of half extents {:?}: GJK {d}, exact {exact}", case.half);
+        }
+    }
+
+    /// The same for a capsule turned every way — a support with a flat side, which meets a box's
+    /// face as a sliver of the Minkowski difference does. The exact distance is the segment's to
+    /// the box (a convex function along it, so a ternary search finds it) less the radius.
+    #[test]
+    fn the_distance_from_a_capsule_to_a_box_is_exact() {
+        use crate::components::Collider;
+        let mut seed = 11u32;
+        for _ in 0..2000 {
+            let case = BoxCase::new(&mut seed);
+            let (r, half_height) = (0.02 + 0.4 * seeded(&mut seed), 0.05 + 3.0 * seeded(&mut seed));
+            let rot = Quat::from_euler(gizmo_math::EulerRot::XYZ, 6.3 * seeded(&mut seed), 6.3 * seeded(&mut seed), 0.0);
+            let gap = 0.0005 + 2.0 * seeded(&mut seed) * seeded(&mut seed);
+            // The capsule's nearest end placed `gap + r` off the box, the rest of it leaning away
+            // or across: the exact distance is measured, not assumed.
+            let end_local = case.outside(&mut seed, gap + r);
+            let axis_world = rot * Vec3::Y;
+            let axis_local = case.turn.inverse() * axis_world;
+            let outward = end_local - end_local.clamp(-case.half, case.half);
+            let away = if axis_local.dot(outward) >= 0.0 { 1.0 } else { -1.0 };
+            let centre_local = end_local + axis_local * (away * half_height);
+            let along = |t: f32| case.distance_local(centre_local + axis_local * t);
+            let (mut lo, mut hi) = (-half_height, half_height);
+            for _ in 0..200 {
+                let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
+                if along(m1) < along(m2) { hi = m2 } else { lo = m1 }
+            }
+            let exact = along(0.5 * (lo + hi)) - r;
+            if exact <= 1e-4 {
+                continue;
+            }
+            let shape = Collider::capsule(r, half_height).shape;
+            let d = case.gjk_against(&shape, case.at + case.turn * centre_local, rot);
+            assert!((d - exact).abs() <= 2e-4, "a capsule r {r} half height {half_height} against a box of half extents {:?}: GJK {d}, exact {exact}", case.half);
+        }
+    }
+
     #[test]
     fn test_sphere_vs_sphere_collision() {
         let shape = ColliderShape::Sphere(SphereShape { radius: 1.0 });

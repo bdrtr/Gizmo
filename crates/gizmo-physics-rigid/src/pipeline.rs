@@ -864,10 +864,8 @@ impl PhysicsWorld {
     /// stopped by the floor above a kill zone — stays found but untouched, and is never reported.
     ///
     /// The motion is swept with the narrow phase's own overlap test (`sweep_against`), stepping by
-    /// half the thinner shape so a thin trigger is not stepped over. Not by
-    /// `Gjk::conservative_advancement`: its certified gap is a lower bound, never late but often
-    /// early — for a ball 3.6 cm over a 20 m trigger it reported contact at once, the GJK normal
-    /// 0.15° off tipping the far corners into the bound.
+    /// half the thinner shape so a thin trigger is not stepped over: the very predicate the narrow
+    /// phase uses, so a trigger is entered here exactly when it would be overlapped there.
     pub(crate) fn confirm_triggers(&mut self, pending: Vec<PendingTrigger>, dt: f32) {
         for p in pending {
             let [a, b] = p.bodies.map(|i| i as usize);
