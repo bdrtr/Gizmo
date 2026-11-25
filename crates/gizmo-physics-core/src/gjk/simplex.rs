@@ -442,8 +442,13 @@ impl Gjk {
         let mut t = 0.0f32;
         // Last axis measured at a gap wide enough for the GJK axis to be trustworthy.
         // At the touching iterate the axis degenerates (`distance` falls back to `Vec3::X`),
-        // so the reported impact normal comes from the previous, reliable measurement.
+        // so the reported impact normal comes from the previous, reliable measurement — but a
+        // rounded shape's is measured between cores, a radius apart when they touch, and is the
+        // better for being taken there: from 3 m up, a ball 5 mm off an edge it is dropped on
+        // comes straight down; where it touches, its normal leans 1.3°.
         let mut reliable_n: Option<Vec3> = None;
+        let radius = |s: &ColliderShape| Self::rounded_core(s).map_or(0.0, |(_, r)| r);
+        let rounded = radius(shape_a) + radius(shape_b) > 1e-3;
 
         for _ in 0..MAX_ITERS {
             let support = |dir: Vec3| {
@@ -460,7 +465,7 @@ impl Gjk {
             let sep = support(-n).dot(n);
 
             if sep <= TOUCH {
-                return Some((t, reliable_n.unwrap_or(n)));
+                return Some((t, if rounded { n } else { reliable_n.unwrap_or(n) }));
             }
             reliable_n = Some(n);
 
@@ -491,7 +496,9 @@ impl Gjk {
                         - Self::support_point(shape_b, end_b, rot_b, -dir)
                 };
                 if end_support(-n).dot(n) <= TOUCH {
-                    return Some((max_t, reliable_n.unwrap_or(n)));
+                    let there = Self::shape_distance(shape_a, end_a, rot_a, shape_b, end_b, rot_b);
+                    let n = there.filter(|_| rounded).and_then(|(_, axis)| axis.try_normalize()).unwrap_or(n);
+                    return Some((max_t, n));
                 }
                 return None;
             }
@@ -524,8 +531,9 @@ impl Gjk {
 
     /// Speculative contact for continuous collision detection (CCD).
     ///
-    /// When two **separated** shapes are on a collision course this frame, this
-    /// emits a contact whose *negative penetration encodes the separation gap*.
+    /// When two **separated** shapes meet along their paths this frame — not merely close: one
+    /// passing by the other has no contact — this emits a contact, on the normal they meet on,
+    /// whose *negative penetration encodes the separation gap* along it.
     /// The constraint solver reads that gap (`penetration < 0` ⇒ velocity bias
     /// `gap/dt`) and lets the body advance **exactly up to the surface this step,
     /// never past it** — instead of tunnelling through (no constraint) or freezing
@@ -709,20 +717,35 @@ impl Gjk {
 
         let rel_vel = vel_a - vel_b;
 
-        // Contact normal, pointing A→B. `distance` returns the B→A separating axis,
-        // so negate it. When the gap is tiny that axis is unreliable, so the surface's
-        // own normal is measured instead: A is moved along its approach just past the
-        // surface and the penetrating contact's normal taken. It used to be the approach
-        // direction ITSELF — so a body a hair from a wall, moving along it under gravity,
-        // got a contact pointing against gravity that stopped all its motion (measured in
-        // `pinbol`: a ball hung on the rail of a tilted table, normal (0, 0.978, −0.208);
-        // and a lone CCD ball rolled 9 % short, its own floor bounces taken the same way).
-        let normal = if gap > AXIS_RELIABLE_GAP {
-            -axis
+        // Contact normal, pointing A→B, and the gap along it.
+        let (gap, normal) = if gap > AXIS_RELIABLE_GAP {
+            // Apart along the axis by more than the motion closes along it: they do not meet, and
+            // this much costs one measure. `axis` is B→A.
+            let closing = -rel_vel.dot(axis);
+            if closing <= 1e-4 || gap > closing * dt {
+                return None;
+            }
+            // **Whether they meet, and on which normal, is asked of the path, not of where they
+            // are now.** The axis between them now says that they close, not that they touch: a
+            // ball flying past a box closes on its near corner until it is beside it. Taken as the
+            // contact, it stopped the ball at the corner and bounced it off what it never reached
+            // — at 60 Hz a 0.1 m ball at 20 m/s off a 0.6 m crate it was to pass 10 cm clear of,
+            // and at 240 Hz any faster than 48 (2026-11-25). Swept, a pair that does not meet has no
+            // contact; one that does has the normal it meets on, and the gap its motion closes
+            // along that by then.
+            let (toi, from_b) = Self::conservative_advancement(shape_a, pos_a, rot_a, vel_a, shape_b, pos_b, rot_b, vel_b, dt)?;
+            (-rel_vel.dot(from_b) * toi, -from_b)
         } else {
+            // Within a hair the axis is unreliable, so the surface's own normal is measured
+            // instead: A is moved along its approach just past the surface and the penetrating
+            // contact's normal taken. It used to be the approach direction ITSELF — so a body a
+            // hair from a wall, moving along it under gravity, got a contact pointing against
+            // gravity that stopped all its motion (measured in `pinbol`: a ball hung on the rail of
+            // a tilted table, normal (0, 0.978, −0.208); and a lone CCD ball rolled 9 % short, its
+            // own floor bounces taken the same way).
             let approach = rel_vel.try_normalize()?;
             let probe = pos_a + approach * (gap + 2.0 * AXIS_RELIABLE_GAP);
-            Self::get_contact(shape_a, probe, rot_a, shape_b, pos_b, rot_b)?.normal
+            (gap, Self::get_contact(shape_a, probe, rot_a, shape_b, pos_b, rot_b)?.normal)
         };
 
         Self::speculative_emit(gap, normal, rel_vel, dt, pos_a, inv_mass_a, pos_b, inv_mass_b)
@@ -791,14 +814,29 @@ impl Gjk {
         } })
     }
 
-    /// The speculative contact between a convex shape and a heightfield or triangle mesh: each
-    /// triangle the convex shape can reach this step, tested as the convex piece it is, and the
-    /// closest kept. `surface_is_a` says which side of the pair the surface was on, so the normal
-    /// keeps the caller's A→B orientation.
+    /// The speculative contact between a convex shape and a heightfield or triangle mesh: of the
+    /// triangles its path meets within the step, the first. `surface_is_a` says which side of the
+    /// pair the surface was on, so the normal keeps the caller's A→B orientation.
     ///
     /// The reach is the convex shape's bounds in the surface's own frame — exact along each of its
     /// axes, from two support queries per axis — swept by how far the two move relative to each
     /// other this step, plus the touching path's skin.
+    ///
+    /// **A surface answers for what comes down over it, along its own normal** — the touching
+    /// path's rule (`NarrowPhase::terrain_contact`), asked where the two *meet*: a triangle's face is
+    /// met where the shape's deepest point gets to its plane over it. Tested whole, a triangle
+    /// offered its nearest feature — a field's border edge to a body over the next field, sideways:
+    /// a CCD ball rolling across the seam of two fields was thrown 0.6 m up there. Asked where the
+    /// body is *now*, a ball over the flat was answered by the flat and not by the hill its path ran
+    /// into: of 600 level shots at a 3 m hill, 22 % ended inside a mesh of it at 240 Hz and 60 % at
+    /// 60, 9 % and 45 % a field of it (2026-11-25).
+    ///
+    /// Between two faces that fold away from each other a shape comes down on neither, so their edge
+    /// is swept for (`conservative_advancement`) and gives the normal it is met on — where that lies
+    /// between the two faces' own. On a flat edge that is the face's normal and nothing beside it, on
+    /// one folding in there is none, and a border has no second face: it is where another mesh may
+    /// go on. However slight the fold: between two faces 2° apart there are 5 mm a 0.15 m ball's
+    /// deepest point comes down on neither, and a mesh knows an edge for a ridge from 5°.
     fn speculative_against_surface(
         convex: (&ColliderShape, Vec3, gizmo_math::Quat, Vec3, f32),
         surface: (&ColliderShape, Vec3, gizmo_math::Quat, Vec3, f32),
@@ -817,35 +855,51 @@ impl Gjk {
             lo[i] = (Self::support_point(c_shape, c_pos, c_rot, -w) - s_pos).dot(w);
             hi[i] = (Self::support_point(c_shape, c_pos, c_rot, w) - s_pos).dot(w);
         }
-        let swept = s_rot.inverse().mul_vec3((c_vel - s_vel) * dt);
+        // The convex shape's motion as the surface sees it.
+        let v = c_vel - s_vel;
+        let swept = s_rot.inverse().mul_vec3(v * dt);
         let skin = Vec3::splat(0.01);
         let (lo, hi) = (lo.min(lo + swept) - skin, hi.max(hi + swept) + skin);
         if !lo.is_finite() || !hi.is_finite() {
             return None;
         }
 
-        // One triangle wrapper, refilled per triangle, as the touching path does.
-        let mut face = ColliderShape::ConvexHull(crate::components::ConvexHullShape {
-            vertices: std::sync::Arc::new(Vec::with_capacity(3)),
-            faces: std::sync::Arc::new(Vec::new()),
-        });
-        let mut closest: Option<Speculative> = None;
-        let mut test = |tri: [Vec3; 3], face: &mut ColliderShape| {
-            let ColliderShape::ConvexHull(hull) = face else {
-                unreachable!("`face` is constructed as a ConvexHull above")
-            };
-            let verts = std::sync::Arc::make_mut(&mut hull.vertices);
-            verts.clear();
-            verts.extend_from_slice(&tri);
-            let c = if surface_is_a {
-                Self::speculative(face, s_pos, s_rot, s_vel, s_inv, c_shape, c_pos, c_rot, c_vel, c_inv, dt)
-            } else {
-                Self::speculative(c_shape, c_pos, c_rot, c_vel, c_inv, face, s_pos, s_rot, s_vel, s_inv, dt)
-            };
-            if let Some(c) = c {
-                if closest.as_ref().is_none_or(|f| c.contact.penetration > f.contact.penetration) {
-                    closest = Some(c);
-                }
+        // The first face the path meets: when, and on which normal (from the surface). And the edges
+        // it may meet between faces, each under its two ends in a fixed order (by their bits: a
+        // mesh's triangles may share a corner by value): of each triangle in reach that has it, the
+        // way out of the triangle across it, and how far the shape is from the triangle's plane
+        // over how fast it closes on it.
+        type Corner = [u32; 3];
+        let mut first: Option<(f32, Vec3)> = None;
+        let mut edges: Vec<((Corner, Corner), [Vec3; 2], Vec3, f32, f32)> = Vec::new();
+        let mut face_met = |w: [Vec3; 3], up: Vec3| {
+            let closing = -v.dot(up);
+            let deepest = Self::support_point(c_shape, c_pos, c_rot, -up);
+            let gap = (deepest - w[0]).dot(up);
+            // Short of the plane all the way: short of the triangle, its edges with it.
+            if gap > 0.0 && gap > closing * dt {
+                return;
+            }
+            let key = |p: Vec3| -> Corner { p.to_array().map(f32::to_bits) };
+            for e in 0..3 {
+                let (p, q, across) = (w[(e + 1) % 3], w[(e + 2) % 3], w[e]);
+                let Some(along) = (q - p).try_normalize() else { continue };
+                let out = (p - across) - along * (p - across).dot(along);
+                let (kp, kq) = (key(p), key(q));
+                let (k, ends) = if kp <= kq { ((kp, kq), [p, q]) } else { ((kq, kp), [q, p]) };
+                edges.push((k, ends, out.normalize_or_zero(), gap, closing));
+            }
+            if closing <= 1e-4 {
+                return;
+            }
+            let when = gap.max(0.0) / closing;
+            if first.is_some_and(|(t, _)| t <= when) {
+                return;
+            }
+            let there = deepest + v * when;
+            let on_plane = there - up * (there - w[0]).dot(up);
+            if crate::narrowphase::NarrowPhase::barycentric(on_plane, w).is_some_and(|b| b.iter().all(|&x| x > -1e-3)) {
+                first = Some((when, up));
             }
         };
 
@@ -856,50 +910,13 @@ impl Gjk {
                     return None;
                 }
                 let (col0, col1, row0, row1) = hf.cell_range(lo, hi);
-                // **Terrain answers for what is over it, along its own normal** — the touching
-                // path's rule (`NarrowPhase::terrain_contact`). Tested whole, a triangle offered its
-                // nearest feature: a field's border edge to a body over the next field, sideways —
-                // a CCD ball rolling across the seam of two fields was thrown 0.6 m up there. So
-                // each triangle measures the gap from the shape's deepest point to its plane,
-                // where that point is over it.
-                let (pos_a, inv_a, pos_b, inv_b) =
-                    if surface_is_a { (s_pos, s_inv, c_pos, c_inv) } else { (c_pos, c_inv, s_pos, s_inv) };
-                let rel_vel = if surface_is_a { s_vel - c_vel } else { c_vel - s_vel };
-                let mut owned = false;
-                let mut on_face: Option<Speculative> = None;
                 for row in row0..row1 {
                     for col in col0..col1 {
                         for tri in hf.cell_triangles(row, col) {
                             let w = tri.map(|v| s_pos + s_rot * v);
-                            let Some(up) = (w[1] - w[0]).cross(w[2] - w[0]).try_normalize() else { continue };
-                            let deepest = Self::support_point(c_shape, c_pos, c_rot, -up);
-                            let gap = (deepest - w[0]).dot(up);
-                            let over = crate::narrowphase::NarrowPhase::barycentric(deepest - up * gap, w)
-                                .is_some_and(|b| b.iter().all(|&x| x > -1e-3));
-                            if !over {
-                                continue;
+                            if let Some(up) = (w[1] - w[0]).cross(w[2] - w[0]).try_normalize() {
+                                face_met(w, up);
                             }
-                            owned = true;
-                            let normal = if surface_is_a { up } else { -up };
-                            if let Some(c) = Self::speculative_emit(gap.max(0.0), normal, rel_vel, dt, pos_a, inv_a, pos_b, inv_b) {
-                                if on_face.as_ref().is_none_or(|f| c.contact.penetration > f.contact.penetration) {
-                                    on_face = Some(c);
-                                }
-                            }
-                        }
-                    }
-                }
-                // Over no triangle along its face: on a ridge, which the face rule leaves to the
-                // nearest feature — but only for a body over this field at all.
-                let lowest = s_rot.inverse() * (Self::support_point(c_shape, c_pos, c_rot, -(s_rot * Vec3::Y)) - s_pos);
-                let (half_x, half_z) = (cells_x as f32 * 0.5 * hf.scale.x, cells_z as f32 * 0.5 * hf.scale.z);
-                if owned || lowest.x.abs() > half_x || lowest.z.abs() > half_z {
-                    return on_face;
-                }
-                for row in row0..row1 {
-                    for col in col0..col1 {
-                        for tri in hf.cell_triangles(row, col) {
-                            test(tri, &mut face);
                         }
                     }
                 }
@@ -907,15 +924,6 @@ impl Gjk {
             ColliderShape::TriMesh(mesh) => {
                 let mut tris = Vec::new();
                 mesh.bvh.query_aabb(gizmo_math::Aabb::new(lo, hi), &mut tris);
-                // The heightfield's rule (above), on the side of each triangle the body is on — a
-                // mesh says nothing about which side is solid. A mesh has no footprint to ask
-                // "over it at all?" of, so the nearest feature is offered only by a triangle with
-                // a ridge on that side: never a border edge, which is where two meshes meet.
-                let (pos_a, inv_a, pos_b, inv_b) =
-                    if surface_is_a { (s_pos, s_inv, c_pos, c_inv) } else { (c_pos, c_inv, s_pos, s_inv) };
-                let rel_vel = if surface_is_a { s_vel - c_vel } else { c_vel - s_vel };
-                let (mut owned, mut on_face) = (false, None::<Speculative>);
-                let mut on_ridge: Vec<[Vec3; 3]> = Vec::new();
                 for t in tris {
                     let base = t as usize * 3;
                     let corner = |k: usize| mesh.indices.get(base + k).and_then(|i| mesh.vertices.get(*i as usize)).copied();
@@ -923,41 +931,57 @@ impl Gjk {
                     let (Some(a), Some(b), Some(c)) = (corner(0), corner(1), corner(2)) else { continue };
                     let w = [a, b, c].map(|v| s_pos + s_rot * v);
                     let Some(n) = (w[1] - w[0]).cross(w[2] - w[0]).try_normalize() else { continue };
+                    // On the side of the triangle the body is on: a mesh does not say which is solid.
                     let front = n.dot(c_pos - w[0]) >= 0.0;
-                    let up = if front { n } else { -n };
-                    let ridge_kind = if front {
-                        crate::components::TriMeshShape::EDGE_RIDGE_FRONT
-                    } else {
-                        crate::components::TriMeshShape::EDGE_RIDGE_BACK
-                    };
-                    if (0..3).any(|e| mesh.edge_kind(t as usize, e) == ridge_kind) {
-                        on_ridge.push([a, b, c]);
-                    }
-                    let deepest = Self::support_point(c_shape, c_pos, c_rot, -up);
-                    let gap = (deepest - w[0]).dot(up);
-                    let over = crate::narrowphase::NarrowPhase::barycentric(deepest - up * gap, w)
-                        .is_some_and(|b| b.iter().all(|&x| x > -1e-3));
-                    if !over {
-                        continue;
-                    }
-                    owned = true;
-                    let normal = if surface_is_a { up } else { -up };
-                    if let Some(c) = Self::speculative_emit(gap.max(0.0), normal, rel_vel, dt, pos_a, inv_a, pos_b, inv_b) {
-                        if on_face.as_ref().is_none_or(|f| c.contact.penetration > f.contact.penetration) {
-                            on_face = Some(c);
-                        }
-                    }
-                }
-                if owned {
-                    return on_face;
-                }
-                for tri in on_ridge {
-                    test(tri, &mut face);
+                    face_met(w, if front { n } else { -n });
                 }
             }
             _ => unreachable!("only heightfields and triangle meshes are passed here"),
         }
-        closest
+
+        // One edge wrapper, refilled per edge.
+        let mut edge = ColliderShape::ConvexHull(crate::components::ConvexHullShape {
+            vertices: std::sync::Arc::new(Vec::with_capacity(2)),
+            faces: std::sync::Arc::new(Vec::new()),
+        });
+        edges.sort_unstable_by_key(|e| e.0);
+        for shared in edges.chunk_by(|a, b| a.0 == b.0) {
+            // The border, or an edge the shape stays short of one of the two planes of.
+            if shared.len() < 2 {
+                continue;
+            }
+            // Only as far as the first thing met: an edge past a face is behind it, and one of whose
+            // planes is come to no sooner than the face is met is no nearer.
+            let within = first.map_or(dt, |(t, _)| t);
+            if shared.iter().any(|&(_, _, _, gap, closing)| gap > 0.0 && gap >= closing * within * 0.9999) {
+                continue;
+            }
+            let ColliderShape::ConvexHull(hull) = &mut edge else {
+                unreachable!("`edge` is constructed as a ConvexHull above")
+            };
+            let verts = std::sync::Arc::make_mut(&mut hull.vertices);
+            verts.clear();
+            verts.extend_from_slice(&shared[0].1);
+            // The ends are in the world already.
+            let Some((when, n)) =
+                Self::conservative_advancement(c_shape, c_pos, c_rot, c_vel, &edge, Vec3::ZERO, gizmo_math::Quat::IDENTITY, s_vel, within)
+            else {
+                continue;
+            };
+            // Already on it: the touching path's, which had its say. And met across one of its
+            // faces, not between them: a body sunk a hair into a flat floor runs into the edge in
+            // the middle of it sideways, and one is no more in its way than the floor is.
+            let between = shared.iter().all(|&(_, _, out, _, _)| n.dot(out) >= -1e-3);
+            if when > 0.0 && (when < within || first.is_none()) && between {
+                first = Some((when, n));
+            }
+        }
+
+        let (when, n) = first?;
+        let gap = -v.dot(n) * when;
+        let (pos_a, inv_a, pos_b, inv_b, normal, rel_vel) =
+            if surface_is_a { (s_pos, s_inv, c_pos, c_inv, n, -v) } else { (c_pos, c_inv, s_pos, s_inv, -n, v) };
+        Self::speculative_emit(gap.max(0.0), normal, rel_vel, dt, pos_a, inv_a, pos_b, inv_b)
     }
 
     fn handle_simplex(simplex: &mut Vec<SupportPoint>, direction: &mut Vec3) -> bool {

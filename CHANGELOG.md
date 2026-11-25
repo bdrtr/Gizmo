@@ -1181,6 +1181,22 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A fast body that passes by something is not touched by it, and one that does not is not missed.**
+  A speculative contact was made from where a pair was: closing along the axis between them fast
+  enough to meet within the substep. A ball flying past a box closes on its near corner until it
+  is beside it, so it was stopped there and bounced off what it never reached — at 60 Hz a 0.1 m
+  ball at 20 m/s off a 0.6 m crate it was to pass 10 cm clear of; at 240 Hz any faster than 48 m/s.
+  A mesh or height field answered for the triangle a body was over, not the one its path ran into:
+  of 600 level shots at a 3 m hill, 22 % ended inside a mesh of it at 240 Hz and 60 % at 60, 9 % and
+  45 % a field of it. And between two faces that fold away from each other by less than 5° it
+  answered with neither: of 2000 balls dropped on a rolling mesh at 60 m/s, 36 fell through at 60 Hz
+  and 2 at 240. All now ask the path (`Gjk::conservative_advancement`): the contact is where the two
+  meet, on the normal they meet on — a rounded shape's taken where it touches, an edge's where it
+  lies between its two faces — or there is none. With the change above no ball ends inside the
+  hill or the mesh at either rate, and of 48000 shots at turned walls, boxes and meshes, none goes
+  through; a box or capsule struck into a fast spin still can end in the hill, up to 5 of 600 at
+  60 Hz and 1 at 240 (`tests/passing_by.rs`, `tests/angled_shots.rs`, `tests/struck.rs`).
+
 - **A fast ball landing on a ramp leaves it rolling too.** A pair closing too fast for discrete
   detection landed on a speculative contact at the moving body's centre: no lever arm, so the
   impact's friction took the slide out with no spin — a ball dropped 30 m onto a 30° ramp at 60 Hz

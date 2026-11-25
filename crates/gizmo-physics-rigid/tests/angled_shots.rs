@@ -69,3 +69,92 @@ fn no_seeded_shot_goes_through_a_turned_wall() {
         }
     }
 }
+
+/// A fast body straight onto the ridge of a roof, a mesh and a height field: it meets neither
+/// slope along its face, its deepest point towards each coming down past the ridge, so the ridge
+/// itself is swept for. The roof slopes 1 in 2, its ridge along z at the top.
+#[test]
+fn no_shot_goes_through_a_ridge() {
+    let roof = |x: f32| -0.5 * x.abs();
+    let mesh = {
+        let v = [(-8.0, -8.0), (0.0, -8.0), (8.0, -8.0), (-8.0, 8.0), (0.0, 8.0), (8.0, 8.0)].map(|(x, z)| Vec3::new(x, roof(x), z)).to_vec();
+        Collider::trimesh(v, vec![0, 3, 1, 1, 3, 4, 1, 4, 2, 2, 4, 5])
+    };
+    let field = Collider::heightfield((0..17).flat_map(|_| (0..17).map(|x| roof(x as f32 - 8.0))).collect(), 17, 17, Vec3::ONE);
+    for (what, ground) in [("mesh", mesh), ("field", field)] {
+        for hz in [60, 240] {
+            for speed in [60.0, 300.0, 1000.0] {
+                for off in [0.0, 0.01, 0.03] {
+                    for (shape, r) in [(Collider::sphere(0.1), 0.1), (Collider::box_collider(Vec3::splat(0.15)), 0.15)] {
+                        let mut w = PhysicsWorld::new().with_substep_rate(hz).unwrap().with_gravity(Vec3::ZERO);
+                        w.add_body(BodyHandle::from_id(1), RigidBody::new_static(), Transform::new(Vec3::ZERO), Velocity::default(), ground.clone());
+                        let mut rb = RigidBody::new(1.0, true);
+                        rb.update_inertia_from_collider(&shape);
+                        w.add_body(BodyHandle::from_id(2), rb, Transform::new(Vec3::new(off, 6.0, 0.3)), Velocity::new(Vec3::Y * -speed), shape);
+                        for _ in 0..20 {
+                            w.step(1.0 / 60.0).unwrap();
+                            let p = w.transforms[1].position;
+                            assert!(
+                                p.x.abs() > 7.5 || p.y > roof(p.x) - 0.02,
+                                "{what}, {hz} Hz: {r} m at {speed} m/s, {off} m off the ridge, is {:.2} m under the roof at {p:?}",
+                                roof(p.x) - p.y
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A fast ball onto a gently rolling mesh, whose every fold is under the 5° an edge is known for a
+/// ridge from: straight down on its vertices, its edges and its faces, none goes through. Between
+/// two faces 2° apart there are 5 mm a 0.15 m ball's deepest point comes down on neither, and of
+/// 2000 dropped on one at 60 m/s, 36 fell through at 60 Hz and 2 at 240.
+#[test]
+fn no_shot_goes_through_a_gently_folded_mesh() {
+    let n = 12u32;
+    let at = |k: u32| k as f32 - n as f32 / 2.0;
+    let height = |x: f32, z: f32| 0.15 * ((x * 0.5).sin() + (z * 0.4).cos());
+    let (mut v, mut idx, w) = (Vec::new(), Vec::new(), n + 1);
+    for z in 0..=n {
+        for x in 0..=n {
+            v.push(Vec3::new(at(x), height(at(x), at(z)), at(z)));
+        }
+    }
+    for z in 0..n {
+        for x in 0..n {
+            let a = z * w + x;
+            idx.extend([a, a + w, a + 1, a + 1, a + w, a + w + 1]);
+        }
+    }
+    let ground = Collider::trimesh(v, idx);
+    let mut seed = 21u32;
+    for hz in [60, 240] {
+        for k in 0..600 {
+            let (r, speed) = (0.05 + 0.2 * seeded(&mut seed), 40.0 + 200.0 * seeded(&mut seed));
+            // A vertex, the middle of an edge (along x, along z, across the cell), or anywhere.
+            let cell = Vec3::new((seeded(&mut seed) * 8.0).floor() - 4.0, 0.0, (seeded(&mut seed) * 8.0).floor() - 4.0);
+            let within = match k % 5 {
+                0 => Vec3::ZERO,
+                1 => Vec3::X * 0.5,
+                2 => Vec3::Z * 0.5,
+                3 => Vec3::new(0.5, 0.0, 0.5),
+                _ => Vec3::new(seeded(&mut seed), 0.0, seeded(&mut seed)),
+            };
+            let off = Vec3::new(seeded(&mut seed) - 0.5, 0.0, seeded(&mut seed) - 0.5) * 0.02;
+            let from = cell + within + off + Vec3::Y * 3.0;
+            let c = Collider::sphere(r);
+            let mut rb = RigidBody::new(1.0, true);
+            rb.update_inertia_from_collider(&c);
+            let mut w = PhysicsWorld::new().with_substep_rate(hz).unwrap().with_gravity(Vec3::ZERO);
+            w.add_body(BodyHandle::from_id(1), RigidBody::new_static(), Transform::new(Vec3::ZERO), Velocity::default(), ground.clone());
+            w.add_body(BodyHandle::from_id(2), rb, Transform::new(from), Velocity::new(Vec3::Y * -speed), c);
+            for _ in 0..12 {
+                w.step(1.0 / 60.0).unwrap();
+                let p = w.transforms[1].position;
+                assert!(p.y > -0.3, "{hz} Hz, shot {k}: a {r:.2} m ball at {speed:.0} m/s from {from:?} fell through, at {p:?}");
+            }
+        }
+    }
+}
