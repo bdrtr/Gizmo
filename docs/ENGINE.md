@@ -2281,6 +2281,12 @@ gizmo-godot-bench, 1000-box pile and 4000 spheres at 60 and 240 Hz, same session
   the sweeps. The owner chose cutting the step's overhead instead.
 - *Sorting the narrow phase's results by key-and-place and moving them once*: no better than
   sorting the results themselves.
+- *Writing the islands back on several threads* (each island's bodies and cache slots from its own
+  thread, through pointers into the `&mut` rows — disjoint, since a dynamic body and a pair's slot
+  belong to one island): 4 % slower on the spheres at 60 Hz, 5 % at 240. One island holds 85 % of
+  the rows and is still one job; the other 900 islands add the pool's overhead and threads writing
+  neighbouring rows. Splitting the big island's own rows into chunks is what could pay; its ceiling
+  is the 0.6 ms the write-back takes there.
 
 **Metal draws less of a double-sided interior than Vulkan — OPEN, measured, do not re-chase as a
 threshold bug** *(2026-08-16)*. `a_double_sided_material_is_drawn_from_behind` fails only on the
