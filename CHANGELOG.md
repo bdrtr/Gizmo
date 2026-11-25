@@ -1186,9 +1186,17 @@ asking the compiler, and by reading the list of public items the workspace never
   a hexagonal hull kept half its base and tipped 2° onto the open side. Every shape tested — box,
   hull, standing and lying cylinder, lying capsule, cone — rests within 3 mm of its height and
   sleeps on a plane, a mesh, a heightfield and a box, at 60 and 240 Hz
-  (`tests/resting_on_surfaces.rs`). Still open: a lying cylinder or capsule on a mesh at 240 Hz
-  rests in place but does not sleep in 5 s, and a ball on a mesh or a heightfield keeps rolling —
-  both as before.
+  (`tests/resting_on_surfaces.rs`).
+- **A ball on a mesh or a heightfield stays where it lands, and a lying cylinder there stops.** Both
+  were older than the patches above. On a triangle's face, a shape that touches at a point now
+  touches at its deepest point: EPA's point was up to 1.6 mm off to the side, the normal pushed
+  there turned the ball, and it rolled away and never slept. A patch on a triangle now takes the
+  face's normal exactly: EPA's was up to 2° off it, and a lying cylinder with one end on a
+  triangle's edge rolled off at 4.5 mm/s. `terrain_contact` and the patch read one threshold for
+  "on the face" (`ON_THE_FACE`); they had two, and contacts between them kept EPA's normal. A
+  shape EPA finds touching keeps its contact when its deepest point is a rounding error above the
+  plane (`TOUCHING`, 0.1 mm): dropped, it left a CCD ball on terrain only a speculative contact,
+  which has no friction (`tests/ccd_resting.rs` caught it).
 
 - **A body a joint holds and contacts touch is solved against both at once.** A substep solved
   every contact island to the end and then every joint, each blind to the other. A box or a ball

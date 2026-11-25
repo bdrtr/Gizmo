@@ -156,13 +156,38 @@ fn round_shapes_rest_on_their_end_or_their_side_on_every_floor() {
                 let at = format!("{name} on a {floor_name} at {hz} Hz");
                 assert!((y - rest).abs() < 0.004, "{at}: rests at y = {y}, not on the floor ({rest})");
                 assert!(tilt < 0.01, "{at}: rests tilted {tilt} rad");
-                // OPEN, and older than the patches: a lying cylinder or capsule on a mesh at 240 Hz
-                // rests where it should but is still moving after 5 s (it never slept on one before
-                // either, and sank through it at 60 Hz). Asserted everywhere else.
-                let open = hz == 240 && *floor_name == "mesh" && *turn == lying;
-                if !open {
-                    assert!(asleep, "{at}: still moving after 5 s");
+                // A lying cylinder on a mesh at 240 Hz rolled away at 4.5 mm/s: one end lay on a
+                // triangle's edge, and the patch there took EPA's normal, 0.6° off the face's.
+                assert!(asleep, "{at}: still moving after 5 s");
+            }
+        }
+    }
+}
+
+/// A ball on a mesh or a heightfield touches it straight below its centre, and stays where it lands.
+/// EPA's point against a triangle was up to 1.6 mm off to the side; the normal pushed there turned
+/// the ball, and it rolled away and never slept.
+#[test]
+fn a_ball_dropped_on_a_mesh_or_a_heightfield_stays_where_it_lands() {
+    let floors: [(&str, Collider, Vec3); 2] = [("mesh", mesh_floor(), Vec3::ZERO), ("heightfield", terrain_floor(), Vec3::new(-10.0, 0.0, -10.0))];
+    for (floor_name, floor, floor_at) in floors {
+        for hz in [60, 240] {
+            for (x, z) in [(0.3, 0.2), (0.7, 0.2), (0.4, 0.8)] {
+                let mut w = PhysicsWorld::new().with_substep_rate(hz).unwrap();
+                w.add_body(BodyHandle::from_id(1), RigidBody::new_static(), Transform::new(floor_at), Velocity::default(), floor.clone());
+                let shape = Collider::sphere(0.05);
+                let mut rb = RigidBody::new(1.0, true);
+                rb.update_inertia_from_collider(&shape);
+                w.add_body(BodyHandle::from_id(2), rb, Transform::new(Vec3::new(x, 0.5, z)), Velocity::default(), shape);
+                for _ in 0..300 {
+                    w.step(1.0 / 60.0).unwrap();
                 }
+                let i = *w.entity_index_map.get(&2).unwrap();
+                let p = w.transforms[i].position;
+                let at = format!("a ball on a {floor_name} at {hz} Hz from ({x}, {z})");
+                assert!(Vec3::new(p.x - x, 0.0, p.z - z).length() < 1e-3, "{at}: rolled to ({}, {})", p.x, p.z);
+                assert!((p.y - 0.05).abs() < 0.004, "{at}: rests at y = {}", p.y);
+                assert!(w.rigid_bodies[i].is_sleeping, "{at}: still moving after 5 s");
             }
         }
     }

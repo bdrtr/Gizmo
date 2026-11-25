@@ -607,16 +607,27 @@ impl NarrowPhase {
         Self::surface_contacts(out, patched)
     }
 
+    /// How close to a surface triangle's face normal a contact's normal is for the contact to be on
+    /// the face (the cosine): `terrain_contact` and `push_surface_contact` read it alike.
+    const ON_THE_FACE: f32 = 0.9995;
+
+    /// How far above a surface triangle's plane, in metres, a shape's deepest point may be and the
+    /// shape still touch it, when GJK/EPA says they touch (`terrain_contact`): rounding, not a gap.
+    const TOUCHING: f32 = 1e-4;
+
     /// Adds one triangle's contact with a surface's shape to `out`: for a box or a convex hull on the
     /// triangle's face, the patch it rests on (`clip_on_triangle`), else the one point. Says whether
     /// it was a patch.
     fn push_surface_contact(out: &mut Vec<ContactPoint>, c: ContactPoint, shape: &ColliderShape, pos: Vec3, rot: Quat, triangle: [Vec3; 3]) -> bool {
         let n = (triangle[1] - triangle[0]).cross(triangle[2] - triangle[0]).normalize_or_zero();
-        // On the face, not over an edge: the contact pushes the shape straight off the plane.
-        if n != Vec3::ZERO && n.dot(c.normal).abs() > 1.0 - 1e-4 {
+        // On the face, not over an edge — by `terrain_contact`'s own measure — the contact pushes the
+        // shape straight off the plane. Along the face normal exactly, not EPA's: EPA's is up to 2° off
+        // it here, and a lying cylinder given that sideways share at one end started to roll and never
+        // stopped (2026-11-25).
+        if n != Vec3::ZERO && n.dot(c.normal).abs() > Self::ON_THE_FACE {
             // Wound with its normal towards the shape, which is where the contact pushes it.
-            let towards = if n.dot(c.normal) < 0.0 { triangle } else { [triangle[0], triangle[2], triangle[1]] };
-            let patch = clip_on_triangle(shape, pos, rot, towards, c.normal);
+            let (towards, up) = if n.dot(c.normal) < 0.0 { (triangle, n) } else { ([triangle[0], triangle[2], triangle[1]], -n) };
+            let patch = clip_on_triangle(shape, pos, rot, towards, -up);
             if !patch.is_empty() {
                 out.extend(patch);
                 return true;
@@ -784,8 +795,26 @@ impl NarrowPhase {
         };
         // The shape is moved along `-c.normal`.
         let out_along = (-c.normal).dot(face);
-        if out_along > 0.9995 {
-            return Some(c);
+        if out_along > Self::ON_THE_FACE {
+            // On the face. A shape that lies along it gets its patch clipped from the face
+            // (`push_surface_contact`), whatever EPA's point. One that touches at a point touches at
+            // its deepest point — where EPA stopped is up to 1.6 mm off it, against a triangle, and
+            // a ball's normal pushed there turned it: a ball dropped on a flat mesh rolled away and
+            // never slept (2026-11-25). Over another triangle, that triangle has the contact.
+            if contacts::support_feature(shape, pos, rot, -face).is_some() {
+                return Some(c);
+            }
+            let deepest = Gjk::support_point(shape, pos, rot, -face);
+            let depth = (tri[0] - deepest).dot(face);
+            // EPA found them touching: a shape resting exactly on the surface may put its deepest
+            // point a rounding error above the plane, and it is touching all the same. Dropping that
+            // contact left a CCD ball on terrain only its speculative one, which has no friction,
+            // and it rolled for 520 frames where a ball without CCD stopped in 14.
+            if depth <= -Self::TOUCHING || !Self::barycentric(deepest + face * depth, tri).is_some_and(|w| w.iter().all(|&x| x > -1e-3)) {
+                return None;
+            }
+            let depth = depth.max(0.0);
+            return Some(ContactPoint { point: deepest + face * (depth * 0.5), normal: -face, penetration: depth, ..c });
         }
         // Which feature of the triangle EPA's contact is on: its witness on the triangle, in the
         // triangle's barycentric weights. A weight near zero puts it on the edge opposite.
