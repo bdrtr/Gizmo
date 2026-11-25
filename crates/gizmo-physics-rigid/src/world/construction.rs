@@ -89,9 +89,10 @@ impl PhysicsWorld {
     /// it touches. What holds at any rate: a pair closing faster than its size allows has a
     /// speculative contact and does not pass through, and joints are solved at 240 Hz whatever the
     /// world's rate (a free joint in as many steps of the substep, one in a contact island against
-    /// where its bodies have got to in the island's solve), and a body landing meets the ground instead
-    /// of sinking a substep's travel into it. What does not: a row of touching balls struck faster than
-    /// five diameters a substep (160 m/s at 60 Hz for 0.5 m balls) can end with two of them in one place.
+    /// where its bodies have got to in the island's solve), a body landing meets the ground instead
+    /// of sinking a substep's travel into it, and a body an impact sets going is held at what it
+    /// reaches. What does not: a body struck off its centre turns as far as a substep is long, and
+    /// what a fast turn takes it through is not looked at.
     /// Chosen here, when the world is built, and not changed in play.
     ///
     /// # Errors

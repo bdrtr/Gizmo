@@ -1181,6 +1181,18 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A body an impact sets going is not carried through what it was not known to be heading for.**
+  The narrow phase looks where bodies are going, and one standing still is going nowhere: struck, the
+  solve gave it the striker's speed and it travelled on it in the same substep, past neighbours it
+  had no contact with. At 60 Hz a ball struck at 160 m/s went through a 4 cm wall it stood in front
+  of (at 120 Hz, at 320), a row of touching balls struck at 320 ended with two in one place, and
+  below that they went most of the way through each other. After the solve, each body that
+  travelled fast is now looked at against every solid it reached and the solve had no contact of —
+  and against a mesh, field or compound face by face, whether or not it had one of them — and held
+  at what it reached, its speed kept for the contact the next substep has
+  (`PhysicsWorld::hold_set_going`); what was solved against a held body is looked at again. A row
+  keeps its order at any rate up to 640 m/s, 240 Hz's cradle included, with its momentum and no
+  energy made (`tests/struck.rs`, `tests/fast_bodies.rs`). Only a substep with a fast body pays.
 - **A fast body that passes by something is not touched by it, and one that does not is not missed.**
   A speculative contact was made from where a pair was: closing along the axis between them fast
   enough to meet within the substep. A ball flying past a box closes on its near corner until it

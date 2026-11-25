@@ -294,9 +294,11 @@ impl PhysicsWorld {
     // ================================================================== //
 
     /// Refit the spatial hash to this substep's bounds (swept over the step for a CCD body) and
-    /// evict the bodies the world no longer holds. Only rigid bodies are in it.
+    /// evict the bodies the world no longer holds. Only rigid bodies are in it. Returns whether any
+    /// body moves fast enough this substep (`moves_fast`) that an impact of it may set another
+    /// going as fast.
     #[tracing::instrument(skip_all, name = "broadphase")]
-    pub(crate) fn broadphase_step(&mut self, dt: f32) {
+    pub(crate) fn broadphase_step(&mut self, dt: f32) -> bool {
         // The tree is KEPT across substeps rather than cleared and refilled.
         //
         // It is a fat-margin dynamic AABB tree, so `insert` already early-outs for a body that
@@ -394,7 +396,10 @@ impl PhysicsWorld {
             } else {
                 Put::Still
             };
-            Some(Planned { settled: settled.then_some(pose), aabb, put, bounds })
+            // Fast enough to set another body going faster than the narrow phase will know of
+            // (`hold_set_going`): a kinematic mover as much as a dynamic body.
+            let sets_going = fast || (rb.is_kinematic() && moves_fast(vel.linear.length() * dt, collider));
+            Some(Planned { settled: settled.then_some(pose), aabb, put, bounds, sets_going })
         };
         let plans: Vec<Option<Planned>> = if worth_parallel(&self.rigid_bodies) {
             (0..self.entities.len()).into_par_iter().map(plan).collect()
@@ -403,8 +408,10 @@ impl PhysicsWorld {
         };
         let empty = gizmo_physics_core::Aabb { min: gizmo_math::Vec3A::ZERO, max: gizmo_math::Vec3A::ZERO };
         self.body_bounds.resize(self.entities.len(), (empty, empty));
+        let mut any_fast = false;
         for (i, planned) in plans.into_iter().enumerate() {
-            let Some(Planned { settled, aabb, put, bounds }) = planned else { continue };
+            let Some(Planned { settled, aabb, put, bounds, sets_going }) = planned else { continue };
+            any_fast |= sets_going;
             self.settled_bounds[i] = settled;
             self.body_bounds[i] = bounds;
             let entity = self.entities[i];
@@ -427,6 +434,7 @@ impl PhysicsWorld {
         }
 
         // Soft bodies — insert bounding AABB over all nodes.
+        any_fast
     }
 
     // ================================================================== //
@@ -1864,6 +1872,240 @@ impl PhysicsWorld {
     }
 }
 
+/// Where every body was, and which pairs the solve was given, before a substep with a fast body in
+/// it was solved: what `PhysicsWorld::hold_set_going` asks after it.
+pub(crate) struct BeforeSolve {
+    positions: Vec<Vec3>,
+    solved: Vec<[u32; 2]>,
+}
+
+/// What `PhysicsWorld::hold_set_going` asks by: where the bodies started the substep, the pairs of
+/// the fast ones the solve had, and the pairs a joint keeps from colliding (by id).
+struct Look {
+    starts: Vec<Vec3>,
+    solved: FxHashSet<(u32, u32)>,
+    disabled: FxHashSet<(u32, u32)>,
+    dt: f32,
+}
+
+impl PhysicsWorld {
+    /// What [`hold_set_going`](Self::hold_set_going) will need of the substep about to be solved.
+    pub(crate) fn before_solve(&self, ends: &[ManifoldEnds]) -> BeforeSolve {
+        BeforeSolve {
+            positions: self.transforms.iter().map(|t| t.position).collect(),
+            solved: ends.iter().map(|e| e.bodies).collect(),
+        }
+    }
+
+    /// A body the solve set going is not carried through what it was not known to be heading for.
+    ///
+    /// The narrow phase looks where bodies are going, and a body standing still is going nowhere:
+    /// struck, it is given the striker's speed by the solve and travels on it in the same substep,
+    /// past neighbours it has no contact with. At 60 Hz a ball struck at 160 m/s went through a
+    /// 4 cm wall it stood in front of, and a row of touching balls struck at 320 ended with two of
+    /// them in one place (2026-11-25).
+    ///
+    /// So each body that travelled fast this substep (`moves_fast`, over what it really moved) is
+    /// looked at again against every solid it reached and the solve had no contact of: the
+    /// narrow phase's speculative contact, from where the two started and for the motion they
+    /// made, gives the gap between them and its normal, and what the body moved past the gap is
+    /// taken back along the normal. Against a surface of many faces — a mesh, a height field, a
+    /// compound — its path is followed from one to the next, along each it meets, whether or not
+    /// the solve had a contact of one of them: that contact says nothing of the face beyond. Its
+    /// velocity is left to it: the two meet in the next substep, in a contact of their own, at the
+    /// speed they had. A neighbour it was touching already and
+    /// the solve had no contact of — both were asleep — leaves no gap at all.
+    ///
+    /// A body held back is not where the solve had it, so what was solved against it is looked at
+    /// again too: the striker, which the solve let follow it. Passes are made until one holds
+    /// nothing — a row of fast bodies is held from its far end back — or there are no more.
+    ///
+    /// Everything in order of id, so a run does not depend on the tree's shape.
+    #[tracing::instrument(skip_all, name = "hold_set_going")]
+    pub(crate) fn hold_set_going(&mut self, before: BeforeSolve, dt: f32) {
+        let mut going: Vec<usize> = (0..self.entities.len())
+            .filter(|&i| {
+                let rb = &self.rigid_bodies[i];
+                let moved = self.transforms[i].position - before.positions[i];
+                rb.is_dynamic() && !rb.is_sleeping && !self.colliders[i].is_trigger && moves_fast(moved.length(), &self.colliders[i])
+            })
+            .collect();
+        if going.is_empty() {
+            return;
+        }
+        going.sort_unstable_by_key(|&i| self.entities[i].id());
+        let n = self.entities.len();
+        let mut asked = vec![false; n];
+        for &i in &going {
+            asked[i] = true;
+        }
+        let pair = |i: usize, j: usize| (i.min(j) as u32, i.max(j) as u32);
+        let look = Look {
+            // The solved pairs of the bodies asked about, whichever way round.
+            solved: before
+                .solved
+                .iter()
+                .map(|&[a, b]| (a as usize, b as usize))
+                .filter(|&(a, b)| asked.get(a) == Some(&true) || asked.get(b) == Some(&true))
+                .map(|(a, b)| pair(a, b))
+                .collect(),
+            disabled: self.collision_disabled_joint_pairs(),
+            starts: before.positions,
+            dt,
+        };
+        let mut held = vec![false; n];
+        // Which need it, asked of the bodies where the solve left them: nothing is moved yet, so on
+        // every thread. Most of the fast bodies of a scene are on their way through the air.
+        let needs = |&i: &usize| {
+            self.reached(&look, &held, i).into_iter().any(|j| self.held_at(&look, i, j).is_some())
+        };
+        let mut todo: Vec<usize> = if worth_parallel_jobs(going.len(), PARALLEL_MIN_PAIRS) {
+            going.par_iter().copied().filter(needs).collect()
+        } else {
+            going.iter().copied().filter(needs).collect()
+        };
+        // Looked at already, and neither of the pair moved since: a bent way is not the straight one
+        // from its start to its end.
+        let mut looked: FxHashMap<(usize, usize), (Vec3, Vec3)> = FxHashMap::default();
+        const MAX_PASSES: usize = 8;
+        for _ in 0..MAX_PASSES {
+            let mut moved: Vec<usize> = Vec::new();
+            for &i in &todo {
+                for j in self.reached(&look, &held, i) {
+                    let ends = (self.transforms[i].position, self.transforms[j].position);
+                    if looked.get(&(i, j)) == Some(&ends) {
+                        continue;
+                    }
+                    if let Some(at) = self.held_at(&look, i, j) {
+                        self.transforms[i].position = at;
+                        // The cached matrix too, so the hold is visible to an end-of-frame snapshot.
+                        self.transforms[i].update_local_matrix();
+                        held[i] = true;
+                        moved.push(i);
+                        tracing::trace!(entity = ?self.entities[i], other = ?self.entities[j], "a body set going in the solve was held at what it reached");
+                    }
+                    looked.insert((i, j), (self.transforms[i].position, self.transforms[j].position));
+                }
+            }
+            // Then the fast bodies whose way crosses that of one held: the broad phase's boxes of them
+            // are the ways they went.
+            todo = moved
+                .iter()
+                .flat_map(|&i| self.spatial_hash.query_aabb(self.way_box(&look, i)))
+                .filter_map(|e| self.entity_index_map.get(&e.id()).copied())
+                .filter(|&k| asked[k])
+                .collect();
+            todo.sort_unstable_by_key(|&k| self.entities[k].id());
+            todo.dedup();
+            if todo.is_empty() {
+                break;
+            }
+        }
+    }
+
+    /// The box a body's way covered this substep, from where it was to where it is.
+    fn way_box(&self, look: &Look, i: usize) -> gizmo_math::Aabb {
+        let own = self.colliders[i].compute_aabb(Vec3::ZERO, self.transforms[i].rotation);
+        let (start, end) = (look.starts[i], self.transforms[i].position);
+        gizmo_math::Aabb::new(Vec3::from(own.min) + start.min(end), Vec3::from(own.max) + start.max(end))
+    }
+
+    /// What body `i` may have to be held at: what its way reached and the solve had no contact of,
+    /// in order of id. A pair the solve did have is among them where one of it has been held, and
+    /// is not where the solve had it, and where one is a surface of many faces.
+    fn reached(&self, look: &Look, held: &[bool], i: usize) -> Vec<usize> {
+        let mut reached: Vec<usize> = self
+            .spatial_hash
+            .query_aabb(self.way_box(look, i))
+            .into_iter()
+            .filter_map(|e| self.entity_index_map.get(&e.id()).copied())
+            .filter(|&j| {
+                j != i && (held[i] || held[j] || self.many_faced(i, j) || !look.solved.contains(&(i.min(j) as u32, i.max(j) as u32)))
+            })
+            .collect();
+        reached.sort_unstable_by_key(|&j| self.entities[j].id());
+        reached
+    }
+
+    /// Where body `i` is held at `j`, or `None` when its way does not take it past.
+    fn held_at(&self, look: &Look, i: usize, j: usize) -> Option<Vec3> {
+        const MAX_FACES: usize = 64;
+        let moved = |k: usize| self.transforms[k].position - look.starts[k];
+        // `i`'s way as `j` saw it: from where it was, by what it moved against `j`.
+        let mut at = look.starts[i];
+        let mut left = moved(i) - moved(j);
+        let many = self.many_faced(i, j);
+        let tolerance = if many { 1e-4 } else { self.solver.slop };
+        let mut bent = false;
+        for face in 0.. {
+            if !many && face == 1 {
+                break;
+            }
+            if face == MAX_FACES {
+                // Not looked past: it goes no further this substep.
+                left = Vec3::ZERO;
+                break;
+            }
+            let Some((gap, normal)) = self.reach(look, (i, at), j, left, many) else { break };
+            let into = left.dot(normal);
+            if into <= tolerance {
+                // Along it: what lies past it is still ahead.
+                left -= normal * into;
+                continue;
+            }
+            if into - gap <= tolerance {
+                // It gets there, and no further.
+                break;
+            }
+            // On to the face, and what is left of the way along it.
+            let met = gap.max(0.0) / into;
+            at += left * met;
+            left *= 1.0 - met;
+            left -= normal * left.dot(normal);
+            bent = true;
+        }
+        bent.then(|| at + left + moved(j))
+    }
+
+    /// Whether either of a pair is a surface of many faces, one of which says nothing of the next.
+    fn many_faced(&self, i: usize, j: usize) -> bool {
+        use gizmo_physics_core::ColliderShape::{Compound, Heightfield, TriMesh};
+        [i, j].into_iter().any(|k| matches!(self.colliders[k].shape, Compound(_) | Heightfield(_) | TriMesh(_)))
+    }
+
+    /// How far apart `i`, standing at `at`, and `j`, where it started, are, and along which normal
+    /// (from `i`), where `motion` — `i`'s as `j` sees it — closes them: `None` for a pair that does
+    /// not collide, or that the motion does not bring together. Of a pair with `many` faces the
+    /// first the motion meets, touched or not; a convex pair that touched already has no gap.
+    fn reach(&self, look: &Look, (i, at): (usize, Vec3), j: usize, motion: Vec3, many: bool) -> Option<(f32, Vec3)> {
+        let (ci, cj) = (&self.colliders[i], &self.colliders[j]);
+        let (a, b) = (self.entities[i].id(), self.entities[j].id());
+        if cj.is_trigger || !ci.collision_layer.can_collide_with(&cj.collision_layer) || look.disabled.contains(&(a.min(b), a.max(b))) {
+            return None;
+        }
+        let (at_j, dt) = (look.starts[j], look.dt);
+        let (ri, rj) = (self.transforms[i].rotation, self.transforms[j].rotation);
+        let touching = if many { None } else { NarrowPhase::test_collision(&ci.shape, at, ri, &cj.shape, at_j, rj) };
+        let (gap, normal) = match touching {
+            Some(c) => (0.0, c.normal),
+            None => {
+                let (c, gap) = gizmo_physics_core::Gjk::speculative_meeting(
+                    &ci.shape, at, ri, motion / dt, self.rigid_bodies[i].inv_mass(),
+                    &cj.shape, at_j, rj, Vec3::ZERO, self.rigid_bodies[j].inv_mass(), dt,
+                )?;
+                (gap, c.normal)
+            }
+        };
+        let (vi, vj) = (motion / dt, Vec3::ZERO);
+        // A one-way surface's say, as the narrow phase's (`pair_contacts`).
+        let keeps = |up: Vec3, n: Vec3, v: Vec3| Collider::one_way_keeps(up, n, v);
+        if ci.one_way.is_some_and(|up| !keeps(ri * up, normal, vj - vi)) || cj.one_way.is_some_and(|up| !keeps(rj * up, -normal, vi - vj)) {
+            return None;
+        }
+        Some((gap, normal))
+    }
+}
+
 /// The rate a joint is solved at, in hertz, whatever the world's: a world stepping coarser solves
 /// its free joints (`JointSolver::finish`) in as many steps of its substep as this takes. The rate
 /// every joint in the engine was tuned at; at 60 Hz a chain carrying 50 times a link's mass came
@@ -2060,6 +2302,8 @@ struct Planned {
     put: Put,
     /// Its `body_bounds`.
     bounds: (gizmo_physics_core::Aabb, gizmo_physics_core::Aabb),
+    /// It moves fast enough to set another body going as fast.
+    sets_going: bool,
 }
 
 /// How a body goes in the broad phase's tree: see `Planned`.

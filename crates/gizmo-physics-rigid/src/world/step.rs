@@ -274,7 +274,7 @@ impl PhysicsWorld {
 
         // 2. Broadphase — uzamsal hash güncelleme
         let t1 = Instant::now();
-        self.broadphase_step(dt);
+        let any_fast = self.broadphase_step(dt);
         self.metrics.broadphase_ms += ms(t1);
 
         // 3. Narrowphase — çarpışma tespiti ve olayları
@@ -285,6 +285,9 @@ impl PhysicsWorld {
 
         // 4-4.5 Kısıt çözücü (çarpışma + eklem)
         let t3 = Instant::now();
+        // What the bodies an impact sets going are looked at by afterwards; only a substep with a
+        // fast body in it pays for it.
+        let before = any_fast.then(|| self.before_solve(&ends));
         let bounces = self.constraint_solve_step(manifolds, ends, dt);
         self.metrics.solver_ms += ms(t3);
         // Triggers found by a speculative contact only, now that the substep's motion is known.
@@ -300,6 +303,10 @@ impl PhysicsWorld {
         }
         // A fast kinematic CCD body is held at static surfaces, which no impulse could do.
         self.kinematic_ccd_step(kinematic_starts, dt);
+        // A body the solve set going is held at what it reached and had no contact with.
+        if let Some(before) = before {
+            self.hold_set_going(before, dt);
+        }
         // Speculative contacts' bounces, now that the bodies have travelled to each other.
         self.apply_bounces(&bounces);
         self.metrics.integration_ms += ms(t4);
