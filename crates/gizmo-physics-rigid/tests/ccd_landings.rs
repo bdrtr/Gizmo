@@ -145,3 +145,44 @@ fn a_fast_kinematic_body_is_held_at_a_static_wall_and_slides_along_it() {
         assert!((p.z - 15.0).abs() < 0.05, "{hz} Hz: slid to z = {}, moving on at 30 m/s it is at 15", p.z);
     }
 }
+
+/// The ball's velocity and spin as it leaves a ramp tilted `tilt_deg`, dropped from `height`.
+fn off_the_ramp(tilt_deg: f32, height: f32, hz: u32, ccd: bool) -> (Vec3, Vec3) {
+    let mut w = PhysicsWorld::new().with_substep_rate(hz).unwrap();
+    let tilt = Quat::from_rotation_z(tilt_deg.to_radians());
+    let mut ramp = Transform::new(Vec3::new(0.0, -0.5, 0.0));
+    ramp.rotation = tilt;
+    w.add_body(BodyHandle::from_id(1), RigidBody::new_static(), ramp, Velocity::default(), Collider::box_collider(Vec3::new(10.0, 0.5, 10.0)));
+    let (rb, shape) = ball(ccd);
+    w.add_body(BodyHandle::from_id(BALL), rb, Transform::new(Vec3::new(0.0, height, 0.2)), Velocity::default(), shape);
+    let up = tilt * Vec3::Y;
+    let mut before = Vec3::ZERO;
+    for _ in 0..600 {
+        w.step(1.0 / 60.0).unwrap();
+        let i = *w.entity_index_map.get(&BALL).unwrap();
+        let v = w.velocities[i];
+        if v.linear.dot(up) > 0.5 && before.dot(up) < -0.5 {
+            return (v.linear, v.angular);
+        }
+        before = v.linear;
+    }
+    panic!("{tilt_deg}° from {height} m at {hz} Hz (CCD {ccd}): never left the ramp");
+}
+
+/// A CCD ball landing on a ramp leaves it as one without CCD does: turning, and sliding on at what
+/// is left after friction. It kept all its speed along the ramp and no spin: its island was solved
+/// on the split-impulse path, whose bounce gave the impact's normal impulse and no friction.
+#[test]
+fn a_ccd_ball_landing_on_a_ramp_turns_as_one_without_ccd() {
+    for hz in [60, 240] {
+        for (tilt, height) in [(10.0, 3.0), (30.0, 3.0)] {
+            let (plain, spin_plain) = off_the_ramp(tilt, height, hz, false);
+            let (with_ccd, spin_ccd) = off_the_ramp(tilt, height, hz, true);
+            assert!(spin_plain.length() > 5.0, "premise at {hz} Hz, {tilt}°: the plain ball does not turn ({spin_plain:?})");
+            assert!(
+                (with_ccd - plain).length() <= 0.02 * plain.length() && (spin_ccd - spin_plain).length() <= 0.02 * spin_plain.length(),
+                "{hz} Hz, {tilt}° from {height} m: with CCD {with_ccd:?} spinning {spin_ccd:?}, without {plain:?} spinning {spin_plain:?}"
+            );
+        }
+    }
+}

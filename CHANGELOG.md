@@ -1170,6 +1170,18 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A CCD body has the friction of its impacts.** An island holding a CCD body was solved on the
+  split-impulse path instead of TGS-soft, whose bounce pass gives a speculative contact its normal
+  impulse and no friction: a CCD ball landing on a ramp kept all its speed along it and no spin,
+  where one without CCD leaves turning. The reason for the gate was a 1753 m/s bullet TGS let
+  through a 0.59 m wall (2026-08-18); that was the narrow phase — GJK's distance and the fast-pair
+  thickness, both fixed above — and on TGS every tunnelling test now holds, the 6000-shot sweep
+  included. So a CCD island is solved like any other, and lands, bounces and turns as a plain one
+  does (`tests/ccd_landings.rs`). With it, a CCD body no longer takes a second, speculative contact
+  at its centre for a pair whose motion `near_contacts` has already answered: on TGS its friction
+  held a ball rolling beside a wall (`ccd_touching.rs`). `RigidBody::with_ccd` now says what CCD
+  adds over what every body gets.
+
 - **A fast body shot at a turned wall no longer passes through it.** Whether a pair is too fast for
   discrete detection — so it takes a speculative contact — is judged against the two shapes'
   thickness, and that was the smallest half-extent of each shape's world bounds: a wall turned a

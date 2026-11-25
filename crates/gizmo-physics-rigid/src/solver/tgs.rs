@@ -273,9 +273,10 @@ impl ConstraintSolver {
     //      transform'a uygular; hız kanalına relaxed+restitution yazılır).
     //
     // Böylece pozisyon penetrasyonu TGS-entegre dp ile düzelir ama kalıcı hıza sızmaz.
-    // NOT: CCD-etkin gövde içeren island'lar bu yola GİRMEZ — speculative temaslar için
-    // eski split-impulse yolu kullanılır (solve_contacts başında has_ccd dalı); TGS'in
-    // dp/relax akışı yüksek-hızlı açılı çarpmalarda speculative clamp'le çatışabiliyor.
+    // An island with a CCD body takes this path too, since 2026-11-25. It was kept on the
+    // split-impulse path because TGS once let a fast bullet through a wall at an angle; that was
+    // GJK's distance and the fast-pair test's thickness, both since fixed, and the split-impulse
+    // bounce pass gave a CCD body's impacts no friction.
     #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
     pub(super) fn solve_contacts_tgs(
         &self,

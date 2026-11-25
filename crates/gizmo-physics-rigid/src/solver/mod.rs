@@ -40,7 +40,7 @@ pub(super) fn rolling_lever(r_a: Vec3, r_b: Vec3, normal: Vec3, (dyn_a, dyn_b): 
 /// ([`rolling_lever`]), so `rolling` is the textbook coefficient: a resisting force `rolling · N`
 /// at the contact, a torque `rolling · N · r`. `acc_r` is the row's impulse accumulated so far
 /// this sweep; the new total is returned. Both contact solvers run it — the TGS path and the
-/// split-impulse path an island with a CCD body takes.
+/// split-impulse path `use_tgs_soft = false` takes.
 ///
 /// Until 2026-11-23 the bound had no lever: a force-sized impulse spent as a torque, as though
 /// every ball were a metre across. The resistance went as `1/r` — a billiard ball (28.6 mm) was
@@ -361,7 +361,8 @@ fn support_order_manifolds(
 ///
 /// Two solve paths are selected by these settings — the default TGS-soft path
 /// ([`ConstraintSolver::use_tgs_soft`]) and the older split-impulse sequential-impulse
-/// path, which also takes over for any island containing a CCD-enabled body. Several
+/// path, taken only with that off. (It also took any island containing a CCD-enabled body until
+/// 2026-11-25, which cost a CCD body the friction of its impacts.) Several
 /// fields are finished-but-gated experiments; each says so in its own documentation, so
 /// read the field before flipping it because it sounded useful.
 ///
@@ -511,8 +512,8 @@ pub struct ConstraintSolver {
     ///
     /// It is also a TGS-path policy: the gate includes
     /// [`block_solver`](Self::block_solver), which only `solver/tgs.rs` reads, so an island
-    /// that falls to the split-impulse path (any island holding a CCD-enabled body, or any
-    /// island at all with [`use_tgs_soft`](Self::use_tgs_soft) off) sweeps `iterations`
+    /// that falls to the split-impulse path (every island, with
+    /// [`use_tgs_soft`](Self::use_tgs_soft) off) sweeps `iterations`
     /// whatever its depth. See the note at the computation site in `solve_contacts`.
     ///
     /// Turning it off makes `iterations` mean exactly what it says for every island. That is
@@ -788,7 +789,6 @@ impl ConstraintSolver {
 
         let island_depth = self.island_depth(manifolds, ends, rigid_bodies);
         let n_iterations = self.sweep_count(island_depth);
-        let has_ccd = Self::island_has_ccd(ends, rigid_bodies);
 
         // Tall, bucklable stacks (support-depth ≥ 5) are the historically unstable case
         // (resting-stack instability). Only these deep islands reach this branch, so a
@@ -800,14 +800,14 @@ impl ConstraintSolver {
                 island_depth,
                 n_iterations,
                 n_manifolds = manifolds.len(),
-                solver = if self.use_tgs_soft && !has_ccd { "tgs-soft" } else { "split-impulse" },
+                solver = if self.use_tgs_soft { "tgs-soft" } else { "split-impulse" },
                 block_solver = self.block_solver,
                 direct_chain = self.direct_chain_solve,
                 "solving tall (bucklable) stack island"
             );
         }
 
-        if self.use_tgs_soft && !has_ccd {
+        if self.use_tgs_soft {
             let pairs = ContactPair::all(ends, rigid_bodies, transforms);
             self.solve_contacts_tgs(
                 manifolds,
@@ -845,8 +845,7 @@ impl ConstraintSolver {
         self.record_sliding(manifolds, &pairs, velocities);
         // The split-impulse path sweeps `self.iterations` (see the loop above) and has never
         // consumed the adaptive count, so reporting `n_iterations` here would be a lie about
-        // work that was not done. An island reaches this path only by containing a CCD-enabled
-        // body or by `use_tgs_soft` being off.
+        // work that was not done. An island reaches this path only with `use_tgs_soft` off.
         SolveStats {
             island_depth,
             iterations: self.iterations,
@@ -910,8 +909,8 @@ impl ConstraintSolver {
         // TGS PATH ONLY, and knowingly so — `n_iterations` is consumed by the TGS branch
         // below (and by the trace) and by nothing else; the split-impulse fallback sweeps
         // `self.iterations` (see its `for iter in 0..self.iterations` loop) and derives its
-        // position pass from the same field. An island falls to that path by containing a
-        // CCD-enabled body or by `use_tgs_soft` being off, and it then gets the base count
+        // position pass from the same field. An island falls to that path with `use_tgs_soft`
+        // off, and it then gets the base count
         // however deep it is. `SolveStats` reports that honestly rather than papering over it
         // (see the note above the `SolveStats` returned at the end of this function).
         //
@@ -952,40 +951,15 @@ impl ConstraintSolver {
         //     `iterations` is 20 and FLOOR is 16, so `max(20, max(16, 3D/2))` is still 20 for
         //     every D ≤ 13; only D ≥ 14 would change (D=14 → 21, saturating at 96). It is NOT
         //     a no-op for a caller who lowered `iterations` below 16 — those get the floor.
-        //     Both `tests/ccd.rs` and `tests/ccd_analytical.rs` run on this path and are the
-        //     regression surface that such a change has to be re-blessed against.
+        //     `tests/solver_quality.rs::sweep_ladder_tower_split_impulse` is the regression
+        //     surface such a change has to be re-blessed against (the CCD tests ran on this path
+        //     until 2026-11-25, and run on TGS now).
         if self.adaptive_iterations && self.block_solver && island_depth >= 5 {
             let target = (island_depth as usize * 3 / 2).max(Self::BLOCK_ITERS_FLOOR);
             self.iterations.max(target).min(Self::BLOCK_ITERS_CAP)
         } else {
             self.iterations
         }
-    }
-
-    /// Whether a body of the island has CCD on, which keeps the island off the TGS path.
-    fn island_has_ccd(ends: &[ManifoldEnds], rigid_bodies: &[RigidBody]) -> bool {
-        // TGS Soft yolu (modern çözücü): soft constraint + relax pass.
-        // İSTİSNA: CCD-etkin gövde içeren island'lar eski (split-impulse) yolu kullanır.
-        // CCD speculative temasları ince ayarlıdır; TGS'in dp/relax akışı yüksek-hızlı
-        // açılı çarpmalarda speculative clamp'le çatışıp tünellemeye yol açabiliyor.
-        // CCD cisimleri (mermiler) nadir ve genelde izole; yığın kararlılığı TGS'te kalır.
-        //
-        // BU GEREKÇE 2026-08-18'DE ÖLÇÜLDÜ, çünkü hatırlanan bir gerekçe bir kanıt değildir —
-        // ve `tests/cradle_passthrough.rs`'teki `ccd_makes_a_bounce_a_thud` bu kapının bedelini
-        // (CCD açıkken esnek çarpışmanın esnekliğini kaybetmesi) çivilenmiş bir sınırlama olarak
-        // taşıyor. Deney: `&& !has_ccd`'yi kaldır, CCD paketini koştur.
-        //
-        //   • `ccd_analytical` (9 test) ve `cradle_passthrough` HEPSİ GEÇTİ — çivilenmiş
-        //     sınırlama dahil, yani kapının bedeli gerçekten bu kapıdan geliyor.
-        //   • Ama `prop_ccd_never_tunnels` bir tur içinde karşı örnek buldu ve KÜÇÜLTTÜ:
-        //     hız 1753.91 m/s, yarı-kalınlık 0.2967, yarıçap 0.3940 → x = 0.70'te TÜNELLEDİ.
-        //     0.59 m kalınlıkta bir duvarı delen bir mermi.
-        //
-        // Yani takas gerçek ve kapı kalıyor. Fark şu: itiraz artık `ccd.proptest-regressions`'a
-        // yazılmış bir karşı örnek (sevkiyattaki çözücü onu geçiyor, dolayısıyla bedava ek
-        // kapsam), hatırlanan bir cümle değil. Öbür yol — split-impulse yolunda speculative
-        // temaslara restitution — 2026-11-15'te açıldı: aşağıdaki "Restitution pass".
-        ends.iter().flat_map(|e| e.bodies).any(|i| i != NO_ROW && rigid_bodies[i as usize].ccd_enabled)
     }
 
     /// The split-impulse sequential-impulse solve, for an island with a CCD body or with

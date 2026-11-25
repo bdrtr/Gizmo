@@ -699,10 +699,16 @@ impl PhysicsWorld {
             // lever arms the contact will have (`near_contacts`). A pair closing faster than its size
             // allows could be past each other by the end of the substep, so it takes the swept
             // contact below instead.
-            if !fast && (moving(rb_a) || moving(rb_b)) && !collider_a.is_trigger && !collider_b.is_trigger {
+            let near = !fast && (moving(rb_a) || moving(rb_b)) && !collider_a.is_trigger && !collider_b.is_trigger;
+            if near {
                 contacts = self.near_contacts((idx_a, idx_b), dt);
             }
-            if contacts.is_empty() && (rb_a.ccd_enabled || rb_b.ccd_enabled || fast) {
+            // The swept contact, for what `near_contacts` does not answer: a fast pair, and a CCD
+            // body's pair with no dynamic body moving (a kinematic mover and a sleeping body) or
+            // with a trigger. A pair `near_contacts` found nothing for closes nothing this substep
+            // beyond what the narrow phase answers when it touches; a CCD body took a speculative
+            // contact there too, at its centre, and a ball beside a wall was held by its friction.
+            if !near && (rb_a.ccd_enabled || rb_b.ccd_enabled || fast) {
                 if let Some(sc) = gizmo_physics_core::Gjk::speculative_contact(
                     &collider_a.shape,
                     transform_a.position,

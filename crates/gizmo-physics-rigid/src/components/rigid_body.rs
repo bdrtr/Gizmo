@@ -411,21 +411,20 @@ impl RigidBody {
     /// Enables Continuous Collision Detection (CCD) — fast or thin bodies stop tunnelling.
     /// Chainable.
     ///
-    /// A CCD body bounces like any other (fixed 2026-11-15). Any island holding one is solved on
-    /// the split-impulse path rather than TGS-soft (the TGS route lets a 1753 m/s bullet through a
-    /// 0.59 m wall — `prop_ccd_never_tunnels` keeps that case), and that path treats the
-    /// speculative contacts CCD makes as gap limits without restitution, so an elastic hit used
-    /// to land as a thud: a Newton's cradle with CCD on stopped dead (2.475 / 2.475 m/s where
-    /// 0 / 4.95 is right). Each speculative contact's closing speed is now kept from before the
-    /// solve, and every one that meets within the step gets its normal speed set to `−e·v₀` —
-    /// added after positions are integrated, so the body reaches what it hits before it leaves.
-    /// It only ever separates a pair, so it cannot carry anything through a wall.
+    /// What it adds is less than the name suggests, because every body already gets most of it:
+    /// a pair closing faster than discrete detection can follow — judged against the two shapes'
+    /// thickness — takes a speculative contact whether either asked for CCD, and a pair closing
+    /// slower meets through the contacts its motion closes (`near_contacts`). A CCD body's broad
+    /// phase box is stretched by a frame of its motion, it crosses a thin trigger on a speculative
+    /// contact, and a kinematic one is held at static surfaces (`kinematic_ccd_step`).
     ///
-    /// CCD is still not free: if tunnelling is suspected, **measure it first** — 0.5 m balls do
-    /// not tunnel even at 320 m/s with a 1/240 s substep.
+    /// A CCD body is solved like any other: it bounces (fixed 2026-11-15) and has the friction of
+    /// its impacts (2026-11-25 — its island had been solved on the split-impulse path, which kept
+    /// a ball landing on a ramp from turning).
     ///
-    /// The tests: `tests/cradle_passthrough.rs::ccd_makes_a_bounce_a_thud`, and
-    /// `world::tests::ccd_bullet_bounces_off_a_wall`.
+    /// The tests: `tests/cradle_passthrough.rs::ccd_makes_a_bounce_a_thud`,
+    /// `world::tests::ccd_bullet_bounces_off_a_wall`, `tests/ccd_landings.rs`,
+    /// `tests/angled_shots.rs`.
     pub fn with_ccd(mut self) -> Self {
         self.ccd_enabled = true;
         self

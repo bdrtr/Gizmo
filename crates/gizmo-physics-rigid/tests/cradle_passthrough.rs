@@ -205,6 +205,12 @@ fn the_cradle_keeps_its_balls_apart() {
 /// normal speed of every one the solve engaged to `−e·v₀` (Box2D v3's restitution pass). It only
 /// ever separates a pair, so `prop_ccd_never_tunnels` — the 1753 m/s bullet included — still
 /// passes. The name keeps the history; the test now asserts the bounce.
+///
+/// **And the gate is gone (2026-11-25).** The 1753 m/s counterexample was the narrow phase, not
+/// TGS: GJK's distance was centimetres off near a large flat face, and the fast-pair test judged
+/// thickness by a shape's world bounds. Both fixed, a CCD island is solved by TGS like any other —
+/// `prop_ccd_never_tunnels` and `tests/angled_shots.rs` hold on it — and it has the friction of its
+/// impacts, which the split-impulse bounce pass did not give.
 #[test]
 fn ccd_makes_a_bounce_a_thud() {
     let v = 5.0f32;
