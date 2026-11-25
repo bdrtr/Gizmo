@@ -2266,6 +2266,22 @@ The "1.0-readiness hardening + graphics upgrade" breaking release (2026-06-25):
 
 ## 7. Closed Research & Non-Goals
 
+**Step-overhead ideas measured and dropped — do not re-chase without a new reason** *(2026-11-25,
+gizmo-godot-bench, 1000-box pile and 4000 spheres at 60 and 240 Hz, same session A/B)*.
+- *Pooling the narrow phase's contact buffers* (a `test_collision_manifold_into` filling per-thread
+  pooled `Vec`s, the replaced buffers recycled instead of freed): no change at 60 Hz, 2 % worse on
+  the spheres at 240 Hz. Freeing the replaced buffers off the main thread (`solve_islands`'
+  parallel drop) already costs what recycling them does.
+- *Sweeping a greedy colouring's small last colours as one stage on one worker*
+  (`solver/parallel.rs`): bit-identical, slower at every threshold from 8 to 64 items.
+- *Colouring (and so wide-packing) islands from 64 or 16 blocks instead of 256*: 7 % faster on 20
+  ten-level pyramids, their tops 3.9 → 5.3 mm lower; the 20-box column 1.9 → 3.1 cm at 16.
+- *A "fast" sweep-count preset* (8 + 1 sweeps, adaptive off): only 20 % on the spheres and 11 % on
+  the pile on one thread, the 20-box column's top 1.9 → 4.4 cm — most of the solver's time is not
+  the sweeps. The owner chose cutting the step's overhead instead.
+- *Sorting the narrow phase's results by key-and-place and moving them once*: no better than
+  sorting the results themselves.
+
 **Metal draws less of a double-sided interior than Vulkan — OPEN, measured, do not re-chase as a
 threshold bug** *(2026-08-16)*. `a_double_sided_material_is_drawn_from_behind` fails only on the
 macOS runner. It reads like a mis-calibrated pixel threshold and it is not: the assertion was
