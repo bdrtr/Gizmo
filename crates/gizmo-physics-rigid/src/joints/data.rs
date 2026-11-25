@@ -307,6 +307,21 @@ pub enum JointData {
     D6(D6JointData),
 }
 
+impl JointData {
+    /// Takes out what a solve leaves in the joint's parameters — the hinge's angle or the slider's
+    /// travel, and the reference pose — leaving the parameters alone: the one list of what in here
+    /// is state, for `state_hash` (which hashes what is taken) and `settings_hash` (what is left).
+    pub(crate) fn take_state(&mut self) -> (f32, Option<Quat>) {
+        match self {
+            JointData::Hinge(d) => (std::mem::take(&mut d.current_angle), None),
+            JointData::Slider(d) => (std::mem::take(&mut d.current_position), d.initial_relative_rotation.take()),
+            JointData::BallSocket(d) => (0.0, d.initial_relative_rotation.take()),
+            JointData::D6(d) => (0.0, d.initial_relative_rotation.take()),
+            JointData::Fixed | JointData::Spring(_) | JointData::Distance(_) => (0.0, None),
+        }
+    }
+}
+
 /// Names a joint kind without carrying its parameters — the `Copy` + `Eq` counterpart of
 /// [`JointData`], used for authoring descriptors and for solver dispatch (`match` on this
 /// rather than on the string from [`Joint::joint_type`]).

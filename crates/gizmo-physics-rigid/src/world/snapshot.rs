@@ -143,7 +143,11 @@ impl PhysicsWorld {
     /// PROCESSES.
     ///
     /// The substep rate is mixed in first, so two worlds stepping at different rates — two peers
-    /// of a rollback session built differently — never hash alike, even before they have moved.
+    /// of a rollback session built differently — never hash alike, even before they have moved. So
+    /// is what a step reads and no pose shows: the time not yet stepped, the weather (a vehicle's
+    /// grip), each body's sleep counter and gathered forces, and what each joint's solve left in it
+    /// (its reference pose, a hinge's angle, a slider's travel). The contacts' warm-start impulses
+    /// are not.
     ///
     /// The guarantee: on the **same platform and the same binary**, stepping the same initial
     /// state with the same `dt` matches step for step (which is what replay/rollback needs).
@@ -157,25 +161,32 @@ impl PhysicsWorld {
 
         let mut h = std::collections::hash_map::DefaultHasher::new();
         h.write_u32(self.substep_rate);
+        h.write_u32(self.accumulator.to_bits());
+        h.write_u8(self.weather as u8);
         for &i in &order {
             h.write_u32(self.entities[i].id());
             let t = &self.transforms[i];
             let v = &self.velocities[i];
+            let rb = &self.rigid_bodies[i];
             for bits in [
                 t.position.x, t.position.y, t.position.z,
                 t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w,
                 v.linear.x, v.linear.y, v.linear.z,
                 v.angular.x, v.angular.y, v.angular.z,
+                rb.force_accumulator.x, rb.force_accumulator.y, rb.force_accumulator.z,
+                rb.torque_accumulator.x, rb.torque_accumulator.y, rb.torque_accumulator.z,
             ] {
                 h.write_u32(bits.to_bits());
             }
             // Uyku durumu da state'in parçası (rollback'te tutarlı olmalı).
-            h.write_u8(self.rigid_bodies[i].is_sleeping as u8);
+            h.write_u8(rb.is_sleeping as u8);
+            h.write_u32(rb.sleep_counter);
         }
 
-        // Joint solver state. `is_broken` and the endpoint pair are CARRIED state: a broken
-        // joint cannot be recomputed from transforms and velocities, and a restore that
-        // dropped it would resimulate with a joint the continuous run no longer had.
+        // Joint solver state. `is_broken`, the endpoint pair and what `JointData::take_state`
+        // takes are CARRIED state: a broken joint or a reference pose cannot be recomputed from
+        // transforms and velocities, and a restore that dropped it would resimulate with a joint
+        // the continuous run no longer had.
         //
         // The λ slots are not carried state at the DEFAULT `JointSolver::warm_start_factor`
         // of 0 — `solve_joints` zeroes them at the start of every pass — so hashing them buys
@@ -197,6 +208,12 @@ impl PhysicsWorld {
             h.write_u32(j.entity_a.id());
             h.write_u32(j.entity_b.id());
             h.write_u8(j.is_broken as u8);
+            let (travel, pose) = j.data.clone().take_state();
+            h.write_u32(travel.to_bits());
+            h.write_u8(pose.is_some() as u8);
+            for bits in pose.unwrap_or_default().to_array() {
+                h.write_u32(bits.to_bits());
+            }
             for s in 0..crate::joints::data::JointScratch::LEN {
                 h.write_u32(j.scratch.row_value(s).to_bits());
             }
@@ -213,7 +230,8 @@ impl PhysicsWorld {
     /// Bodies and joints are visited in the order the world holds them, so the order they were
     /// added in counts: a solve visits them in it, and two rollback peers must agree on it. What a
     /// step changes — a body's sleep, the forces gathered on it, what its contacts gave it, a joint
-    /// broken or its solver's row — is left out.
+    /// broken, its solver's row or what its solve keeps (an angle, a reference pose) — is left out,
+    /// and so is what only the picture reads (a fluid zone's fog).
     ///
     /// **Why it exists.** The solvers' and the integrator's settings are in neither a rollback
     /// snapshot nor the world's serialized state, and the solver's documentation leaves keeping
@@ -258,10 +276,10 @@ impl PhysicsWorld {
             velocities: _,
             contact_cache: _,
             accumulator: _,
-
-            // ── Nothing a step reads to decide where a body goes: inert weather, derived
-            //    structures, the last step's output, control flags, history and an asset cache. ──
             weather: _,
+
+            // ── Nothing a step reads to decide where a body goes: derived structures, the last
+            //    step's output, control flags, history and an asset cache. ──
             max_history_frames: _,
             watchlist: _,
             spatial_hash: _,
@@ -293,7 +311,11 @@ impl PhysicsWorld {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         let mut out = Into(&mut h);
         // Every `write!` below goes to a hasher, which takes anything.
-        let _ = write!(out, "{substep_rate}{integrator:?}{solver:?}{joint_solver:?}{gravity_fields:?}{fluid_zones:?}");
+        let _ = write!(out, "{substep_rate}{integrator:?}{solver:?}{joint_solver:?}{gravity_fields:?}");
+        for zone in fluid_zones {
+            let super::FluidZone { shape, density, viscosity, linear_drag, quadratic_drag, fog_color: _, fog_density: _ } = zone;
+            let _ = write!(out, "{shape:?}{density:?}{viscosity:?}{linear_drag:?}{quadratic_drag:?}|");
+        }
         for ((entity, body), collider) in entities.iter().zip(rigid_bodies).zip(colliders) {
             let mut body = *body;
             body.is_sleeping = false;
@@ -318,6 +340,8 @@ impl PhysicsWorld {
                 is_broken: _,
                 scratch: _,
             } = j;
+            let mut data = data.clone();
+            data.take_state();
             let _ = write!(
                 out,
                 "{}{}{local_anchor_a:?}{local_anchor_b:?}{break_force:?}{break_torque:?}{collision_enabled}{data:?}",
