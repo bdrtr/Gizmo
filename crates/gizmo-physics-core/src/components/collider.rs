@@ -906,6 +906,59 @@ pub fn scale_along(scale: Vec3, rotation: Quat) -> Vec3 {
 }
 
 impl ColliderShape {
+    /// Half the shape's thinnest width, or less: how far another body may get into it before the
+    /// shortest way out is its far side. The same however the shape is turned.
+    ///
+    /// Exact for a sphere, a box, a capsule and a cylinder. For a cone and a hull it is the radius
+    /// of a sphere that fits inside (a hull's: the least distance from its vertices' centre to a
+    /// face), which is never more than half the thinnest width: an under-estimate, the side that
+    /// makes a pair count as fast sooner, never later. A plane, a mesh and a height field are
+    /// surfaces, as thin as a wall can be: zero. A compound, its thinnest part's; scale ignored, as
+    /// everywhere in collision.
+    ///
+    /// The smallest half-extent of the shape's world bounds stood in for this, and a turned thin
+    /// wall's bounds are as thick as it is wide: a CCD ball shot at a wall tilted a few degrees was
+    /// judged slow against it, met it only overlapping past its middle, and was pushed out of the
+    /// far side (2026-11-25).
+    pub fn half_thickness(&self) -> f32 {
+        match self {
+            ColliderShape::Sphere(s) => s.radius,
+            ColliderShape::Box(b) => b.half_extents.min_element(),
+            ColliderShape::Capsule(c) => c.radius,
+            ColliderShape::Cylinder(c) => c.radius.min(c.half_height),
+            ColliderShape::Cone(c) => {
+                // The inscribed sphere of a cone of base radius r and height h: r·h / (r + √(r² + h²)).
+                let (r, h) = (c.radius, 2.0 * c.half_height);
+                let slant = (r * r + h * h).sqrt();
+                if r + slant > 0.0 { r * h / (r + slant) } else { 0.0 }
+            }
+            ColliderShape::ConvexHull(hull) => {
+                let n = hull.vertices.len();
+                if n == 0 || hull.faces.is_empty() {
+                    return 0.0;
+                }
+                let centre = hull.vertices.iter().copied().sum::<Vec3>() / n as f32;
+                let thinnest = hull
+                    .faces
+                    .iter()
+                    .filter_map(|f| {
+                        let [a, b, c] = f.map(|i| hull.vertices.get(i as usize).copied());
+                        let (a, b, c) = (a?, b?, c?);
+                        let normal = (b - a).cross(c - a).try_normalize()?;
+                        Some((a - centre).dot(normal).abs())
+                    })
+                    .fold(f32::INFINITY, f32::min);
+                // No face with an area: a flat hull.
+                if thinnest.is_finite() { thinnest } else { 0.0 }
+            }
+            ColliderShape::Plane(_) | ColliderShape::TriMesh(_) | ColliderShape::Heightfield(_) => 0.0,
+            ColliderShape::Compound(parts) => {
+                let thinnest = parts.iter().map(|(_, s)| s.half_thickness()).fold(f32::INFINITY, f32::min);
+                if thinnest.is_finite() { thinnest } else { 0.0 }
+            }
+        }
+    }
+
     /// This shape scaled by `scale` along its own axes — what a collider under a scaled parent
     /// becomes (`gizmo-physics-rigid` composes a child's collider with its ancestors' scale, never
     /// with the entity's own, which is its mesh's).
@@ -1483,6 +1536,31 @@ gizmo_core::impl_component!(Collider);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The thickness a pair is judged fast against is the shape's own, however it is turned, and
+    /// never more than half its thinnest width: a box exactly, a hull of the same box at most that
+    /// (here exactly, its faces being the box's), a cone at most half its base and half its height.
+    #[test]
+    fn half_thickness_is_the_shapes_own_and_never_more() {
+        let half = Vec3::new(2.0, 0.05, 1.0);
+        assert_eq!(Collider::box_collider(half).shape.half_thickness(), 0.05);
+        let corners: Vec<Vec3> = (0..8)
+            .map(|k| Vec3::new(if k & 1 == 0 { -half.x } else { half.x }, if k & 2 == 0 { -half.y } else { half.y }, if k & 4 == 0 { -half.z } else { half.z }))
+            .collect();
+        let hull = Collider::convex_hull(&corners).shape.half_thickness();
+        assert!(hull <= 0.05 + 1e-6 && hull > 0.049, "a box's hull: {hull}");
+        let cone = Collider::cone(0.5, 1.0).shape.half_thickness();
+        assert!(cone > 0.0 && cone <= 0.5 && cone <= 1.0, "a cone: {cone}");
+        // Inscribed in a cone of base radius 0.5 and height 2: 0.5·2 / (0.5 + √4.25).
+        assert!((cone - 1.0 / (0.5 + 4.25f32.sqrt())).abs() < 1e-5, "a cone: {cone}");
+        assert_eq!(Collider::capsule(0.2, 3.0).shape.half_thickness(), 0.2);
+        assert_eq!(Collider::cylinder(0.4, 0.1).shape.half_thickness(), 0.1);
+        let wall = Collider::compound(vec![
+            (crate::components::Transform::new(Vec3::ZERO), Collider::box_collider(Vec3::new(1.0, 1.0, 1.0))),
+            (crate::components::Transform::new(Vec3::X * 3.0), Collider::box_collider(Vec3::new(1.0, 0.02, 1.0))),
+        ]);
+        assert_eq!(wall.shape.half_thickness(), 0.02);
+    }
 
     /// Every shape scaled: a box and a hull exactly, a non-uniform scale included; a sphere by its
     /// largest; a capsule's radius across its axis and its height along it; a plane through the

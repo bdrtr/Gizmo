@@ -1170,6 +1170,18 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A fast body shot at a turned wall no longer passes through it.** Whether a pair is too fast for
+  discrete detection — so it takes a speculative contact — is judged against the two shapes'
+  thickness, and that was the smallest half-extent of each shape's world bounds: a wall turned a
+  few degrees has bounds as thick as it is wide, so a body shot at it was judged slow, was found
+  only overlapping past the wall's middle, and was pushed out of the far side. Of 6000 seeded shots
+  per rate (a sphere, a box or a capsule at 50–3000 m/s, at a wall 4–80 cm thick tilted up to 35°),
+  26 % went through at 60 Hz and 49 % at 240 Hz without CCD, 0.3 % and 0.7 % with it. The thickness
+  is now the shape's own, the same however it is turned (`ColliderShape::half_thickness`: exact for
+  a sphere, box, capsule and cylinder, an inscribed sphere for a cone or hull), for the broad phase's
+  sweep (`moves_fast`) as for the pair (`closes_fast`), and none goes through
+  (`tests/angled_shots.rs`).
+
 - **A CCD body lands and bounces as one without CCD does.** Besides its speculative contacts,
   every fast CCD body was swept, centre only, against each static or sleeping collider's bounding
   box and stopped a centimetre short of the box with its velocity into it removed — a backstop for
