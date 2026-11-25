@@ -903,9 +903,8 @@ impl PhysicsWorld {
     /// carries into contact has touched, and its `Started` goes out. One that does not — a ball
     /// stopped by the floor above a kill zone — stays found but untouched, and is never reported.
     ///
-    /// The motion is swept with the narrow phase's own overlap test (`sweep_against`), stepping by
-    /// half the thinner shape so a thin trigger is not stepped over: the very predicate the narrow
-    /// phase uses, so a trigger is entered here exactly when it would be overlapped there.
+    /// The motion is swept as a shape cast is (`sweep_against`), so however thin or turned the trigger,
+    /// it is entered where the way comes to it.
     pub(crate) fn confirm_triggers(&mut self, pending: Vec<PendingTrigger>, dt: f32) {
         for p in pending {
             let [a, b] = p.bodies.map(|i| i as usize);
@@ -918,9 +917,17 @@ impl PhysicsWorld {
             let travel = (moves(a) - moves(b)) * dt;
             let distance = travel.length();
             let reaches = distance > 1e-9
-                && self
-                    .sweep_against(&self.colliders[a].shape, ta.position, ta.rotation, travel / distance, distance, &self.colliders[b].shape, tb.position, tb.rotation)
-                    .is_some();
+                && Self::sweep_against(
+                    &self.colliders[a].shape,
+                    ta.position,
+                    ta.rotation,
+                    travel / distance,
+                    distance,
+                    &self.colliders[b].shape,
+                    tb.position,
+                    tb.rotation,
+                )
+                .is_some();
             if !reaches {
                 continue;
             }

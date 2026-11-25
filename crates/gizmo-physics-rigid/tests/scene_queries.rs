@@ -418,3 +418,46 @@ fn a_shape_cast_honours_the_layer_mask() {
         "a sweep masked to a different layer must not"
     );
 }
+
+/// A thin plate swept face on at a thin wall, both turned, hits it, from any way off and however
+/// long the sweep. The sweep was marched in steps of the two's world bounds, and a turned plate is
+/// as thick by those as it is wide: 43 casts of 50 went through at 45°.
+#[test]
+fn a_thin_turned_plate_does_not_go_through_a_thin_turned_wall() {
+    for turn in [0.0f32, 0.3, 0.785] {
+        for reach in [8.0, 400.0] {
+            let mut w = PhysicsWorld::new();
+            let mut t = Transform::new(Vec3::ZERO);
+            t.rotation = Quat::from_rotation_z(turn);
+            w.add_body(BodyHandle::from_id(1), RigidBody::new_static(), t, Velocity::default(), Collider::box_collider(Vec3::new(0.01, 5.0, 5.0)));
+            w.step(1.0 / 240.0).unwrap();
+            let n = t.rotation * Vec3::X;
+            let plate = Collider::box_collider(Vec3::new(0.01, 0.5, 0.5)).shape;
+            for k in 0..50 {
+                let off = 3.0 + 0.013 * k as f32;
+                let hit = w.cast_shape(&plate, -n * off, t.rotation, n, reach, QueryFilter::default());
+                let hit = hit.unwrap_or_else(|| panic!("turned {turn}, {off} m off, reaching {reach}: went through"));
+                assert!((hit.distance - (off - 0.02)).abs() < 2e-3, "turned {turn}, {off} m off: hit at {}", hit.distance);
+                assert!(hit.normal.dot(-n) > 0.999, "turned {turn}: normal {:?}, the wall's {:?}", hit.normal, -n);
+            }
+        }
+    }
+}
+
+/// And what a sweep passes by it does not hit, and where it meets a corner it says which way that
+/// faces.
+#[test]
+fn a_swept_ball_passes_a_box_and_meets_its_corner() {
+    let (w, _) = world_with_box_at(&[Vec3::new(6.0, 0.0, 0.0)]);
+    let ball = ColliderShape::Sphere(SphereShape { radius: 0.25 });
+    let cast = |y: f32| w.cast_shape(&ball, Vec3::new(0.0, y, 0.0), Quat::IDENTITY, Vec3::X, 20.0, QueryFilter::default());
+    let half = match unit_box() {
+        ColliderShape::Box(b) => b.half_extents.y,
+        other => panic!("the test's box is {other:?}"),
+    };
+    assert!(cast(half + 0.26).is_none(), "passing 1 cm clear");
+    let hit = cast(half + 0.15).expect("15 cm over its top edge");
+    // The ball's centre is 0.15 over the edge and r from it: the normal leans by asin(0.15 / 0.25).
+    assert!((hit.normal.y - 0.6).abs() < 0.01 && hit.normal.x < 0.0, "normal {:?}", hit.normal);
+    assert!((hit.distance - (6.0 - half - 0.2)).abs() < 2e-3, "hit at {}", hit.distance);
+}

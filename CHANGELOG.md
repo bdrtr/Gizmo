@@ -1181,6 +1181,13 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A shape cast does not go through a thin turned target.** It marched along its way in steps of half
+  the thinner shape, by the two's world bounds — as thick for a turned plate as it is wide — and no
+  shorter than a 512th of the sweep: a 2 cm plate swept face on at a 2 cm wall, both turned, went
+  through in 37 casts of 50 at 17° and 43 at 45°. It now asks the path, as the simulation's speculative
+  contacts do, so whatever the target and however long the sweep it stops where the two meet, and
+  its `normal` is the one they meet on. `confirm_triggers` sweeps by the same.
+
 - **A body an impact sets going is not carried through what it was not known to be heading for.**
   The narrow phase looks where bodies are going, and one standing still is going nowhere: struck, the
   solve gave it the striker's speed and it travelled on it in the same substep, past neighbours it

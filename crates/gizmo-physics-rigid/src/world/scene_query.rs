@@ -27,14 +27,7 @@ use super::PhysicsWorld;
 use gizmo_math::{Aabb, Quat, Vec3};
 use gizmo_physics_core::components::Transform;
 use gizmo_physics_core::raycast::{Ray, Raycast, RaycastHit};
-use gizmo_physics_core::{BodyHandle, ColliderShape, NarrowPhase};
-
-/// Distance tolerance for the sweep's touching pose, in world units.
-const SWEEP_EPS: f32 = 1e-4;
-/// Upper bound on march samples, so a long sweep against a tiny target stays bounded.
-const MAX_SWEEP_SAMPLES: u32 = 512;
-/// Bisection refinements after the march brackets the contact.
-const SWEEP_BISECTIONS: u32 = 24;
+use gizmo_physics_core::{BodyHandle, ColliderShape, Gjk, NarrowPhase};
 
 /// Which colliders a scene query is allowed to see.
 ///
@@ -281,64 +274,29 @@ impl PhysicsWorld {
                 continue;
             }
             let t = &self.transforms[i];
-            if let Some(distance) = self.sweep_against(
-                shape,
-                pos,
-                rot,
-                dir,
-                max_distance,
-                &self.colliders[i].shape,
-                t.position,
-                t.rotation,
-            ) {
+            if let Some((distance, normal)) =
+                Self::sweep_against(shape, pos, rot, dir, max_distance, &self.colliders[i].shape, t.position, t.rotation)
+            {
                 if best.is_none_or(|b| distance < b.distance) {
-                    // Normal from the touching pose: ask the narrowphase at the contact.
-                    let touch = pos + dir * (distance + SWEEP_EPS);
-                    let normal = NarrowPhase::test_collision(
-                        shape,
-                        touch,
-                        rot,
-                        &self.colliders[i].shape,
-                        t.position,
-                        t.rotation,
-                    )
-                    .map(|c| -c.normal)
-                    .unwrap_or(-dir);
-                    best = Some(ShapeCastHit {
-                        entity,
-                        distance,
-                        normal,
-                    });
+                    best = Some(ShapeCastHit { entity, distance, normal });
                 }
             }
         }
         best
     }
 
-    /// Earliest distance along `dir` at which `shape` first touches one target, or `None`.
+    /// How far along `dir` `shape` first touches one target, and the target's normal there, facing
+    /// back; or `None`.
     ///
-    /// A march-and-bisect over [`NarrowPhase::test_collision`], not
-    /// [`Gjk::conservative_advancement`].
-    ///
-    /// CA was broken when this was written — it reported no hit for any laterally offset
-    /// sweep — and the diagnosis recorded here was itself wrong: the blame went to the step
-    /// rule `dist / closing_velocity`, which is in fact the textbook bound and provably
-    /// non-overshooting under pure translation. The real fault was the *numerator*, an
-    /// upper bound of mixed provenance handed back by `Gjk::distance`. CA has since been
-    /// rewritten to re-derive a certified supporting-plane gap and is correct now.
-    ///
-    /// This function still marches, for a different reason: CA is translation-only and
-    /// answers "when do these two touch", while a scene query wants "which body does this
-    /// sweep hit first", already broadphase-filtered. Marching over the narrowphase reuses
-    /// the exact predicate the simulation uses, at a cost that is fine for a query. Swapping
-    /// in CA per-candidate is a reasonable optimisation, not a correctness fix.
-    ///
-    /// The march step is derived from the smaller of the two shapes rather than being a
-    /// fixed subdivision, so the sweep cannot step over a thin target — the classic failure
-    /// of a naive fixed-sample sweep.
+    /// The path is asked, as the simulation's own speculative contacts ask it
+    /// ([`Gjk::speculative_meeting`]): whatever the target — convex, a compound's parts, a plane, a
+    /// mesh's or a field's triangles — and however thin. It used to be marched along in steps of
+    /// half the thinner shape, with the narrow phase asked at each, so as not to step over a thin
+    /// target; the thickness was the two's world bounds', and the step no shorter than a 512th of
+    /// the sweep. A thin plate swept face on at a thin wall, both turned, is as thick by its bounds
+    /// as it is wide: 37 casts of 50 went through at 17°, 43 at 45° (2026-11-26).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn sweep_against(
-        &self,
         shape: &ColliderShape,
         pos: Vec3,
         rot: Quat,
@@ -347,55 +305,13 @@ impl PhysicsWorld {
         target_shape: &ColliderShape,
         target_pos: Vec3,
         target_rot: Quat,
-    ) -> Option<f32> {
-        let hits_at = |d: f32| -> bool {
-            NarrowPhase::test_collision(shape, pos + dir * d, rot, target_shape, target_pos, target_rot)
-                .is_some()
-        };
-
-        // Step by half the smallest extent involved, so nothing thinner than a step can be
-        // skipped. Clamped so a huge sweep against a tiny target stays bounded.
-        let probe_aabb = gizmo_physics_core::Collider::from_shape(shape.clone()).compute_aabb(pos, rot);
-        let target_aabb =
-            gizmo_physics_core::Collider::from_shape(target_shape.clone()).compute_aabb(target_pos, target_rot);
-        let smallest = probe_aabb
-            .size()
-            .min_element()
-            .min(target_aabb.size().min_element())
-            .max(SWEEP_EPS);
-        let step = (smallest * 0.5).max(max_distance / MAX_SWEEP_SAMPLES as f32);
-
-        let mut prev_clear = 0.0f32;
-        let mut d = step;
-        let mut first_hit = None;
-        while d <= max_distance {
-            if hits_at(d) {
-                first_hit = Some(d);
-                break;
-            }
-            prev_clear = d;
-            d += step;
-        }
-        // The endpoint itself may be the only touching sample.
-        if first_hit.is_none() {
-            if hits_at(max_distance) {
-                first_hit = Some(max_distance);
-            } else {
-                return None;
-            }
-        }
-
-        // Bisect between the last clear sample and the first touching one.
-        let (mut lo, mut hi) = (prev_clear, first_hit.unwrap());
-        for _ in 0..SWEEP_BISECTIONS {
-            let mid = 0.5 * (lo + hi);
-            if hits_at(mid) {
-                hi = mid;
-            } else {
-                lo = mid;
-            }
-        }
-        Some(hi)
+    ) -> Option<(f32, Vec3)> {
+        // The whole way in a second.
+        let way = dir * max_distance;
+        let (contact, gap) =
+            Gjk::speculative_meeting(shape, pos, rot, way, 1.0, target_shape, target_pos, target_rot, Vec3::ZERO, 0.0, 1.0)?;
+        let closing = way.dot(contact.normal);
+        (closing > 0.0).then(|| ((gap / closing * max_distance).min(max_distance), -contact.normal))
     }
 
     /// Convenience: sweep the collider a body already has.
