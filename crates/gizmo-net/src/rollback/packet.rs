@@ -5,12 +5,12 @@
 //! the variant *order* is part of the wire format: appending a variant is safe for old
 //! peers' existing traffic, but an old build that receives the new index fails to
 //! deserialize and `UdpTransport::poll_events` logs the datagram and drops it. Both peers
-//! must therefore run the same build — there is no version handshake. Separately, the enum
+//! must therefore run the same build, which [`NetworkPacket::Hello`] checks before a session
+//! simulates (`RollbackSession::handshake`). Separately, the enum
 //! carries `#[non_exhaustive]` from the workspace-wide 1.0 semver pass (adding a variant must
 //! not break downstream crates), so downstream `match`es need a wildcard arm.
 //!
-//! Only `Input` is actually driven by this crate. `RollbackSession::advance` matches
-//! `Input` and ignores every other variant, and nothing here emits a `Ping`, answers one
+//! `Input` and `Hello` are driven by this crate. Nothing here emits a `Ping`, answers one
 //! with a `Pong`, or acts on a `FullState`: those variants exist so an application (or a
 //! future resync path) can carry them over the same socket.
 
@@ -51,7 +51,31 @@ pub enum NetworkPacket {
     /// Rarely — when the game desyncs badly, or a new player joins the room — the whole scene
     /// is sent.
     FullState(PhysicsStateSnapshot),
+
+    /// A session's opening: what a peer must agree with before the two simulate together. Sent
+    /// until the peer answers it, so a lost one — or a lost answer — is sent again. Appended last,
+    /// so the variants before it keep their wire index.
+    Hello {
+        /// [`ROLLBACK_PROTOCOL`] of the sender's build.
+        protocol: u32,
+        /// The sender's own player id — the receiver's `remote_id`.
+        player: u32,
+        /// The id the sender plays against — the receiver's `local_id`.
+        expects: u32,
+        /// The sender's world as it starts — its state, its settings and the tick length
+        /// (`PhysicsWorld::state_hash`, `PhysicsWorld::settings_hash`, `fixed_dt`) — hashed
+        /// together, in that order. Equal on two peers that will step alike.
+        world: u64,
+        /// Whether this answers the peer's own opening. One that does not is answered; one that
+        /// does is not, and tells its receiver that its own has arrived.
+        answer: bool,
+    },
 }
+
+/// The rollback wire's version, carried in [`NetworkPacket::Hello`]. Raised whenever a packet's
+/// encoding changes, so two builds that would misread each other say so at the start instead of
+/// dropping each other's datagrams.
+pub const ROLLBACK_PROTOCOL: u32 = 1;
 
 #[cfg(test)]
 mod tests {

@@ -204,6 +204,130 @@ impl PhysicsWorld {
         h.finish()
     }
 
+    /// A hash of what decides how this world steps and is not its state: the integrator, the
+    /// contact and joint solvers, the substep rate, the gravity fields and fluid zones, every
+    /// joint's definition, and every body's rigid body and collider — mass, inertia, damping,
+    /// shape, material. [`state_hash`](Self::state_hash) is where the bodies are and how they
+    /// move; this is what they are and the rules they move by.
+    ///
+    /// Bodies and joints are visited in the order the world holds them, so the order they were
+    /// added in counts: a solve visits them in it, and two rollback peers must agree on it. What a
+    /// step changes — a body's sleep, the forces gathered on it, what its contacts gave it, a joint
+    /// broken or its solver's row — is left out.
+    ///
+    /// **Why it exists.** The solvers' and the integrator's settings are in neither a rollback
+    /// snapshot nor the world's serialized state, and the solver's documentation leaves keeping
+    /// them in sync to the caller. Two rollback peers that set up their worlds a little
+    /// differently — a gravity, a solver's iteration count, a body's mass — started from equal
+    /// states and drifted apart with nothing to say why; `gizmo-net`'s session opening compares
+    /// this.
+    ///
+    /// Each value is hashed by its `Debug` form, streamed into the hasher, so a field added to one
+    /// of them is covered without a list to keep; none holds a map or a pointer, whose form would
+    /// differ from run to run. The same build gives the same hash everywhere, another build may
+    /// not. It costs a formatting of every collider's geometry — something to ask once, at a
+    /// session's start, not every step.
+    pub fn settings_hash(&self) -> u64 {
+        use std::fmt::Write as _;
+        use std::hash::Hasher as _;
+        /// `fmt::Write` into a hasher: a `Debug` form hashed as it is written, never built.
+        struct Into<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+        impl std::fmt::Write for Into<'_> {
+            fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                self.0.write(s.as_bytes());
+                Ok(())
+            }
+        }
+        // Exhaustive, as `snapshot` is and for its reason: a field added to the world has to say
+        // whether it decides how the world steps.
+        let PhysicsWorld {
+            // ── Settings ──
+            integrator,
+            solver,
+            joint_solver,
+            substep_rate,
+            gravity_fields,
+            fluid_zones,
+            joints,
+            entities,
+            rigid_bodies,
+            colliders,
+
+            // ── State: `state_hash`'s, or carried in a snapshot. ──
+            transforms: _,
+            velocities: _,
+            contact_cache: _,
+            accumulator: _,
+
+            // ── Nothing a step reads to decide where a body goes: inert weather, derived
+            //    structures, the last step's output, control flags, history and an asset cache. ──
+            weather: _,
+            max_history_frames: _,
+            watchlist: _,
+            spatial_hash: _,
+            settled_bounds: _,
+            body_bounds: _,
+            body_revision: _,
+            moved_asleep: _,
+            stepped_gravity: _,
+            #[cfg(feature = "ecs")]
+            ecs_sync: _,
+            entity_index_map: _,
+            ecs_generations: _,
+            departed_contacts: _,
+            collision_events: _,
+            trigger_events: _,
+            fracture_events: _,
+            metrics: _,
+            render_alpha: _,
+            bodies_without_collider: _,
+            joint_poses: _,
+            is_paused: _,
+            step_once: _,
+            persisting_contact_events: _,
+            rewind_requested: _,
+            history: _,
+            fracture_cache: _,
+        } = self;
+
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let mut out = Into(&mut h);
+        // Every `write!` below goes to a hasher, which takes anything.
+        let _ = write!(out, "{substep_rate}{integrator:?}{solver:?}{joint_solver:?}{gravity_fields:?}{fluid_zones:?}");
+        for ((entity, body), collider) in entities.iter().zip(rigid_bodies).zip(colliders) {
+            let mut body = *body;
+            body.is_sleeping = false;
+            body.sleep_counter = 0;
+            body.force_accumulator = gizmo_math::Vec3::ZERO;
+            body.torque_accumulator = gizmo_math::Vec3::ZERO;
+            body.contact_response = gizmo_math::Vec3::ZERO;
+            body.pose_driven = false;
+            let _ = write!(out, "{}{body:?}{collider:?}", entity.id());
+        }
+        for j in joints {
+            let crate::joints::Joint {
+                entity_a,
+                entity_b,
+                local_anchor_a,
+                local_anchor_b,
+                break_force,
+                break_torque,
+                collision_enabled,
+                data,
+                // State.
+                is_broken: _,
+                scratch: _,
+            } = j;
+            let _ = write!(
+                out,
+                "{}{}{local_anchor_a:?}{local_anchor_b:?}{break_force:?}{break_torque:?}{collision_enabled}{data:?}",
+                entity_a.id(),
+                entity_b.id(),
+            );
+        }
+        h.finish()
+    }
+
     /// Telemetry and Debugging: Create a JSON snapshot of the physical world state.
     ///
     /// Writes a `physics_snapshot_<timestamp>.json` file to the current working

@@ -46,7 +46,7 @@ pub mod transport;
 
 pub use input_buffer::{InputBuffer, PlayerInput};
 pub use manager::RollbackManager;
-pub use packet::NetworkPacket;
-pub use session::{ApplyInput, ApplyInputWith, LoopbackTransport, RollbackSession, StepRule, Transport};
+pub use packet::{NetworkPacket, ROLLBACK_PROTOCOL};
+pub use session::{ApplyInput, ApplyInputWith, Handshake, LoopbackTransport, Mismatch, RollbackSession, StepRule, Transport};
 pub use snapshot::{EntityState, PhysicsStateSnapshot, RollbackBuffer};
 pub use transport::UdpTransport;

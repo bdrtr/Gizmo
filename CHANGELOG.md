@@ -50,6 +50,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A rollback session checks its peer before it plays** (`RollbackSession::handshake`). Both
+  peers must start from bit-identical worlds stepped alike, and nothing checked it: two peers with a
+  different substep rate, gravity, solver setting or body mass, or with player ids that did not
+  mirror, started together and drifted apart with nothing to say why. Each now sends a
+  `NetworkPacket::Hello` — `ROLLBACK_PROTOCOL`, its player ids, and a hash of its world as it starts
+  (`PhysicsWorld::state_hash`, the new `PhysicsWorld::settings_hash` over what decides how the world
+  steps and a snapshot does not carry, and the tick length) — until the other answers it, and
+  compares the other's with its own. `try_advance` holds until they agree; a mismatch is
+  `Handshake::Refused` with its
+  reason (`Mismatch::{Protocol, Players, World}`), and the session stops simulating.
+
 - **`sarkac`, a pendulum wave.** Fifteen ball-socket pendulums on a static beam, the k-th long
   enough to swing 51 + k times a minute, released together, undamped. `--test` measures every
   period over thirty seconds against the analytic one (a compound pendulum at large amplitude)

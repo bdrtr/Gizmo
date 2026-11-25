@@ -9,7 +9,7 @@
 //!     for deterministic tests in CI.
 
 use super::input_buffer::{InputBuffer, PlayerInput};
-use super::packet::NetworkPacket;
+use super::packet::{NetworkPacket, ROLLBACK_PROTOCOL};
 use gizmo_physics_rigid::{PhysicsWorld, WorldSnapshot};
 use std::collections::HashMap;
 
@@ -141,6 +141,48 @@ pub type ApplyInputWith<'a, S> = dyn Fn(&mut PhysicsWorld, &mut S, u32, &PlayerI
 /// back and decided again with everything else.
 pub type StepRule<'a, S> = dyn Fn(&mut PhysicsWorld, &mut S) + 'a;
 
+/// Where a session's opening stands: what [`RollbackSession::handshake`] reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Handshake {
+    /// The peer's [`NetworkPacket::Hello`] has not arrived yet.
+    Waiting,
+    /// The peer runs the same wire, mirrors the player ids, and starts from the same world with
+    /// the same settings and tick length.
+    Agreed,
+    /// The peer's opening disagreed; the session will not simulate with it.
+    Refused(Mismatch),
+}
+
+/// Why a peer's opening was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Mismatch {
+    /// Its build speaks another version of the wire ([`ROLLBACK_PROTOCOL`]).
+    Protocol {
+        /// This build's.
+        ours: u32,
+        /// The peer's.
+        theirs: u32,
+    },
+    /// The player ids do not mirror: a peer playing `(local 0, remote 1)` needs one playing
+    /// `(local 1, remote 0)`.
+    Players {
+        /// This session's `(local_id, remote_id)`.
+        ours: (u32, u32),
+        /// The peer's `(local_id, remote_id)`.
+        theirs: (u32, u32),
+    },
+    /// The worlds would not step alike: a different start, a different setting (a substep rate,
+    /// a gravity, a solver's iterations, a body's mass or shape), or a different tick length.
+    World {
+        /// This peer's hash ([`NetworkPacket::Hello::world`]).
+        ours: u64,
+        /// The peer's.
+        theirs: u64,
+    },
+}
+
 /// A two-player deterministic rollback session (PhysicsWorld is the authoritative state).
 ///
 /// `S` is the game's own state — a score, a round, a timer — kept and rolled back with the
@@ -196,6 +238,12 @@ pub struct RollbackSession<T: Transport, S = ()> {
     /// The earliest past tick whose remote input contradicted the prediction, gathered by
     /// [`poll_remote`](Self::poll_remote) and consumed by the next [`advance`](Self::advance).
     pending_rollback: Option<u64>,
+    /// This peer's world as it starts, hashed ([`NetworkPacket::Hello::world`]) — on first use, as
+    /// the world may be seeded after the session is made, before its first tick.
+    start: Option<u64>,
+    handshake: Handshake,
+    /// Whether the peer has answered this peer's opening, so it has it.
+    answered: bool,
 }
 
 impl<T: Transport> RollbackSession<T> {
@@ -218,9 +266,8 @@ impl<T: Transport, S: Clone> RollbackSession<T, S> {
     /// session that starts at tick 0. `state` is snapshotted and restored with the world.
     ///
     /// Both peers must start from **bit-identical** worlds (same bodies, added in the
-    /// same order, same `fixed_dt`). Nothing here negotiates or verifies that, and a
-    /// mismatch never raises an error — it only shows up as `state_hash` values that
-    /// never converge. `local_id` / `remote_id` are opaque tags passed straight through
+    /// same order, same settings, same `fixed_dt`). The session's opening checks that before it
+    /// simulates ([`handshake`](Self::handshake)), and refuses a peer that differs. `local_id` / `remote_id` are opaque tags passed straight through
     /// to the [`ApplyInput`] callback, and the two peers must mirror them: if A is
     /// `(0, 1)`, B is `(1, 0)`.
     ///
@@ -234,7 +281,8 @@ impl<T: Transport, S: Clone> RollbackSession<T, S> {
     /// in the window.
     ///
     /// `fixed_dt` is **seconds of simulated time per tick**, handed straight to
-    /// `PhysicsWorld::step`. The world sub-steps it internally at 240 Hz and carries the
+    /// `PhysicsWorld::step`. The world sub-steps it internally at its substep rate
+    /// (`PhysicsWorld::with_substep_rate`, 240 Hz by default) and carries the
     /// remainder in an accumulator that is itself part of the snapshot, so a `dt` that is
     /// not a whole multiple of 1/240 s still rewinds exactly.
     ///
@@ -279,6 +327,72 @@ impl<T: Transport, S: Clone> RollbackSession<T, S> {
             resend_window: 8,
             remote_tick: None,
             pending_rollback: None,
+            start: None,
+            handshake: Handshake::Waiting,
+            answered: false,
+        }
+    }
+
+    /// Where the session's opening stands. Each peer sends a [`NetworkPacket::Hello`] — its wire
+    /// version, its player ids, and a hash of its world as it starts (the state, the settings
+    /// none of a snapshot carries, and the tick length) — until the other answers it, and checks
+    /// the other's against its own. The hash is taken at the session's first poll or tick: seed
+    /// [`world`](Self::world) before that.
+    ///
+    /// **Why it exists.** Both peers must start from bit-identical worlds stepped alike, and
+    /// nothing checked: two peers with a different substep rate, gravity or solver setting, or
+    /// with player ids that did not mirror, started together and drifted apart with nothing to
+    /// say why, their `state_hash` never meeting.
+    ///
+    /// [`try_advance`](Self::try_advance) holds until [`Handshake::Agreed`]. The plain
+    /// [`advance`](Self::advance) predicts on while [`Handshake::Waiting`], as it predicts the
+    /// peer's inputs, and stops simulating once [`Handshake::Refused`].
+    pub fn handshake(&self) -> Handshake {
+        self.handshake
+    }
+
+    /// This peer's opening, or its answer to the other's.
+    fn opening(&mut self, answer: bool) -> NetworkPacket {
+        let (world, fixed_dt) = (&self.world, self.fixed_dt);
+        let start = *self.start.get_or_insert_with(|| {
+            use std::hash::Hasher as _;
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            h.write_u64(world.state_hash());
+            h.write_u64(world.settings_hash());
+            h.write_u32(fixed_dt.to_bits());
+            h.finish()
+        });
+        NetworkPacket::Hello { protocol: ROLLBACK_PROTOCOL, player: self.local_id, expects: self.remote_id, world: start, answer }
+    }
+
+    /// The peer's opening against this one's, which it is answered with unless it is an answer
+    /// itself. Answered whatever it says, and every time: the peer repeats it until it hears, and a
+    /// peer that is refused has to be told why as much as one that agrees.
+    fn heard(&mut self, (protocol, player, expects): (u32, u32, u32), world: u64, answer: bool) {
+        let mine = self.opening(true);
+        if answer {
+            self.answered = true;
+        } else {
+            self.transport.send(&mine);
+        }
+        let NetworkPacket::Hello { world: ours, .. } = mine else {
+            return;
+        };
+        if self.handshake != Handshake::Waiting {
+            return;
+        }
+        self.handshake = if protocol != ROLLBACK_PROTOCOL {
+            Handshake::Refused(Mismatch::Protocol { ours: ROLLBACK_PROTOCOL, theirs: protocol })
+        } else if (player, expects) != (self.remote_id, self.local_id) {
+            Handshake::Refused(Mismatch::Players { ours: (self.local_id, self.remote_id), theirs: (player, expects) })
+        } else if world != ours {
+            Handshake::Refused(Mismatch::World { ours, theirs: world })
+        } else {
+            Handshake::Agreed
+        };
+        match self.handshake {
+            Handshake::Refused(why) => tracing::error!(?why, "the rollback peer will not step alike; the session stops"),
+            _ => tracing::info!(local_id = self.local_id, remote_id = self.remote_id, "rollback peers agree"),
         }
     }
 
@@ -298,8 +412,18 @@ impl<T: Transport, S: Clone> RollbackSession<T, S> {
     /// any that contradict a past prediction, for the next [`advance`](Self::advance) to roll
     /// back to. What a waiting peer calls each frame so it hears the other one catch up.
     pub fn poll_remote(&mut self) {
+        // Its opening until the peer has answered it: an input is no sign that it has it, a peer on
+        // the plain `advance` sends them while it waits.
+        if !self.answered {
+            let mine = self.opening(false);
+            self.transport.send(&mine);
+        }
         let t = self.tick;
         for pkt in self.transport.poll() {
+            if let NetworkPacket::Hello { protocol, player, expects, world, answer } = pkt {
+                self.heard((protocol, player, expects), world, answer);
+                continue;
+            }
             if let NetworkPacket::Input(ri) = pkt {
                 let predicted = self.remote_buf.get_or_predict(ri.tick);
                 self.remote_buf.insert(ri);
@@ -336,6 +460,12 @@ impl<T: Transport, S: Clone> RollbackSession<T, S> {
         rule: &StepRule<'_, S>,
         max_lead: u64,
     ) -> bool {
+        if self.handshake != Handshake::Agreed {
+            self.poll_remote();
+            if self.handshake != Handshake::Agreed {
+                return false;
+            }
+        }
         if self.frames_ahead() > max_lead {
             self.poll_remote();
             return false;
@@ -385,6 +515,11 @@ impl<T: Transport, S: Clone> RollbackSession<T, S> {
     /// round's end), so a rollback decides it again.
     #[tracing::instrument(skip_all, name = "rollback_advance")]
     pub fn advance_with(&mut self, mut local_input: PlayerInput, apply: &ApplyInputWith<'_, S>, rule: &StepRule<'_, S>) {
+        if matches!(self.handshake, Handshake::Refused(_)) {
+            // Still answering: the peer may not have heard why yet.
+            self.poll_remote();
+            return;
+        }
         let t = self.tick;
         local_input.tick = t;
         self.local_buf.insert(local_input);
@@ -491,6 +626,121 @@ mod tests {
     fn input_for(player: u32, tick: usize) -> PlayerInput {
         let r = (tick.wrapping_mul(if player == 0 { 2654435761 } else { 40503 }) >> 20) % 7;
         PlayerInput { tick: tick as u64, buttons: 0, joystick_x: (r as i8 - 3) * 30, joystick_y: 0 }
+    }
+
+    /// Two sessions over a pair, `b_world` for the second peer; both driven with `try_advance`
+    /// for `frames`. Returns the two sessions.
+    fn opening(
+        b_world: PhysicsWorld,
+        b_ids: (u32, u32),
+        drop_modulo: u32,
+        frames: usize,
+    ) -> (RollbackSession<LoopbackTransport>, RollbackSession<LoopbackTransport>) {
+        let (mut ta, mut tb) = LoopbackTransport::pair(2, drop_modulo);
+        // One packet out of each first, so with every second one dropped each peer's first
+        // opening is the one lost.
+        ta.send(&NetworkPacket::Ping { timestamp: 0 });
+        tb.send(&NetworkPacket::Ping { timestamp: 0 });
+        let mut a = RollbackSession::new(build_scene(), ta, 0, 1, 32, DT);
+        let mut b = RollbackSession::new(b_world, tb, b_ids.0, b_ids.1, 32, DT);
+        let apply_fn: &ApplyInput = &apply;
+        for f in 0..frames {
+            a.try_advance(input_for(0, f), apply_fn, 8);
+            b.try_advance(input_for(1, f), apply_fn, 8);
+        }
+        (a, b)
+    }
+
+    /// Two peers set up alike agree, through lag and a lost opening — every second packet is
+    /// dropped, so each peer's first `Hello` is lost — and then play.
+    #[test]
+    fn peers_set_up_alike_agree_and_play() {
+        let (a, b) = opening(build_scene(), (1, 0), 2, 40);
+        assert_eq!((a.handshake(), b.handshake()), (Handshake::Agreed, Handshake::Agreed));
+        assert!(a.tick > 20 && b.tick > 20, "agreed but held: ticks {} and {}", a.tick, b.tick);
+    }
+
+    /// A peer whose world would step differently — another substep rate, gravity or solver
+    /// iteration count, or the same bodies with another mass — is refused on both sides, and
+    /// neither simulates a tick. Each of these started and drifted apart unseen.
+    #[test]
+    fn a_peer_whose_world_steps_differently_is_refused() {
+        let mut heavier = build_scene();
+        heavier.rigid_bodies[2].mass = 2.0;
+        let mut iterations = build_scene();
+        iterations.solver.iterations += 1;
+        let differences = [
+            ("substep rate", build_scene().with_substep_rate(120).unwrap()),
+            ("gravity", build_scene().with_gravity(Vec3::new(0.0, -9.0, 0.0))),
+            ("solver iterations", iterations),
+            ("a body's mass", heavier),
+        ];
+        for (what, b_world) in differences {
+            let (a, b) = opening(b_world, (1, 0), 0, 30);
+            for (peer, s) in [("a", &a), ("b", &b)] {
+                assert!(matches!(s.handshake(), Handshake::Refused(Mismatch::World { .. })), "{what}: {peer} {:?}", s.handshake());
+                assert_eq!(s.tick, 0, "{what}: {peer} simulated with a peer it refused");
+            }
+        }
+    }
+
+    /// Player ids that do not mirror — both peers playing as 0 against 1 — are refused.
+    #[test]
+    fn peers_whose_ids_do_not_mirror_are_refused() {
+        let (a, b) = opening(build_scene(), (0, 1), 0, 30);
+        assert_eq!(a.handshake(), Handshake::Refused(Mismatch::Players { ours: (0, 1), theirs: (0, 1) }));
+        assert!(matches!(b.handshake(), Handshake::Refused(Mismatch::Players { .. })));
+        assert_eq!((a.tick, b.tick), (0, 0));
+    }
+
+    /// A transport that loses the first `lose` openings sent through it, and nothing else.
+    struct LosesOpenings(LoopbackTransport, u32);
+    impl Transport for LosesOpenings {
+        fn send(&mut self, packet: &NetworkPacket) {
+            if matches!(packet, NetworkPacket::Hello { .. }) && self.1 > 0 {
+                self.1 -= 1;
+                return;
+            }
+            self.0.send(packet);
+        }
+        fn poll(&mut self) -> Vec<NetworkPacket> {
+            self.0.poll()
+        }
+    }
+
+    /// An input from the peer is no sign that it has this one's opening: on the plain `advance`
+    /// it sends them while it waits. The first openings of `a` are lost and `b`'s inputs arrive;
+    /// `b` still hears `a` and both agree.
+    #[test]
+    fn a_peer_that_plays_while_it_waits_still_hears_the_opening() {
+        let (ta, tb) = LoopbackTransport::pair(0, 0);
+        let mut a = RollbackSession::new(build_scene(), LosesOpenings(ta, 5), 0, 1, 32, DT);
+        let mut b = RollbackSession::new(build_scene(), LosesOpenings(tb, 0), 1, 0, 32, DT);
+        let apply_fn: &ApplyInput = &apply;
+        for f in 0..20 {
+            a.try_advance(input_for(0, f), apply_fn, 8);
+            b.advance(input_for(1, f), apply_fn);
+        }
+        assert_eq!((a.handshake(), b.handshake()), (Handshake::Agreed, Handshake::Agreed));
+        assert!(a.tick > 0);
+    }
+
+    /// The plain `advance` predicts on before the opening is answered, and stops once refused —
+    /// on both sides, though the openings of one were lost at first.
+    #[test]
+    fn advance_stops_once_the_peer_is_refused() {
+        let (ta, tb) = LoopbackTransport::pair(3, 0);
+        let mut a = RollbackSession::new(build_scene(), LosesOpenings(ta, 5), 0, 1, 32, DT);
+        let mut b = RollbackSession::new(build_scene().with_substep_rate(120).unwrap(), LosesOpenings(tb, 0), 1, 0, 32, DT);
+        let apply_fn: &ApplyInput = &apply;
+        for f in 0..40 {
+            a.advance(input_for(0, f), apply_fn);
+            b.advance(input_for(1, f), apply_fn);
+        }
+        for (peer, s) in [("a", &a), ("b", &b)] {
+            assert!(matches!(s.handshake(), Handshake::Refused(Mismatch::World { .. })), "{peer}: {:?}", s.handshake());
+            assert!(s.tick > 0 && s.tick < 40, "{peer} ran {} ticks: it should run until it heard, then stop", s.tick);
+        }
     }
 
     #[test]

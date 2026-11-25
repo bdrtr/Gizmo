@@ -28,7 +28,7 @@
 //!   bağlıydı ama bunu söylemiyordu. **Düzeltildi.**
 
 use gizmo::core::input::{Input, MoveKeys};
-use gizmo::net::rollback::{LoopbackTransport, PlayerInput, RollbackSession, Transport, UdpTransport};
+use gizmo::net::rollback::{Handshake, LoopbackTransport, PlayerInput, RollbackSession, Transport, UdpTransport};
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::physics::{BodyHandle, Collider, RigidBody, Velocity};
 use gizmo::prelude::*;
@@ -383,10 +383,16 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         game.hud,
         &format!("mavi {}  —  kırmızı {}\n{mode}, {ahead} tick önde\nmavi: WASD   kırmızı: oklar", m.score[0], m.score[1]),
     );
-    let banner = match m.winner {
-        Some(0) => "Mavi kazandı!\nBoşluk: yeni maç",
-        Some(_) => "Kırmızı kazandı!\nBoşluk: yeni maç",
-        None => "",
+    let handshake = match &game.net {
+        Net::Local { a, .. } => a.handshake(),
+        Net::Udp { s, .. } => s.handshake(),
+    };
+    let banner = match (handshake, m.winner) {
+        (Handshake::Waiting, _) => "Karşı taraf bekleniyor…",
+        (Handshake::Refused(_), _) => "Karşı taraf başka bir sürüm ya da başka bir dünya\nAyrıntı günlükte",
+        (_, Some(0)) => "Mavi kazandı!\nBoşluk: yeni maç",
+        (_, Some(_)) => "Kırmızı kazandı!\nBoşluk: yeni maç",
+        (_, None) => "",
     };
     set_text(world, game.banner, banner);
     world.insert_resource(game);
