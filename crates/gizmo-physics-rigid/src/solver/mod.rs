@@ -155,6 +155,13 @@ thread_local! {
         std::cell::RefCell::new(OrderScratch::default());
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test's stand-in for a job the pool runs on this thread while it waits in the ordering's key
+    /// sort: taken and run once, at that point.
+    static WHILE_SORTING: std::cell::Cell<Option<fn()>> = const { std::cell::Cell::new(None) };
+}
+
 /// Returns the island's maximum support depth (graph distance in contacts from the
 /// nearest anchor) — used to scale the block solver's iteration count so a tall stack
 /// gets enough sweeps for support to propagate up the column. When `reorder` is true,
@@ -175,8 +182,14 @@ fn support_order_manifolds(
     // `medges[i]` = local endpoints of manifold i (None if an endpoint isn't mapped —
     // those keep last, deterministically by entity pair, matching the solver's own
     // `continue` on an unmapped manifold).
-    ORDER_SCRATCH.with(|sc| {
-    let sc = &mut *sc.borrow_mut();
+    // The scratch is taken out for the call and put back after, not borrowed through it: a big
+    // island's keys are sorted on rayon (below), and a thread waiting in that sort runs other jobs
+    // meanwhile — another island's ordering among them, on this same thread. Borrowed, that second
+    // call found the scratch in use and panicked ("RefCell already borrowed"; 4000 spheres at
+    // 240 Hz, every run, from 77afdc15 to the fix). Taken, it finds an empty one and makes its own.
+    let mut taken = ORDER_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+    let depth = (|| {
+    let sc = &mut taken;
     let local = &mut sc.local;
     let global = &mut sc.global;
     let is_anchor = &mut sc.is_anchor;
@@ -302,6 +315,10 @@ fn support_order_manifolds(
     order.extend(0..n);
     // A pair is in the island once, so no two keys are equal and any sort leaves one order: on
     // several threads for a big island.
+    #[cfg(test)]
+    if let Some(job) = WHILE_SORTING.with(|hook| hook.take()) {
+        job();
+    }
     if n >= tgs::PARALLEL_MANIFOLDS {
         order.par_sort_unstable_by_key(|&i| keys[i]);
     } else {
@@ -326,7 +343,9 @@ fn support_order_manifolds(
     }
 
     max_depth
-    })
+    })();
+    ORDER_SCRATCH.with(|cell| *cell.borrow_mut() = taken);
+    depth
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1664,6 +1683,46 @@ mod support_order_tests {
             vec![(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)],
             "expected anchor-first bottom-up support order"
         );
+    }
+
+    /// An island ordered on a thread that is in the middle of ordering another. A big island's keys
+    /// are sorted on the pool, and a thread waiting in that sort runs other jobs meanwhile — another
+    /// island's ordering among them, on the same thread. The ordering held its scratch borrowed
+    /// across the sort, and the nested call panicked ("RefCell already borrowed"; 4000 spheres at
+    /// 240 Hz, every run, until the fix). The test runs the nested ordering at that point itself
+    /// (`WHILE_SORTING`), so it does not depend on the pool's timing; both orders must come out as
+    /// they do alone.
+    #[test]
+    fn an_island_ordered_while_another_is_sorting_gets_its_own_scratch() {
+        fn bodies() -> (Vec<RigidBody>, rustc_hash::FxHashMap<u32, usize>) {
+            let mut rigid_bodies = vec![RigidBody::new_static()];
+            rigid_bodies.extend((0..64).map(|_| RigidBody::new(1.0, true)));
+            let map = (0..rigid_bodies.len() as u32).map(|i| (i, i as usize)).collect();
+            (rigid_bodies, map)
+        }
+        // A chain from the ground, handed over out of order.
+        fn chain(len: u32) -> Vec<ContactManifold> {
+            let mut ms: Vec<ContactManifold> = (0..len).map(|k| if k == 0 { manifold(0, 1) } else { manifold(k, k + 1) }).collect();
+            ms.reverse();
+            ms
+        }
+        fn ordered(len: u32) -> Vec<(u32, u32)> {
+            let (rigid_bodies, map) = bodies();
+            let mut ms = chain(len);
+            order_by_ids(&mut ms, &rigid_bodies, &map);
+            id_pairs(&ms)
+        }
+        thread_local! {
+            static NESTED: std::cell::RefCell<Vec<(u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        let (outer_alone, inner_alone) = (ordered(40), ordered(12));
+
+        WHILE_SORTING.with(|hook| hook.set(Some(|| NESTED.with(|n| *n.borrow_mut() = ordered(12)))));
+        let outer = ordered(40);
+        assert!(WHILE_SORTING.with(|hook| hook.take()).is_none(), "the nested ordering never ran");
+        assert_eq!(outer, outer_alone);
+        assert_eq!(NESTED.with(|n| n.borrow().clone()), inner_alone);
+        assert_eq!(ordered(40), outer_alone, "the scratch put back after the nested call is unusable");
     }
 
     /// Anchor-free island (no static body): still a deterministic total order,
