@@ -1170,6 +1170,17 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A ball landing on a ramp leaves it rolling, at a coarse rate too.** The contacts a substep's
+  motion closes before the pair touches (`near_contacts`) were taken where the substep's end has the
+  pair, and deep there a point says nothing about where the two meet: a ball dropped 9.9 m onto a
+  30° ramp at 60 Hz ended the substep with its centre 7.5 cm inside, the narrow phase put the point
+  on the ramp's face, and brought back with the ball it sat above the ball's centre — the friction of
+  the landing spun the ball the wrong way (−53 rad/s, its underside slipping at 9.5 m/s). Where the
+  deepest point is deeper than the solver's slop, the pair is now tested again just past where it
+  meets, and its points brought back from there. Landings onto 5–45° from 3–30 m leave within 2–3 %
+  of the 5/7 a solid ball keeps rolling, at 60 Hz as at 240 (`tests/landing.rs`); before, 10° from
+  3 m at 60 Hz left at 0.54 m/s of 0.91, and 30° from 30 m at 240 Hz at 6.1 of 8.5.
+
 - **A CCD body has the friction of its impacts.** An island holding a CCD body was solved on the
   split-impulse path instead of TGS-soft, whose bounce pass gives a speculative contact its normal
   impulse and no friction: a CCD ball landing on a ramp kept all its speed along it and no spin,
