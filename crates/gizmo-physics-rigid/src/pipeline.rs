@@ -439,24 +439,50 @@ impl PhysicsWorld {
         // motorda kimsenin okumadığı bir sayaç için kalıcı bir vergi, ve buradan okunan sayı
         // (duvar saati) zaten daha kullanışlı — CPU-ms yerine fazın gerçekte ne kadar sürdüğü.
         let _t = crate::profile::Scope::new(&crate::profile::PHASES.dispatch);
-        let examine = |&pair: &(BodyHandle, BodyHandle)| self.examine_pair(pair, &disabled_joint_pairs, dt);
-        // On the calling thread when there are few pairs (`worth_parallel_jobs`); order is kept.
-        let examined: Vec<Examined> = if worth_parallel_jobs(candidates.len(), PARALLEL_MIN_PAIRS) {
-            candidates.par_iter().filter_map(examine).collect()
-        } else {
-            candidates.iter().filter_map(examine).collect()
-        };
+        // A long list goes out to the threads in one pass, each pair's dormancy asked by the
+        // worker that tests it (`examine_pair`). A short one is sorted out here first, and only
+        // the pairs to test go out, when they are enough to pay for the threads
+        // (`worth_parallel_jobs`): a settled tower's candidates are all dormant, and handing out a
+        // list that costs nothing to go through woke the whole pool every substep (0.06 -> 0.18 ms
+        // a frame for the bench's 200-box tower). Either way the tested pairs keep the candidates'
+        // order.
+        let (dormant_pairs, mut narrowphase_results): (Vec<(BodyHandle, BodyHandle)>, Vec<PairContacts>) =
+            if candidates.len() >= PARALLEL_MIN_PAIR_CHECKS {
+                let examine = |&pair: &(BodyHandle, BodyHandle)| self.examine_pair(pair, &disabled_joint_pairs, dt);
+                let examined: Vec<Examined> = candidates.par_iter().filter_map(examine).collect();
+                let mut dormant = Vec::new();
+                let mut found = Vec::with_capacity(examined.len());
+                for e in examined {
+                    match e {
+                        Examined::Dormant(pair) => dormant.push(pair),
+                        Examined::Found(contacts) => found.push(contacts),
+                    }
+                }
+                (dormant, found)
+            } else {
+                let mut dormant = Vec::new();
+                let mut tested = Vec::with_capacity(candidates.len());
+                for &pair in &candidates {
+                    let rows = self.rows_of(&pair);
+                    if self.pair_is_dormant(rows) {
+                        dormant.push(pair);
+                    } else {
+                        tested.push((pair, rows));
+                    }
+                }
+                let test = |&(pair, (a, b)): &((BodyHandle, BodyHandle), (Option<usize>, Option<usize>))| {
+                    self.pair_contacts(pair, (a?, b?), &disabled_joint_pairs, dt)
+                };
+                let found = if worth_parallel_jobs(tested.len(), PARALLEL_MIN_PAIRS) {
+                    tested.par_iter().filter_map(test).collect()
+                } else {
+                    tested.iter().filter_map(test).collect()
+                };
+                (dormant, found)
+            };
         drop(_t);
         let candidate_count = candidates.len();
         drop(candidates);
-        let mut dormant_pairs: Vec<(BodyHandle, BodyHandle)> = Vec::new();
-        let mut narrowphase_results: Vec<PairContacts> = Vec::with_capacity(examined.len());
-        for found in examined {
-            match found {
-                Examined::Dormant(pair) => dormant_pairs.push(pair),
-                Examined::Found(contacts) => narrowphase_results.push(contacts),
-            }
-        }
         // **In id order, not the tree's.** The broadphase hands its pairs over in whatever order
         // its trees' shapes walk them, and that order became the collision events' order — which
         // what reacts to them (the fracture system spawning debris, a game's own handler) turns
@@ -555,8 +581,22 @@ impl PhysicsWorld {
         // Cache aşağıda KORUNUR (yoksa ended-
         // collision wake sahte tetiklenir). En az biri aktifse normal narrowphase çalışır
         // (temas + wake yakalanır), böylece düşen/itilen cisim uyuyan komşuyu uyandırır.
-        let entity_map = &self.entity_index_map;
-        let (a, b) = (entity_map.get(&pair.0.id()).copied(), entity_map.get(&pair.1.id()).copied());
+        let (a, b) = self.rows_of(&pair);
+        if self.pair_is_dormant((a, b)) {
+            return Some(Examined::Dormant(pair));
+        }
+        self.pair_contacts(pair, (a?, b?), disabled_joint_pairs, dt).map(Examined::Found)
+    }
+
+    /// The rows of a pair's two bodies, `None` for one the world does not hold.
+    fn rows_of(&self, &(a, b): &(BodyHandle, BodyHandle)) -> (Option<usize>, Option<usize>) {
+        (self.entity_index_map.get(&a.id()).copied(), self.entity_index_map.get(&b.id()).copied())
+    }
+
+    /// Whether neither of a pair's bodies (by `rows_of`) can make a new contact: each static, a
+    /// sleeping dynamic or a kinematic standing still. A body the world does not hold counts as
+    /// active, so its pair is tested and `pair_contacts` drops it.
+    fn pair_is_dormant(&self, (a, b): (Option<usize>, Option<usize>)) -> bool {
         let is_active = |i: Option<usize>| -> bool {
             match i {
                 Some(i) => {
@@ -566,14 +606,10 @@ impl PhysicsWorld {
                             && (self.velocities[i].linear.length_squared() > 1e-8
                                 || self.velocities[i].angular.length_squared() > 1e-8))
                 }
-                // Not a body this world holds: tested, and `pair_contacts` drops it.
                 None => true,
             }
         };
-        if !is_active(a) && !is_active(b) {
-            return Some(Examined::Dormant(pair));
-        }
-        self.pair_contacts(pair, (a?, b?), disabled_joint_pairs, dt).map(Examined::Found)
+        !is_active(a) && !is_active(b)
     }
 
     fn collision_disabled_joint_pairs(&self) -> FxHashSet<(u32, u32)> {
