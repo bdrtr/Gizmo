@@ -74,7 +74,7 @@ fn landing_on_a_ramp(tilt_deg: f32, height: f32, hz: u32) -> (f32, f32, f32) {
     let tilt = Quat::from_rotation_z(tilt_deg.to_radians());
     let mut ramp = Transform::new(Vec3::new(0.0, -0.5, 0.0));
     ramp.rotation = tilt;
-    w.add_body(BodyHandle::from_id(1), RigidBody::new_static(), ramp, Velocity::default(), Collider::box_collider(Vec3::new(10.0, 0.5, 10.0)));
+    w.add_body(BodyHandle::from_id(1), RigidBody::new_static(), ramp, Velocity::default(), Collider::box_collider(Vec3::new(30.0, 0.5, 10.0)));
     let ball = Collider::sphere(0.1);
     let mut rb = RigidBody::new(1.0, true);
     rb.update_inertia_from_collider(&ball);
@@ -105,7 +105,10 @@ fn landing_on_a_ramp(tilt_deg: f32, height: f32, hz: u32) -> (f32, f32, f32) {
 #[test]
 fn a_ball_landing_on_a_ramp_leaves_it_rolling() {
     for hz in [60u32, 240] {
-        for (tilt, height) in [(5.0, 10.0), (10.0, 3.0), (30.0, 3.0), (30.0, 9.9), (45.0, 10.0)] {
+        // From 30 m and more a 60 Hz substep makes it a fast pair, landing on the contacts where
+        // it meets (`met_contacts`): before, on a speculative contact at its centre, it stopped dead
+        // along the ramp with no spin.
+        for (tilt, height) in [(5.0, 10.0), (10.0, 3.0), (30.0, 3.0), (30.0, 9.9), (45.0, 10.0), (10.0, 30.0), (30.0, 30.0), (30.0, 60.0)] {
             let (before, after, slip) = landing_on_a_ramp(tilt, height, hz);
             let rolling = before * 5.0 / 7.0;
             assert!(
@@ -114,7 +117,4 @@ fn a_ball_landing_on_a_ramp_leaves_it_rolling() {
             );
         }
     }
-    // At 240 Hz a 30 m drop is not a fast pair, and lands the same way.
-    let (before, after, _) = landing_on_a_ramp(30.0, 30.0, 240);
-    assert!((after - before * 5.0 / 7.0).abs() <= 0.06 * (before * 5.0 / 7.0).abs(), "240 Hz, 30° from 30 m: {before:.2} -> {after:.2} m/s");
 }

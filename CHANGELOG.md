@@ -1170,6 +1170,19 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A fast ball landing on a ramp leaves it rolling too.** A pair closing too fast for discrete
+  detection landed on a speculative contact at the moving body's centre: no lever arm, so the
+  impact's friction took the slide out with no spin — a ball dropped 30 m onto a 30° ramp at 60 Hz
+  stopped dead along it, where rolling keeps 5/7 of the speed (8.5 m/s). It now lands on the
+  contacts where the pair meets (`met_contacts`, from the gap the new `Gjk::speculative_meeting`
+  returns beside the contact), brought back as `near_contacts` brings its points — when their
+  normals pass through each moving body's centre of mass, a ball's always. Off the centre a fast
+  pair's substep is far too long for the solve's linear account of a turn: a 5 cm capsule at
+  923 m/s, struck end first, met its contact's limit by 9000 rad/s of spin and went through the
+  wall. Those keep the centre's contact, which stops the centre. Fast landings onto 10–30° from 30
+  and 60 m now leave at 60 Hz as at 240, within 3 % of rolling (`tests/landing.rs`); no seeded shot
+  goes through a wall (`tests/angled_shots.rs`, 24000 swept).
+
 - **A ball landing on a ramp leaves it rolling, at a coarse rate too.** The contacts a substep's
   motion closes before the pair touches (`near_contacts`) were taken where the substep's end has the
   pair, and deep there a point says nothing about where the two meet: a ball dropped 9.9 m onto a

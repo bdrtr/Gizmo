@@ -709,7 +709,7 @@ impl PhysicsWorld {
             // beyond what the narrow phase answers when it touches; a CCD body took a speculative
             // contact there too, at its centre, and a ball beside a wall was held by its friction.
             if !near && (rb_a.ccd_enabled || rb_b.ccd_enabled || fast) {
-                if let Some(sc) = gizmo_physics_core::Gjk::speculative_contact(
+                if let Some((sc, gap)) = gizmo_physics_core::Gjk::speculative_meeting(
                     &collider_a.shape,
                     transform_a.position,
                     transform_a.rotation,
@@ -722,7 +722,33 @@ impl PhysicsWorld {
                     rb_b.inv_mass(),
                     dt,
                 ) {
-                    contacts.push(sc);
+                    // A fast solid pair lands on the contacts where it meets (`met_contacts`) when their
+                    // normals pass through each moving body's centre of mass — a ball's, or a round
+                    // end struck square on. Then the normal impulse turns nothing, and the solve cannot
+                    // meet a point's limit by spinning the body: its centre stops. Off the centre, a
+                    // substep of a fast pair is far too long for the solve's linear account of the
+                    // turn: a 5 cm capsule at 923 m/s struck a wall end first, its point's limit was
+                    // met by 9000 rad/s of spin, and its centre went on through (2026-11-25). Those
+                    // keep the speculative contact, at the centre, which stops the centre.
+                    let met = if fast && !collider_a.is_trigger && !collider_b.is_trigger {
+                        let met = self.met_contacts((idx_a, idx_b), gap, sc.normal, dt);
+                        let through_centre = |c: &gizmo_physics_core::ContactPoint, i: usize| {
+                            let (rb, t) = (&self.rigid_bodies[i], &self.transforms[i]);
+                            if !rb.is_dynamic() {
+                                return true;
+                            }
+                            let r = c.point - (t.position + t.rotation * rb.center_of_mass);
+                            r.cross(c.normal).length() <= 1e-3 * r.length().max(1e-3)
+                        };
+                        if met.iter().all(|c| through_centre(c, idx_a) && through_centre(c, idx_b)) { met } else { Vec::new() }
+                    } else {
+                        Vec::new()
+                    };
+                    if met.is_empty() {
+                        contacts.push(sc);
+                    } else {
+                        contacts = met;
+                    }
                 }
             }
         }
@@ -1900,15 +1926,7 @@ impl PhysicsWorld {
     /// the joints that held it; at 240 Hz a box dropped from 5 m came to rest 1.35 mm deep
     /// (2026-11-24). Now 2.7 mm and 0.05.
     fn near_contacts(&self, (idx_a, idx_b): (usize, usize), dt: f32) -> Vec<gizmo_physics_core::ContactPoint> {
-        let pose = |i: usize, after: f32| {
-            let (t, v, rb) = (&self.transforms[i], &self.velocities[i], &self.rigid_bodies[i]);
-            if rb.is_static() || rb.is_sleeping {
-                (t.position, t.rotation)
-            } else {
-                advanced(t, v, after)
-            }
-        };
-        let ((mut pa, qa), (mut pb, qb)) = (pose(idx_a, dt), pose(idx_b, dt));
+        let ((pa, qa), (pb, qb)) = (self.pose_after(idx_a, dt), self.pose_after(idx_b, dt));
         // Bounds apart at the substep's end, with a centimetre to spare over every narrow-phase
         // tolerance (a millimetre at most): no point to find, and no full test to run. Most of a
         // pile's candidate pairs are near without touching, and each paid a second narrow-phase
@@ -1919,18 +1937,10 @@ impl PhysicsWorld {
             return Vec::new();
         }
         let (shape_a, shape_b) = (&self.colliders[idx_a].shape, &self.colliders[idx_b].shape);
-        let mut found = NarrowPhase::test_collision_manifold(shape_a, pa, qa, shape_b, pb, qb);
+        let found = NarrowPhase::test_collision_manifold(shape_a, pa, qa, shape_b, pb, qb);
         if found.is_empty() {
             return found;
         }
-        // How far the material point at `p` (at the pose `after` from now) moved to get there.
-        let travel = |i: usize, end: Vec3, p: Vec3, after: f32| {
-            let (v, rb) = (&self.velocities[i], &self.rigid_bodies[i]);
-            if rb.is_static() || rb.is_sleeping {
-                return Vec3::ZERO;
-            }
-            (v.linear + v.angular.cross(p - end)) * after
-        };
         let slop = self.solver.slop;
         // **The contact is the one where the pair meets, not where the substep's end has it.** Deep
         // at the end, a point says nothing about where the two touch: a ball dropped 9.9 m onto a
@@ -1940,18 +1950,84 @@ impl PhysicsWorld {
         // point is deeper than the solver lets a contact sink, the pair is tested again just past
         // where it meets — the depth against how far the motion closed it there gives the moment —
         // a slop's depth into each other.
-        let mut after = dt;
         if let Some(deepest) = found.iter().max_by(|x, y| x.penetration.total_cmp(&y.penetration)) {
-            let closed = (travel(idx_a, pa, deepest.point, dt) - travel(idx_b, pb, deepest.point, dt)).dot(deepest.normal);
+            let closed = (self.travel_of(idx_a, pa, deepest.point, dt) - self.travel_of(idx_b, pb, deepest.point, dt)).dot(deepest.normal);
             if deepest.penetration > slop && closed > deepest.penetration {
                 let meets = dt * (1.0 - (deepest.penetration - slop) / closed);
-                let ((ma, mqa), (mb, mqb)) = (pose(idx_a, meets), pose(idx_b, meets));
+                let ((ma, mqa), (mb, mqb)) = (self.pose_after(idx_a, meets), self.pose_after(idx_b, meets));
                 let there = NarrowPhase::test_collision_manifold(shape_a, ma, mqa, shape_b, mb, mqb);
                 if !there.is_empty() {
-                    (found, after, pa, pb) = (there, meets, ma, mb);
+                    return self.brought_back((idx_a, idx_b), there, meets);
                 }
             }
         }
+        self.brought_back((idx_a, idx_b), found, dt)
+    }
+
+    /// The contacts of a fast pair where it meets: `gap` apart now along `normal` (A to B), closing
+    /// along it at the bodies' speeds, so meeting `gap / closing` from now. Tested a slop past that
+    /// and brought back to now as `near_contacts` brings its points, they are the impact's real
+    /// points, with its lever arms. Empty when the pair does not close along the normal, or the
+    /// narrow phase finds nothing there (a body turning out of the way): the caller keeps the
+    /// speculative contact.
+    ///
+    /// A fast pair's contact was the speculative one alone, at the moving body's centre: its
+    /// impact had no lever arm, and its friction took the slide out of a ball landing on a ramp
+    /// with no spin — dropped 30 m onto 30° at 60 Hz it stopped dead along the ramp, where
+    /// rolling keeps 5/7 of the speed (2026-11-25).
+    fn met_contacts(&self, (idx_a, idx_b): (usize, usize), gap: f32, normal: Vec3, dt: f32) -> Vec<gizmo_physics_core::ContactPoint> {
+        let speed = |i: usize| {
+            let rb = &self.rigid_bodies[i];
+            if rb.is_static() || rb.is_sleeping { Vec3::ZERO } else { self.velocities[i].linear }
+        };
+        let closing = (speed(idx_a) - speed(idx_b)).dot(normal);
+        if closing <= 1e-6 {
+            return Vec::new();
+        }
+        self.contacts_after((idx_a, idx_b), ((gap + self.solver.slop) / closing).min(dt))
+    }
+
+    /// The pair's contacts at the poses its velocities take it to `after` from now, brought back.
+    fn contacts_after(&self, (idx_a, idx_b): (usize, usize), after: f32) -> Vec<gizmo_physics_core::ContactPoint> {
+        let ((pa, qa), (pb, qb)) = (self.pose_after(idx_a, after), self.pose_after(idx_b, after));
+        let found = NarrowPhase::test_collision_manifold(&self.colliders[idx_a].shape, pa, qa, &self.colliders[idx_b].shape, pb, qb);
+        if found.is_empty() {
+            return found;
+        }
+        self.brought_back((idx_a, idx_b), found, after)
+    }
+
+    /// A body's pose `after` from now, where its velocity takes it; a static or sleeping one's is
+    /// where it is.
+    fn pose_after(&self, i: usize, after: f32) -> (Vec3, gizmo_math::Quat) {
+        let (t, v, rb) = (&self.transforms[i], &self.velocities[i], &self.rigid_bodies[i]);
+        if rb.is_static() || rb.is_sleeping {
+            (t.position, t.rotation)
+        } else {
+            advanced(t, v, after)
+        }
+    }
+
+    /// How far the material point at `p`, on body `i` at the pose `end` it has `after` from now,
+    /// moved to get there.
+    fn travel_of(&self, i: usize, end: Vec3, p: Vec3, after: f32) -> Vec3 {
+        let (v, rb) = (&self.velocities[i], &self.rigid_bodies[i]);
+        if rb.is_static() || rb.is_sleeping {
+            return Vec3::ZERO;
+        }
+        (v.linear + v.angular.cross(p - end)) * after
+    }
+
+    /// The contacts `found` at the poses `after` from now, brought back to now: each point by its
+    /// bodies' travel to there, its separation the share of that travel along its normal taken off
+    /// its depth there.
+    fn brought_back(
+        &self,
+        (idx_a, idx_b): (usize, usize),
+        mut found: Vec<gizmo_physics_core::ContactPoint>,
+        after: f32,
+    ) -> Vec<gizmo_physics_core::ContactPoint> {
+        let (pa, pb) = (self.pose_after(idx_a, after).0, self.pose_after(idx_b, after).0);
         let (now_a, now_b) = (self.transforms[idx_a].position, self.transforms[idx_b].position);
         // Brought back with the bodies, each by its share of the inverse mass: onto the moving body's
         // surface where the other is fixed — a ball's underside, not the floor under where it is
@@ -1961,9 +2037,10 @@ impl PhysicsWorld {
         // Only what closes by more than the solver lets a resting contact sink (`slop`): a body at
         // rest or rolling on a surface touches it within that and is the narrow phase's as before;
         // an impact would sink a substep's travel.
-        found.retain(|c| (travel(idx_a, pa, c.point, after) - travel(idx_b, pb, c.point, after)).dot(c.normal) > slop);
+        let slop = self.solver.slop;
+        found.retain(|c| (self.travel_of(idx_a, pa, c.point, after) - self.travel_of(idx_b, pb, c.point, after)).dot(c.normal) > slop);
         for c in &mut found {
-            let (da, db) = (travel(idx_a, pa, c.point, after), travel(idx_b, pb, c.point, after));
+            let (da, db) = (self.travel_of(idx_a, pa, c.point, after), self.travel_of(idx_b, pb, c.point, after));
             // The normal points from A to B: A moving along it deepens the contact.
             c.penetration = (c.penetration - (da - db).dot(c.normal)).min(-f32::EPSILON);
             c.point -= if total > 0.0 { (da * wa + db * wb) / total } else { (da + db) * 0.5 };

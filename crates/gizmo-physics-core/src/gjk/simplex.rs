@@ -1,5 +1,12 @@
 use super::*;
 
+/// A speculative contact and the gap it was made for (`Gjk::speculative_meeting`).
+#[derive(Debug, Clone, Copy)]
+struct Speculative {
+    contact: ContactPoint,
+    gap: f32,
+}
+
 impl Gjk {
     /// GJK that returns the final simplex for EPA
     pub(crate) fn gjk_with_simplex<F>(support: F) -> Option<Vec<SupportPoint>>
@@ -543,6 +550,7 @@ impl Gjk {
     /// rotational coupling between two far-apart fast dynamic bodies are out of scope.
     ///
     /// `inv_mass_a` / `inv_mass_b` are the bodies' inverse masses (0 for static).
+    #[allow(clippy::too_many_arguments)]
     pub fn speculative_contact(
         shape_a: &ColliderShape,
         pos_a: Vec3,
@@ -556,18 +564,58 @@ impl Gjk {
         inv_mass_b: f32,
         dt: f32,
     ) -> Option<ContactPoint> {
+        Self::speculative(shape_a, pos_a, rot_a, vel_a, inv_mass_a, shape_b, pos_b, rot_b, vel_b, inv_mass_b, dt).map(|s| s.contact)
+    }
+
+    /// The speculative contact, and the gap it was made for: what [`speculative_contact`](Self::speculative_contact)
+    /// gives, with the separation along its normal that the pair has now. A caller that wants
+    /// the contact where the pair meets — its real points, with the lever arms the impact will
+    /// have — needs the gap to find that moment: the contact's own depth is what the solve may
+    /// close, which stops short of the surface by a skin.
+    #[allow(clippy::too_many_arguments)]
+    pub fn speculative_meeting(
+        shape_a: &ColliderShape,
+        pos_a: Vec3,
+        rot_a: gizmo_math::Quat,
+        vel_a: Vec3,
+        inv_mass_a: f32,
+        shape_b: &ColliderShape,
+        pos_b: Vec3,
+        rot_b: gizmo_math::Quat,
+        vel_b: Vec3,
+        inv_mass_b: f32,
+        dt: f32,
+    ) -> Option<(ContactPoint, f32)> {
+        Self::speculative(shape_a, pos_a, rot_a, vel_a, inv_mass_a, shape_b, pos_b, rot_b, vel_b, inv_mass_b, dt)
+            .map(|s| (s.contact, s.gap))
+    }
+
+    /// [`speculative_contact`](Self::speculative_contact), with the gap kept beside the contact.
+    fn speculative(
+        shape_a: &ColliderShape,
+        pos_a: Vec3,
+        rot_a: gizmo_math::Quat,
+        vel_a: Vec3,
+        inv_mass_a: f32,
+        shape_b: &ColliderShape,
+        pos_b: Vec3,
+        rot_b: gizmo_math::Quat,
+        vel_b: Vec3,
+        inv_mass_b: f32,
+        dt: f32,
+    ) -> Option<Speculative> {
         // A compound is its parts: the manifold path recurses the same way. Passed whole, it reached
         // `support_point`, whose contract it violates — a debug panic, and a zero support (a wrong
         // contact) in release — on the first step any CCD body (every kinematic one: they turn CCD
         // on) came near a multi-part collider. Of the parts' contacts, the closest is kept: it is
         // the one this step must not pass.
-        let closest = |found: Option<ContactPoint>, c: Option<ContactPoint>| match (found, c) {
-            (Some(f), Some(c)) => Some(if c.penetration > f.penetration { c } else { f }),
+        let closest = |found: Option<Speculative>, c: Option<Speculative>| match (found, c) {
+            (Some(f), Some(c)) => Some(if c.contact.penetration > f.contact.penetration { c } else { f }),
             (f, c) => f.or(c),
         };
         if let ColliderShape::Compound(parts) = shape_a {
             return parts.iter().fold(None, |found, (local, sub)| {
-                let c = Self::speculative_contact(
+                let c = Self::speculative(
                     sub,
                     pos_a + rot_a.mul_vec3(local.position),
                     rot_a * local.rotation,
@@ -585,7 +633,7 @@ impl Gjk {
         }
         if let ColliderShape::Compound(parts) = shape_b {
             return parts.iter().fold(None, |found, (local, sub)| {
-                let c = Self::speculative_contact(
+                let c = Self::speculative(
                     shape_a,
                     pos_a,
                     rot_a,
@@ -692,7 +740,7 @@ impl Gjk {
         inv_mass_a: f32,
         pos_b: Vec3,
         inv_mass_b: f32,
-    ) -> Option<ContactPoint> {
+    ) -> Option<Speculative> {
         /// Resting standoff: the body stops this far short of the surface so the
         /// next frame still has a measurable, GJK-reliable separation.
         const SKIN: f32 = 0.01;
@@ -728,7 +776,7 @@ impl Gjk {
             (pos_a + pos_b) * 0.5
         };
 
-        Some(ContactPoint {
+        Some(Speculative { gap, contact: ContactPoint {
             point,
             normal,
             // Negative ⇒ speculative gap; solver bias allows closing exactly this much. Strictly
@@ -740,7 +788,7 @@ impl Gjk {
             normal_impulse: 0.0,
             tangent_impulse: Vec3::ZERO,
             sliding: false,
-        })
+        } })
     }
 
     /// The speculative contact between a convex shape and a heightfield or triangle mesh: each
@@ -756,7 +804,7 @@ impl Gjk {
         surface: (&ColliderShape, Vec3, gizmo_math::Quat, Vec3, f32),
         surface_is_a: bool,
         dt: f32,
-    ) -> Option<ContactPoint> {
+    ) -> Option<Speculative> {
         let (c_shape, c_pos, c_rot, c_vel, c_inv) = convex;
         let (s_shape, s_pos, s_rot, s_vel, s_inv) = surface;
         if dt <= 0.0 {
@@ -781,7 +829,7 @@ impl Gjk {
             vertices: std::sync::Arc::new(Vec::with_capacity(3)),
             faces: std::sync::Arc::new(Vec::new()),
         });
-        let mut closest: Option<ContactPoint> = None;
+        let mut closest: Option<Speculative> = None;
         let mut test = |tri: [Vec3; 3], face: &mut ColliderShape| {
             let ColliderShape::ConvexHull(hull) = face else {
                 unreachable!("`face` is constructed as a ConvexHull above")
@@ -790,12 +838,12 @@ impl Gjk {
             verts.clear();
             verts.extend_from_slice(&tri);
             let c = if surface_is_a {
-                Self::speculative_contact(face, s_pos, s_rot, s_vel, s_inv, c_shape, c_pos, c_rot, c_vel, c_inv, dt)
+                Self::speculative(face, s_pos, s_rot, s_vel, s_inv, c_shape, c_pos, c_rot, c_vel, c_inv, dt)
             } else {
-                Self::speculative_contact(c_shape, c_pos, c_rot, c_vel, c_inv, face, s_pos, s_rot, s_vel, s_inv, dt)
+                Self::speculative(c_shape, c_pos, c_rot, c_vel, c_inv, face, s_pos, s_rot, s_vel, s_inv, dt)
             };
             if let Some(c) = c {
-                if closest.is_none_or(|f| c.penetration > f.penetration) {
+                if closest.as_ref().is_none_or(|f| c.contact.penetration > f.contact.penetration) {
                     closest = Some(c);
                 }
             }
@@ -818,7 +866,7 @@ impl Gjk {
                     if surface_is_a { (s_pos, s_inv, c_pos, c_inv) } else { (c_pos, c_inv, s_pos, s_inv) };
                 let rel_vel = if surface_is_a { s_vel - c_vel } else { c_vel - s_vel };
                 let mut owned = false;
-                let mut on_face: Option<ContactPoint> = None;
+                let mut on_face: Option<Speculative> = None;
                 for row in row0..row1 {
                     for col in col0..col1 {
                         for tri in hf.cell_triangles(row, col) {
@@ -834,7 +882,7 @@ impl Gjk {
                             owned = true;
                             let normal = if surface_is_a { up } else { -up };
                             if let Some(c) = Self::speculative_emit(gap.max(0.0), normal, rel_vel, dt, pos_a, inv_a, pos_b, inv_b) {
-                                if on_face.is_none_or(|f| c.penetration > f.penetration) {
+                                if on_face.as_ref().is_none_or(|f| c.contact.penetration > f.contact.penetration) {
                                     on_face = Some(c);
                                 }
                             }
@@ -866,7 +914,7 @@ impl Gjk {
                 let (pos_a, inv_a, pos_b, inv_b) =
                     if surface_is_a { (s_pos, s_inv, c_pos, c_inv) } else { (c_pos, c_inv, s_pos, s_inv) };
                 let rel_vel = if surface_is_a { s_vel - c_vel } else { c_vel - s_vel };
-                let (mut owned, mut on_face) = (false, None::<ContactPoint>);
+                let (mut owned, mut on_face) = (false, None::<Speculative>);
                 let mut on_ridge: Vec<[Vec3; 3]> = Vec::new();
                 for t in tris {
                     let base = t as usize * 3;
@@ -895,7 +943,7 @@ impl Gjk {
                     owned = true;
                     let normal = if surface_is_a { up } else { -up };
                     if let Some(c) = Self::speculative_emit(gap.max(0.0), normal, rel_vel, dt, pos_a, inv_a, pos_b, inv_b) {
-                        if on_face.is_none_or(|f| c.penetration > f.penetration) {
+                        if on_face.as_ref().is_none_or(|f| c.contact.penetration > f.contact.penetration) {
                             on_face = Some(c);
                         }
                     }
