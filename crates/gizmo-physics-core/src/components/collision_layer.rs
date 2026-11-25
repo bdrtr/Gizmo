@@ -28,8 +28,8 @@ pub const LAYER_TRIGGER: u32 = 3;
 /// own — see [`can_collide_with`](Self::can_collide_with). Scene queries are filtered the
 /// other way round, one-directionally, and consult only a collider's `layer`.
 ///
-/// This is applied late in the rigid-body pipeline — at narrowphase and at the CCD sweep
-/// backstop, not in the broadphase — so a masked-out pair is still generated as a broadphase
+/// This is applied late in the rigid-body pipeline — at narrowphase and where a fast kinematic
+/// body is held at static surfaces, not in the broadphase — so a masked-out pair is still generated as a broadphase
 /// candidate and only then discarded. Layers are a correctness filter, not a way to keep
 /// pairs out of the broadphase.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

@@ -208,8 +208,9 @@ fn ccd_body_settles_on_ground_like_discrete() {
 /// wall used to tunnel. The speculative contact closes most of the gap but leaves
 /// the bullet at ~1800 m/s; the next sub-step's GJK separation distance degenerated
 /// to a far box corner (thin-face aspect ratio), so the speculative contact bailed
-/// and the still-fast bullet sailed straight through. The CCD geometric backstop
-/// (`ccd_resolve_step`) now clamps it. This is the exact shrunk proptest case, pinned
+/// and the still-fast bullet sailed straight through. A geometric backstop clamped it until
+/// 2026-11-25, when GJK's distance was made exact and the speculative contact holds it on its own
+/// (the backstop removed). This is the exact shrunk proptest case, pinned
 /// as a deterministic test so it survives independently of the proptest seed file.
 #[test]
 fn ccd_far_start_thick_wall_does_not_tunnel() {

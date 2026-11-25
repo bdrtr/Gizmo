@@ -1170,6 +1170,21 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A CCD body lands and bounces as one without CCD does.** Besides its speculative contacts,
+  every fast CCD body was swept, centre only, against each static or sleeping collider's bounding
+  box and stopped a centimetre short of the box with its velocity into it removed — a backstop for
+  when GJK's distance degenerated against thin geometry, which it no longer does (the fix above).
+  The box was the wrong question: a ball dropped onto a ramp tilted 30° stopped in mid-air 5 m over
+  it, at the top of the ramp's box; and a ball landing on a floor, which its speculative contact
+  lets close the gap exactly, was stopped again at the box's face whenever rounding put the end of
+  its travel on it, its velocity zeroed under the bounce already worked out for it — dropped 10 m at
+  60 Hz it left at 17.2 m/s where it came in at 13.6, and rose to 14.8 m. The backstop is gone for
+  dynamic bodies: their speculative contacts hold every tunnelling test without it. A fast
+  kinematic CCD body, which no impulse can stop, is still held at static surfaces, now by the
+  speculative contact from where it started its substep (`PhysicsWorld::kinematic_ccd_step`): what it
+  moved past it is taken back along the contact's normal, so it slides on along a wall, and it
+  passes through a static box's bounds untouched when it misses the box. `tests/ccd_landings.rs`.
+
 - **GJK's distance is exact between separated shapes.** It was centimetres off whenever the
   Minkowski difference had a large flat side — a ball or a box near a big box — and it gave the gap
   every speculative contact takes, so a CCD body could be stopped well short of what it was falling

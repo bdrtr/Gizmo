@@ -1,8 +1,14 @@
 //! CCD (Sürekli Çarpışma Tespiti) ANALİTİK MERDİVENİ — tünellemeyi en basitten
 //! en karmaşığa kapalı-form oracle'larla sınar, tamamı ECS yolundan
 //! (`physics_step_system`). Mevcut CCD testleri (`tests/ccd.rs`, `world/tests.rs`)
-//! HAM `PhysicsWorld` API'sini sürer; bu merdiven ise ECS gather→sync(*rb)→step→
-//! ccd_resolve_step zincirinin uçtan uca çalıştığının yürütülebilir kanıtıdır.
+//! HAM `PhysicsWorld` API'sini sürer; bu merdiven ise ECS gather→sync(*rb)→step
+//! zincirinin uçtan uca çalıştığının yürütülebilir kanıtıdır.
+//!
+//! What holds a fast dynamic body here is its speculative contact. Until 2026-11-25 a backstop also
+//! swept every CCD body's centre against each collider's bounding box, kept for when GJK's distance
+//! degenerated against a thin wall; that distance is exact now, every rung below holds without the
+//! backstop, and the box stopped balls in mid-air over tilted ramps (`tests/ccd_landings.rs`). Only
+//! a kinematic body is still held, at static surfaces (Rung 6).
 //!
 //! Aritmetik: dahili sabit alt-adım 240 Hz (FIXED_DT=1/240). DT=1/240'ta bir
 //! `physics_step_system` çağrısı = tam bir alt-adım. Alt-adım başına yol = v/240.
@@ -86,8 +92,8 @@ fn box_bullet(world: &mut World, x0: f32, speed: f32, r: f32, ccd: bool) -> Enti
     e
 }
 
-/// `steps` alt-adım sür; (tepe_x, son_x, son_vx) döndür. Tepe, backstop düzeltmesinden
-/// SONRAKİ (physics_step_system çıkışındaki) konumdur — anlık integrasyon üstü değil.
+/// `steps` alt-adım sür; (tepe_x, son_x, son_vx) döndür. Tepe, the position `physics_step_system`
+/// leaves the body at — after the kinematic hold, not mid-integration.
 fn run(world: &World, id: Entity, steps: usize) -> (f32, f32, f32) {
     let mut peak = f32::MIN;
     for _ in 0..steps {
@@ -198,7 +204,8 @@ fn ccd_r5_shape_thickness_matrix_ccd_holds() {
         assert!(peak < half, "küre CCD tutmalı (half={half}), tepe={peak}");
         assert!(fx < 0.0, "küre yakın tarafta dinlenmeli (half={half}), fx={fx}");
 
-        // kutu mermi (ince duvarda GJK bozulur → backstop tek koruma)
+        // A box bullet: on a thin wall GJK's distance once degenerated and only the backstop held
+        // it; the speculative contact does, now that the distance is exact.
         let mut w2 = scene();
         wall(&mut w2, 0.0, half);
         let bx = box_bullet(&mut w2, -5.0, 1500.0, 0.05, true);
@@ -208,9 +215,9 @@ fn ccd_r5_shape_thickness_matrix_ccd_holds() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Rung 6 — KİNEMATİK CCD (bug-fix kanıtı): new_kinematic ccd'yi açar; düzeltilen
-// kapılar (is_dynamic → !is_static) artık onu süpürür+backstop'lar. Düzeltmeden
-// ÖNCE bu kinematik cisim tünelliyordu.
+// Rung 6 — A KINEMATIC CCD body (new_kinematic turns CCD on), which no impulse stops, is held at
+// a static wall by its speculative contact (`PhysicsWorld::kinematic_ccd_step`). It went through
+// the wall before kinematic bodies were held at all.
 // ═══════════════════════════════════════════════════════════════════════════
 #[test]
 fn ccd_r6_kinematic_fast_body_does_not_tunnel() {
@@ -228,16 +235,14 @@ fn ccd_r6_kinematic_fast_body_does_not_tunnel() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Rung 7 — UYKUDAKİ HEDEF: backstop static VE uyuyan cisimleri hedefler
-// (pipeline.rs:894 yalnız uyanık-dinamiği atlar). Mermi yakın tarafta durur.
-// (NOT: backstop hedefe momentum AKTARMAZ — bilinen defect; burada sadece
-//  merminin geçmediğini kanıtlıyoruz.)
+// Rung 7 — A SLEEPING TARGET. The bullet stops on the near side, by its speculative contact,
+// which also gives the plate its momentum (the backstop that used to hold it did not).
 // ═══════════════════════════════════════════════════════════════════════════
 #[test]
 fn ccd_r7_fast_body_vs_sleeping_target_does_not_tunnel() {
     let mut w = scene();
     let mut orb = RigidBody::new(1.0e6, false);
-    orb.is_sleeping = true; // uykuda → geçerli backstop hedefi
+    orb.is_sleeping = true;
     let o = w.spawn();
     w.add_component(o, Transform::new(Vec3::ZERO));
     w.add_component(o, orb);
@@ -257,20 +262,14 @@ fn ccd_r7_fast_body_vs_sleeping_target_does_not_tunnel() {
 // ═══════════════════════════════════════════════════════════════════════════
 // Rung 8 — UYANIK DİNAMİK HEDEF. Rung 7'nin birebir aynısı, plaka UYANIK.
 //
-// Eskiden #[ignore]'lu bir "açık"tı: backstop uyanık-dinamik hedefleri topluca
-// atlıyordu, mermi tünelliyordu. Atlamanın gerekçesi gerçekti ama kapı gerekçeden
-// çok daha genişti — hareketli bir hedefte süpürme kare-uyumsuzdu (merminin
-// `old_pos`'u entegrasyon-öncesi, hedefin AABB'si sonrası). Kapı yerine
-// uyumsuzluk düzeltildi: hedef de kendi substep deltasıyla süpürülüyor.
-//
-// (NOT: backstop hedefe momentum AKTARMAZ — Rung 7'de de belgeli. Clamp'ten
-//  sonraki substep'te ayrık çözücü teması görüp momentumu aktarır.)
+// Once an #[ignore]d "hole": the backstop that then held fast bodies skipped awake dynamic
+// targets, and the bullet tunnelled. The speculative contact holds it, as for any target.
 // ═══════════════════════════════════════════════════════════════════════════
 #[test]
 fn ccd_r8_fast_body_vs_dynamic_awake_thin_plate_does_not_tunnel() {
     let mut w = scene();
     let mut orb = RigidBody::new(1.0e6, false);
-    orb.wake_up(); // UYANIK dinamik → backstop dışlar
+    orb.wake_up();
     let o = w.spawn();
     w.add_component(o, Transform::new(Vec3::ZERO));
     w.add_component(o, orb);
@@ -309,8 +308,7 @@ fn ccd_r8_fast_body_vs_dynamic_awake_thin_plate_does_not_tunnel() {
 // `PhysicsWorld::step` ölçümüyle BİREBİR aynı. İki yol ayrışmıyor.
 //
 // DİKKAT — bu dönme CCD'si VAR demek DEĞİL. `speculative_contact` hâlâ yalnız
-// öteleme (gjk/simplex.rs) ve backstop yalnız doğrusal merkez deltasını süpürüyor
-// (pipeline.rs `ccd_resolve_step`). Yeterince uç bir konfigürasyon muhtemelen hâlâ
+// öteleme (gjk/simplex.rs). Yeterince uç bir konfigürasyon muhtemelen hâlâ
 // tünelller; kurulamadı, o kadar. Belgelenen açık ise yanlıştı.
 // ═══════════════════════════════════════════════════════════════════════════
 #[test]

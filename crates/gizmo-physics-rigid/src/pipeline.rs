@@ -1736,167 +1736,99 @@ impl PhysicsWorld {
             })
     }
 
-    /// CCD backstop — runs right after position integration.
+    /// The kinematic CCD bodies that may outrun discrete detection this substep, with where each
+    /// starts it: [`kinematic_ccd_step`](Self::kinematic_ccd_step)'s input, taken before position
+    /// integration moves them.
+    pub(crate) fn kinematic_ccd_starts(&self, dt: f32) -> Vec<(usize, gizmo_math::Vec3)> {
+        (0..self.entities.len())
+            .filter(|&i| {
+                let rb = &self.rigid_bodies[i];
+                rb.ccd_enabled && rb.is_kinematic() && !rb.is_sleeping && {
+                    let travel = self.velocities[i].linear.length() * dt;
+                    // Own half-extents: only a body that outruns discrete detection.
+                    let size = self.colliders[i].compute_aabb(gizmo_math::Vec3::ZERO, self.transforms[i].rotation);
+                    let half = (gizmo_math::Vec3::from(size.max) - gizmo_math::Vec3::from(size.min)) * 0.5;
+                    travel > half.min_element().max(1e-4)
+                }
+            })
+            .map(|i| (i, self.transforms[i].position))
+            .collect()
+    }
+
+    /// A fast kinematic CCD body is not carried through static geometry: what the solver does for
+    /// a dynamic body, done to the kinematic one, which no impulse can stop — and a static body
+    /// cannot give way either. For each static solid it reaches this substep, the speculative
+    /// contact from where it started (`Gjk::speculative_contact`, the narrow phase's own) says how
+    /// far it may close along the contact's normal; what it moved past that is taken back along
+    /// the normal, and its velocity into the surface removed. It slides on along the surface, as a
+    /// dynamic body does.
     ///
-    /// The speculative-contact path lets a CCD body close the gap to an obstacle and
-    /// stop one frame later, but it relies on the GJK separation distance being
-    /// accurate at near-contact. Against **thin** geometry (a box whose face is tiny
-    /// next to its other extents) the GJK distance can degenerate to a far corner, so
-    /// the speculative contact bails and a Mach-scale body sails straight through.
-    ///
-    /// This pass is a robust geometric guard: for any CCD body that travelled farther
-    /// than its own radius this substep (i.e. fast enough that discrete detection could
-    /// miss it), sweep its centre against each static / sleeping collider's AABB
-    /// inflated by the body's half-extents. If the swept segment enters one, the body
-    /// is clamped a hair short of that face and its inward velocity is removed.
-    ///
-    /// Deliberately scoped: slow / resting bodies (`travel <= radius`) are left
-    /// entirely to the discrete + speculative path, so ordinary contacts and resting
-    /// stacks are byte-for-byte unchanged; two fast *dynamic* bodies remain the
-    /// documented out-of-scope case (handled, imperfectly, by the speculative path).
-    #[tracing::instrument(skip_all, name = "ccd_resolve")]
-    pub(crate) fn ccd_resolve_step(&mut self, dt: f32) {
+    /// Dynamic bodies are not here. This used to be a backstop for every CCD body — the body's
+    /// centre swept against each static or sleeping collider's bounding box, the body stopped a
+    /// centimetre short of the box and its velocity into it removed — kept for when GJK's distance
+    /// degenerated against thin geometry and the speculative contact bailed. That distance is exact
+    /// now, the speculative contacts hold every tunnelling test without it, and the box was the
+    /// wrong question: a ball dropped onto a ramp tilted 30° was stopped in mid-air 5 m over it, at
+    /// the top of the ramp's bounding box; and a ball landing on a floor — its speculative contact
+    /// let it close the gap exactly — was stopped at the box's face a step's travel down, its
+    /// velocity zeroed under the bounce already worked out for it: it left at 17.2 m/s where it
+    /// came in at 13.6 (2026-11-25).
+    #[tracing::instrument(skip_all, name = "kinematic_ccd")]
+    pub(crate) fn kinematic_ccd_step(&mut self, starts: Vec<(usize, gizmo_math::Vec3)>, dt: f32) {
         use gizmo_math::{Aabb, Vec3};
-        use gizmo_physics_core::raycast::{Ray, Raycast};
-        const SKIN: f32 = 0.01;
-
-        let n = self.entities.len();
-        let mut clamps = 0usize;
-        for i in 0..n {
-            let rb_i = &self.rigid_bodies[i];
-            // `!is_static()` so kinematic CCD movers (new_kinematic ⇒ ccd on) are
-            // also backstopped — testing is_dynamic() left them tunnelling.
-            if !rb_i.ccd_enabled || rb_i.is_static() || rb_i.is_sleeping {
-                continue;
-            }
-            let vel = self.velocities[i].linear;
-            let delta = vel * dt;
-            let travel = delta.length();
-            if travel < 1e-5 {
-                continue;
-            }
-            // Own half-extents; only engage once the body outruns discrete detection.
-            let self_aabb = self.colliders[i].compute_aabb(Vec3::ZERO, self.transforms[i].rotation);
-            let half = (Vec3::from(self_aabb.max) - Vec3::from(self_aabb.min)) * 0.5;
-            let min_half = half.x.min(half.y).min(half.z).max(1e-4);
-            if travel <= min_half {
-                continue;
-            }
-            let dir = delta / travel;
-            let new_pos = self.transforms[i].position;
-            let old_pos = new_pos - delta;
-
-            let mut best_toi = f32::INFINITY;
-            let mut best_normal = Vec3::ZERO;
-            for j in 0..n {
-                if j == i {
-                    continue;
-                }
-                // Triggers are pass-through by definition; everything solid is a valid
-                // target, awake dynamic bodies included.
-                //
-                // This used to also skip `rb_j.is_dynamic() && !rb_j.is_sleeping`, which is
-                // why `ccd_hole_fast_body_vs_dynamic_awake_thin_plate` tunnelled while the
-                // otherwise-identical Rung 7 (same plate, asleep) passed. The exclusion had
-                // a real reason — for a *moving* target the sweep was frame-mismatched,
-                // since the bullet's `old_pos` is pre-integration while `compute_aabb` reads
-                // the target's post-integration transform — but the gate was far wider than
-                // the reason. The fix below is to sweep the target's own volume instead of
-                // snapshotting it, which removes the mismatch and makes the exclusion
-                // unnecessary.
-                if self.colliders[j].is_trigger {
-                    continue;
-                }
-                // Respect collision-layer filtering, exactly like narrowphase — else the
-                // backstop phantom-stops the body against geometry it is masked to pass through.
-                if !self.colliders[i]
-                    .collision_layer
-                    .can_collide_with(&self.colliders[j].collision_layer)
+        for (i, start) in starts {
+            let rot = self.transforms[i].rotation;
+            let mut end = self.transforms[i].position;
+            let own = self.colliders[i].compute_aabb(Vec3::ZERO, rot);
+            for j in 0..self.entities.len() {
+                if j == i
+                    || !self.rigid_bodies[j].is_static()
+                    || self.colliders[j].is_trigger
+                    || !self.colliders[i].collision_layer.can_collide_with(&self.colliders[j].collision_layer)
                 {
                     continue;
                 }
-                // Sweep the TARGET too. `compute_aabb` gives its post-integration pose, but
-                // the ray starts from the bullet's pre-integration position, so a moving
-                // target must be covered over the whole substep or the two are a frame
-                // apart. Merging the current box with where it was at the start of the
-                // substep closes that gap; for a static or sleeping target the delta is
-                // zero and this is exactly the old behaviour.
-                let other_now = self.colliders[j]
-                    .compute_aabb(self.transforms[j].position, self.transforms[j].rotation);
-                let other_delta = self.velocities[j].linear * dt;
-                let other_then = Aabb::new(
-                    Vec3::from(other_now.min) - other_delta,
-                    Vec3::from(other_now.max) - other_delta,
+                // What the body sweeps this substep, against what the target covers.
+                let swept = Aabb::new(
+                    Vec3::from(own.min) + start.min(end),
+                    Vec3::from(own.max) + start.max(end),
                 );
-                let other = other_now.merge(other_then);
-                let infl = Aabb::new(Vec3::from(other.min) - half, Vec3::from(other.max) + half);
-                // Already overlapping at the start of the substep ⇒ leave it to the
-                // discrete solver (this guard is only for clean pass-through).
-                if infl.contains_point(old_pos) {
+                let target = self.colliders[j].compute_aabb(self.transforms[j].position, self.transforms[j].rotation);
+                if !swept.intersects(target) {
                     continue;
                 }
-                let ray = Ray::new(old_pos, dir);
-                if let Some(t) = Raycast::ray_aabb(&ray, &infl) {
-                    if (0.0..=travel).contains(&t) && t < best_toi {
-                        best_toi = t;
-                        best_normal = Self::aabb_face_normal(&infl, old_pos + dir * t);
-                    }
+                let (shape_i, shape_j) = (&self.colliders[i].shape, &self.colliders[j].shape);
+                let (pos_j, rot_j) = (self.transforms[j].position, self.transforms[j].rotation);
+                // Already touching where it started: the discrete contact's, as a kinematic body's
+                // contacts always are.
+                if NarrowPhase::test_collision(shape_i, start, rot, shape_j, pos_j, rot_j).is_some() {
+                    continue;
                 }
+                let moved = end - start;
+                let Some(c) = gizmo_physics_core::Gjk::speculative_contact(
+                    shape_i, start, rot, moved / dt, 0.0, shape_j, pos_j, rot_j, Vec3::ZERO, 0.0, dt,
+                ) else {
+                    continue;
+                };
+                // The normal points from the body to the target; `-penetration` is how far along
+                // it the body may close.
+                let past = moved.dot(c.normal) + c.penetration;
+                if past <= 0.0 {
+                    continue;
+                }
+                end -= c.normal * past;
+                let into = self.velocities[i].linear.dot(c.normal);
+                if into > 0.0 {
+                    self.velocities[i].linear -= c.normal * into;
+                }
+                tracing::trace!(entity = ?self.entities[i], past, normal = ?c.normal, "a fast kinematic body was held at a static surface");
             }
-
-            if best_toi.is_finite() {
-                clamps += 1;
-                let entity = self.entities[i];
-                self.transforms[i].position = old_pos + dir * (best_toi - SKIN).max(0.0);
-                // Rebuild the cached local matrix so the clamp is visible to an
-                // end-of-frame snapshot (integrator + split-impulse paths do the same).
+            if end != self.transforms[i].position {
+                self.transforms[i].position = end;
+                // The cached matrix too, so the hold is visible to an end-of-frame snapshot.
                 self.transforms[i].update_local_matrix();
-                let vn = self.velocities[i].linear.dot(best_normal);
-                if vn < 0.0 {
-                    self.velocities[i].linear -= best_normal * vn;
-                }
-                // A fast CCD body was about to tunnel through static/sleeping geometry this
-                // substep; the geometric backstop clamped it to the surface. Rare and
-                // per-trigger → trace with toi/travel/normal is exactly what a tunnelling
-                // investigation needs.
-                tracing::trace!(
-                    entity = ?entity,
-                    toi = best_toi,
-                    travel,
-                    normal = ?best_normal,
-                    "CCD backstop clamped a fast body short of tunnelling"
-                );
             }
         }
-
-        if clamps > 0 {
-            tracing::debug!(ccd_clamps = clamps, "CCD backstop engaged this substep");
-        }
-    }
-
-    /// Outward normal of the AABB face nearest to `hit` (a point on its surface).
-    fn aabb_face_normal(aabb: &gizmo_math::Aabb, hit: Vec3) -> Vec3 {
-        let min = Vec3::from(aabb.min);
-        let max = Vec3::from(aabb.max);
-        let dmin = (hit - min).abs();
-        let dmax = (hit - max).abs();
-        let faces = [
-            (dmin.x, Vec3::new(-1.0, 0.0, 0.0)),
-            (dmax.x, Vec3::new(1.0, 0.0, 0.0)),
-            (dmin.y, Vec3::new(0.0, -1.0, 0.0)),
-            (dmax.y, Vec3::new(0.0, 1.0, 0.0)),
-            (dmin.z, Vec3::new(0.0, 0.0, -1.0)),
-            (dmax.z, Vec3::new(0.0, 0.0, 1.0)),
-        ];
-        let mut best = f32::INFINITY;
-        let mut normal = Vec3::X;
-        for (d, nrm) in faces {
-            if d < best {
-                best = d;
-                normal = nrm;
-            }
-        }
-        normal
     }
 }
 

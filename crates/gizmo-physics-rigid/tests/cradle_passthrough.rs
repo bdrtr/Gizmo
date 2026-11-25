@@ -168,7 +168,7 @@ fn the_cradle_keeps_its_balls_apart() {
 /// taking exactly half, and the same halving at 12 m/s.
 ///
 /// **The cause is two steps, and the second one is the surprising half.** Enabling CCD on
-/// a body does not only add the geometric backstop: at `solver/mod.rs` the island is
+/// a body does not only add the geometric backstop (since removed): at `solver/mod.rs` the island is
 /// solved by `if self.use_tgs_soft && !has_ccd`, so **one CCD body drops its whole island
 /// off the modern TGS-soft solver onto the older split-impulse path**. That path then
 /// refuses restitution on a speculative contact — deliberately, with the reason written
