@@ -236,8 +236,10 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    gyroscopic step and the joint are solved one after the other; the free body keeps its energy
 >    exactly, and with the term left out the pivot keeps it too, at the wrong precession. Tried and
 >    measured 2026-11-26: the body's frame taken at mid-step (loss halved, sag worse), the step
->    split around the solve (Strang: 960 Hz right, 60 Hz worse). The fix is the gyroscopic term in
->    the constraint solve itself — its Jacobian in the effective mass — a piece of work of its own.
+>    split around the solve (Strang: 960 Hz right, 60 Hz worse); and, the same day, the gyroscopic
+>    Jacobian put in the inverse inertia every solver reads (`(I + dt·([ω]×I − [Iω]×))⁻¹`, not
+>    symmetric): it blew up, +175 J at 60 Hz. The fix is the gyroscopic term in the constraint solve
+>    itself, with the solvers made to take a non-symmetric response — a piece of work of its own.
 >
 > **Closed in the same sweep, each where it stands:** the irradiance volume "connected to nothing"
 > (it is drawn); no default font (`bundled-font`); no EQ or compressor (`gizmo_audio::{equalizer,
