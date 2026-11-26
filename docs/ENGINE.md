@@ -221,6 +221,13 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    is connected to its bus once its sound is in it and its queue is on the sound (`playing`), so the
 >    bus's converter is built for the sound's own rate; a spatial sound is a player with rodio's
 >    `Spatial` stage in front, since `SpatialPlayer` can only be built connected. Entry: "M7.5".
+> 9. **A body spinning very fast can end inside a height field.** Of 2000 seeded shots of spinning
+>    boxes and capsules at a hill (`turning_impacts.rs`'s, five seeds), one ends inside: a 0.56 m
+>    capsule at 145 m/s turning 270 rad/s — 1.1 rad a substep at 240 Hz — over a height field, which
+>    starts a substep 15 cm inside it; the turning hold keeps it from going deeper and the solve
+>    cannot push it out in time. Reproduce: that test with seed 37, shot `field240:57`. Found
+>    2026-11-26 with Euler's equations (`integrator::gyroscopic_change`), which made it tumble as it
+>    should; none of the 2000 does without them, and none of the test's own 400.
 >
 > **Closed in the same sweep, each where it stands:** the irradiance volume "connected to nothing"
 > (it is drawn); no default font (`bundled-font`); no EQ or compressor (`gizmo_audio::{equalizer,

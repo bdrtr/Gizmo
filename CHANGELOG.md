@@ -1236,6 +1236,26 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A turning body follows Euler's equations.** The integrator kept a body's angular velocity as
+  it was given when nothing pushed it, where what is kept is its angular *momentum*: a body turning
+  about anything but a principal axis changes its `ω` as it turns. A box spun 1 % off its
+  intermediate axis turned on unchanged for ever, where it flips over and back (here at 2.5 s and
+  6.4 s — the Dzhanibekov effect), and a spinning capsule never precessed. `ω` is now stepped by the
+  implicit midpoint rule in the body's frame, which keeps the energy and `|L|` exactly: the flips
+  come within 6 % of a fine Runge–Kutta solution of Euler's equations at 60 Hz and 3 % at 240 Hz.
+  Measured beside it: Bullet's one-step implicit form lost 19 % of the energy in ten seconds at
+  60 Hz, carrying `L` across each turn gained 250 %. A cube, a ball and a spin about a principal axis
+  are bit for bit as they were; a body with a locked rotation axis is the locks'.
+  `tests/euler_equations.rs`.
+- **The turning hold neither ratchets nor freezes, and looks along the way when its turn finds
+  nothing.** It let a body sink a slop past wherever it started, every substep — a box sliding up a
+  hill ended inside it — and, held instead at most a slop deep, a capsule starting 9 mm into the face
+  it slid along was held where it started every substep and never moved on. It holds at the deeper
+  of where it started and a slop now. A 5 cm capsule at 376 m/s passed a mesh's surface between two
+  of the turn's (at most 64) looks, so where the turn finds nothing the moving hold follows the way
+  face by face, and the narrow phase looks at the end pose. Of 2000 seeded spinning shots at a
+  hill, 2 ended inside it before; 1 does, at 270 rad/s (ENGINE §3).
+
 - **`World::compact` gives back the entity locations of entities long gone.** The list is indexed
   by entity id at 8 bytes an id and only grew, so a world that once held a million entities kept
   8 MB for them however few it held after. `compact` now cuts it past its last valid slot, as it

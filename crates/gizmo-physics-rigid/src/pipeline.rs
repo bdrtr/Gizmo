@@ -2150,7 +2150,13 @@ impl PhysicsWorld {
         let one_way = self.colliders[i].one_way.is_some() || self.colliders[j].one_way.is_some();
         // A jointed body is moved, not turned: a turn the joint did not make opens it.
         if !one_way && !look.jointed.contains(&self.entities[i].id()) && self.turns(look, i) {
-            return self.held_turning(look, i, j);
+            // And along its way alone when the turn's look finds nothing: its steps are at most
+            // `MAX_SAMPLES` of the way, and a 5 cm capsule at 376 m/s passed a mesh's surface between
+            // two of them, ten centimetres apart, and ended half a metre inside the hill (2026-11-26).
+            // The moving hold follows the way face by face.
+            if let Some(held) = self.held_turning(look, i, j) {
+                return Some(held);
+            }
         }
         self.held_moving(look, i, j).map(|at| (at, self.transforms[i].rotation))
     }
@@ -2188,10 +2194,13 @@ impl PhysicsWorld {
                 .map(|c| c.penetration)
                 .fold(f32::NEG_INFINITY, f32::max)
         };
-        // Held where it touches as deep as it started, once it sinks a slop past that: held at the
-        // slop, it would rest that deep, which the solve leaves be.
-        let touching = depth(0.0).max(0.0);
-        let limit = touching + self.solver.slop;
+        // Held no deeper than it started or than a slop, whichever is deeper, once it sinks half a
+        // millimetre past that. Not a slop past where it started: a box sliding up a hill was let
+        // sink that much every substep, turning, and ended inside; and not at most a slop: a capsule
+        // starting 9 mm into the face it slid along was held where it started, every substep, and
+        // never moved on (2026-11-26).
+        let touching = depth(0.0).max(self.solver.slop);
+        let limit = touching + 5e-4;
         let sweep = ((to_i - from_i) - (to_j - from_j)).length() + turn.length() * turn_reach(ci);
         let step = FAST_SHARE * (ci.shape.half_thickness() + cj.shape.half_thickness());
         let samples = (sweep / step.max(1e-4)).ceil().clamp(1.0, MAX_SAMPLES) as u32;
@@ -2423,7 +2432,9 @@ impl PhysicsWorld {
     /// the joints that held it; at 240 Hz a box dropped from 5 m came to rest 1.35 mm deep
     /// (2026-11-24). Now 2.7 mm and 0.05.
     fn near_contacts(&self, (idx_a, idx_b): (usize, usize), dt: f32) -> Vec<gizmo_physics_core::ContactPoint> {
-        if let Some(found) = self.turning_contacts((idx_a, idx_b), dt) {
+        // Where the turn's look finds nothing, the end pose is looked at as for any pair: the look's
+        // steps are at most `MAX_SAMPLES` of the way, and a fast small body can pass between two.
+        if let Some(found) = self.turning_contacts((idx_a, idx_b), dt).filter(|found| !found.is_empty()) {
             return found;
         }
         let ((pa, qa), (pb, qb)) = (self.pose_after(idx_a, dt), self.pose_after(idx_b, dt));
