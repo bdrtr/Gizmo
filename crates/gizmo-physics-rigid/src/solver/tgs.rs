@@ -51,6 +51,8 @@ pub(super) struct Prepared {
     /// The depth the manifold's deepest point starts the substep at, within the slop: a shallower
     /// point of it may sink to it (`resting_level`).
     level: f32,
+    /// The pair's slop: the solver's, or the manifold's own where that is less (a thin body's).
+    slop: f32,
     vn0: f32,
     mid: usize,
     cid: usize,
@@ -89,6 +91,7 @@ pub(super) struct RowView {
     pub(super) it2_b: Vec3,
     pub(super) pen0: f32,
     pub(super) level: f32,
+    pub(super) slop: f32,
     pub(super) vn0: f32,
     pub(super) restitution: f32,
     pub(super) k_t1: f32,
@@ -122,6 +125,7 @@ impl Prepared {
             it2_b: j.it2_b.into(),
             pen0: self.pen0,
             level: self.level,
+            slop: self.slop,
             vn0: self.vn0,
             restitution: self.restitution,
             k_t1: self.k_t1,
@@ -623,6 +627,7 @@ impl ConstraintSolver {
             let restitution = manifolds[mid].restitution;
             let rolling = manifolds[mid].rolling_friction;
             let n_contacts = manifolds[mid].contacts.len();
+            let slop = slop.min(manifolds[mid].slop);
             let level = super::resting_level(&manifolds[mid].contacts, slop);
             for cid in 0..n_contacts {
                 let ct = manifolds[mid].contacts[cid];
@@ -680,6 +685,7 @@ impl ConstraintSolver {
                     restitution,
                     pen0: ct.penetration,
                     level,
+                    slop,
                     vn0: vn0[vn0_off[mid] + cid],
                     mid,
                     cid,
@@ -982,8 +988,8 @@ impl ConstraintSolver {
                 ((penetration - p.level) * inv_dt, 1.0, 0.0)
             } else if penetration < 0.0 {
                 (penetration * inv_dt, 1.0, 0.0)
-            } else if use_bias && penetration > self.slop {
-                let b = (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity);
+            } else if use_bias && penetration > p.slop {
+                let b = (bias_rate * (penetration - p.slop)).min(self.max_bias_velocity);
                 (b, mass_scale, impulse_scale)
             } else {
                 (0.0, 1.0, 0.0)
@@ -1166,8 +1172,8 @@ impl ConstraintSolver {
                 (penetration - p.level) * inv_dt
             } else if penetration < 0.0 {
                 penetration * inv_dt
-            } else if use_bias && penetration > self.slop {
-                (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity)
+            } else if use_bias && penetration > p.slop {
+                (bias_rate * (penetration - p.slop)).min(self.max_bias_velocity)
             } else {
                 0.0
             };
@@ -1290,8 +1296,8 @@ impl ConstraintSolver {
                 (penetration - p.level) * inv_dt
             } else if penetration < 0.0 {
                 penetration * inv_dt
-            } else if use_bias && penetration > self.slop {
-                (bias_rate * (penetration - self.slop)).min(self.max_bias_velocity)
+            } else if use_bias && penetration > p.slop {
+                (bias_rate * (penetration - p.slop)).min(self.max_bias_velocity)
             } else {
                 0.0
             };

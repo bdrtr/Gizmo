@@ -1243,6 +1243,17 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A body thinner than the slop rests on what it lands on, not in it.** The solver's slop (5 mm)
+  is how deep a contact rests without being pushed out, and a 2 mm coin spun onto the floor met it
+  2 mm deep in one substep, rested there as within the slop, and fell asleep wholly inside the
+  floor; of 200 such coins 86 ended more than half their thickness in. A pair's slop is now the
+  thinner body's — a quarter of its half thickness where that is less than the solver's
+  (`ContactManifold::slop`, set by the pipeline; the solver takes the smaller of it and its own) —
+  in how deep its points rest and in where a fast pair is found to meet. None of the 200 now rests
+  more than 30 % of its thickness in at 240 Hz. Bodies at least 4 cm thick are unchanged. The hold
+  after the solve keeps the solver's slop: at 60 Hz the soft contact leaves a rocking coin a
+  millimetre in at a substep's end, and held back from that at the coin's own slop, with its
+  velocity untouched, it began every substep the same and stood frozen, tilted.
 - **A body still being pushed out of something does not fall asleep.** A contact deeper than the
   slop is taken out by the solve's soft bias, slowly; a body doing that is not at rest, however
   slowly it moves. A 40 cm box landed on a corner 10 mm in was pushed out at under the sleep

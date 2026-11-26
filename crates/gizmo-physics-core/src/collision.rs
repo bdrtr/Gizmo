@@ -272,6 +272,11 @@ pub struct ContactManifold {
     /// Number of consecutive physics frames this manifold has been alive.
     /// Incremented by the pipeline each frame; reset when the collision ends.
     pub lifetime: u32,
+    /// How deep a point of this pair may rest in the other without being pushed out, metres: the
+    /// solver uses the smaller of this and its own slop. `gizmo-physics-rigid`'s pipeline sets the
+    /// pair's own, which is less for a thin body — the solver's 5 mm let a 2 mm coin rest wholly
+    /// inside the floor. Infinite by default: the solver's slop, as before the field existed.
+    pub slop: f32,
 }
 
 impl ContactManifold {
@@ -304,6 +309,7 @@ impl ContactManifold {
             // `PhysicsMaterial::combine` must roll exactly as it did before the field existed.
             rolling_friction: 0.0,
             lifetime: 0,
+            slop: f32::INFINITY,
         }
     }
 

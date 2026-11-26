@@ -1130,11 +1130,12 @@ impl ConstraintSolver {
                 };
                 let manifold = &mut manifolds[mid];
                 let materials = (manifold.friction, manifold.static_friction, manifold.restitution, manifold.rolling_friction);
+                let slop = self.slop.min(manifold.slop);
                 let n_contacts = manifold.contacts.len();
                 for ci in 0..n_contacts {
                     let cid = if reverse { n_contacts - 1 - ci } else { ci };
                     let roll = &mut acc_roll[roll_at[mid] + cid];
-                    self.pgs_contact(&mut manifold.contacts[cid], pair, materials, velocities, inv_dt, roll);
+                    self.pgs_contact(&mut manifold.contacts[cid], pair, materials, slop, velocities, inv_dt, roll);
                 }
             }
         }
@@ -1149,6 +1150,7 @@ impl ConstraintSolver {
         contact: &mut gizmo_physics_core::ContactPoint,
         pair: ContactPair,
         (friction, static_friction, restitution, rolling_friction): (f32, f32, f32, f32),
+        slop: f32,
         velocities: &mut [Velocity],
         inv_dt: f32,
         acc_roll: &mut Vec3,
@@ -1197,7 +1199,7 @@ impl ConstraintSolver {
             0.0
         } else {
             // Fallback Baumgarte
-            let correction = (penetration - self.slop)
+            let correction = (penetration - slop)
                 .max(0.0)
                 .min(self.max_linear_correction);
             self.baumgarte * inv_dt * correction
@@ -1399,7 +1401,7 @@ impl ConstraintSolver {
                 let impact = !vn0.is_nan()
                     && -vn0 > self.restitution_velocity_threshold
                     && gap <= -vn0 * dt
-                    && (gap > self.slop || e * -vn0 > self.restitution_velocity_threshold);
+                    && (gap > self.slop.min(manifolds[mid].slop) || e * -vn0 > self.restitution_velocity_threshold);
                 if !impact {
                     continue;
                 }
@@ -1491,7 +1493,7 @@ impl ConstraintSolver {
                     let normal = contact.normal;
                     let penetration = contact.penetration;
 
-                    let correction = (penetration - self.slop)
+                    let correction = (penetration - self.slop.min(manifolds[mid].slop))
                         .max(0.0)
                         .min(self.max_linear_correction);
                     if correction < 1e-6 {

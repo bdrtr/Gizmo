@@ -93,6 +93,7 @@ struct Slot {
     it2_b: V3,
     pen0: F,
     level: F,
+    slop: F,
     vn0: F,
     restitution: F,
     k_t1: F,
@@ -196,6 +197,7 @@ impl WideBlock {
                 s.it2_b.set(lane, r.it2_b);
                 s.pen0[lane] = r.pen0;
                 s.level[lane] = r.level;
+                s.slop[lane] = r.slop;
                 s.vn0[lane] = r.vn0;
                 s.restitution[lane] = r.restitution;
                 s.k_t1[lane] = r.k_t1;
@@ -307,7 +309,6 @@ impl WideBlock {
 
         let zero = F::ZERO;
         let threshold = F::splat(-solver.restitution_velocity_threshold);
-        let slop = F::splat(solver.slop);
         let mut rhs = [zero; 4];
         let mut acc = [zero; 4];
         let rel = lb.sub(la);
@@ -322,7 +323,7 @@ impl WideBlock {
                 zero
             };
             let soft = if use_bias {
-                F::select(penetration.cmpgt(slop), (F::splat(bias_rate) * (penetration - slop)).min(F::splat(solver.max_bias_velocity)), zero)
+                F::select(penetration.cmpgt(s.slop), (F::splat(bias_rate) * (penetration - s.slop)).min(F::splat(solver.max_bias_velocity)), zero)
             } else {
                 zero
             };

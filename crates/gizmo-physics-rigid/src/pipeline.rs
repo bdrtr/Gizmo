@@ -807,7 +807,7 @@ impl PhysicsWorld {
                             Met::Contacts(vec![face])
                         } else if met.iter().all(|c| through_centre(c, idx_a) && through_centre(c, idx_b)) {
                             Met::Contacts(met)
-                        } else if gap <= self.solver.slop && !met.is_empty() {
+                        } else if gap <= self.pair_slop(idx_a, idx_b) && !met.is_empty() {
                             // Touching now: the points are the impact's where the pair stands, with no
                             // turn extrapolated over the substep.
                             Met::Impact(met)
@@ -1040,6 +1040,7 @@ impl PhysicsWorld {
         manifold.static_friction = combined.static_friction;
         manifold.restitution = combined.restitution;
         manifold.rolling_friction = combined.rolling_friction;
+        manifold.slop = self.pair_slop(found.bodies[0] as usize, found.bodies[1] as usize);
 
         // Snapshot the event's points from the RAW narrowphase output, BEFORE the
         // warm-start pass below. This used to be taken at the end, and was pristine for
@@ -1158,8 +1159,9 @@ impl PhysicsWorld {
         // at under the sleep threshold's 0.05 rad/s, fell asleep, and stayed 1.2° over for good;
         // a 1.6 cm die, 3.3° (2026-11-26).
         let mut digging = vec![false; self.entities.len()];
-        let deep = self.solver.slop + DIGGING;
         for (manifold, end) in manifolds.iter().zip(&ends) {
+            let slop = self.solver.slop.min(manifold.slop);
+            let deep = slop + DIGGING.min(slop);
             if manifold.contacts.iter().any(|c| c.penetration > deep) {
                 for &b in &end.bodies {
                     if let Some(d) = digging.get_mut(b as usize) {
@@ -2050,6 +2052,7 @@ impl PhysicsWorld {
     /// Everything in order of id, so a run does not depend on the tree's shape.
     #[tracing::instrument(skip_all, name = "hold_set_going")]
     pub(crate) fn hold_set_going(&mut self, before: BeforeSolve, dt: f32) {
+
         let mut going: Vec<usize> = (0..self.entities.len())
             .filter(|&i| {
                 let rb = &self.rigid_bodies[i];
@@ -2295,6 +2298,34 @@ impl PhysicsWorld {
         bent.then(|| at + left + moved(j))
     }
 
+    /// How deep a contact of body `i` may rest without being pushed out: the solver's slop, or less
+    /// for a thin body — `SLOP_SHARE` of its half thickness. A surface (a plane, a mesh, a height
+    /// field) has no thickness to keep and takes the solver's.
+    ///
+    /// The solver's 5 mm alone is more than a coin is thick: a 2 mm coin spun onto the floor met it
+    /// 2 mm deep within one substep, was held at that depth as resting within the slop, and fell
+    /// asleep wholly inside the floor (2026-11-26). The contacts take it — how deep a point rests
+    /// (`ContactManifold::slop`), and where a fast pair is found to meet.
+    ///
+    /// The hold after the solve (`hold_set_going`) does not: it stops a body carried through what it
+    /// had no account of, and what the solve itself leaves a contact at is not that. At 60 Hz the
+    /// soft contact let the same coin, rocking on its rim, end a substep a millimetre in; held back
+    /// at a quarter-millimetre slop to where it began, its velocity untouched, it began the next
+    /// substep the same and stood frozen, tilted, for good.
+    pub(crate) fn body_slop(&self, i: usize) -> f32 {
+        let shape = &self.colliders[i].shape;
+        let thickness = shape.half_thickness();
+        if thickness <= 0.0 && matches!(shape, gizmo_physics_core::ColliderShape::Plane(_) | gizmo_physics_core::ColliderShape::TriMesh(_) | gizmo_physics_core::ColliderShape::Heightfield(_)) {
+            return self.solver.slop;
+        }
+        self.solver.slop.min(SLOP_SHARE * thickness)
+    }
+
+    /// The slop of a pair: the thinner body's ([`body_slop`](Self::body_slop)).
+    pub(crate) fn pair_slop(&self, i: usize, j: usize) -> f32 {
+        self.body_slop(i).min(self.body_slop(j))
+    }
+
     /// Whether either of a pair is a surface of many faces, one of which says nothing of the next.
     fn many_faced(&self, i: usize, j: usize) -> bool {
         use gizmo_physics_core::ColliderShape::{Compound, Heightfield, TriMesh};
@@ -2333,6 +2364,10 @@ impl PhysicsWorld {
         Some((gap, normal))
     }
 }
+
+/// A thin body's slop, as a share of its half thickness (`PhysicsWorld::body_slop`): a quarter, so a
+/// body resting at its slop is still three quarters of its half thickness out of what it rests on.
+const SLOP_SHARE: f32 = 0.25;
 
 /// How much deeper than the slop a contact must be for its bodies to count as still being pushed out
 /// of it, and not at rest (`constraint_solve_step`): a millimetre, so a pile whose contacts settle at
@@ -2486,7 +2521,7 @@ impl PhysicsWorld {
         if found.is_empty() {
             return found;
         }
-        let slop = self.solver.slop;
+        let slop = self.pair_slop(idx_a, idx_b);
         // **The contact is the one where the pair meets, not where the substep's end has it.** Deep
         // at the end, a point says nothing about where the two touch: a ball dropped 9.9 m onto a
         // ramp at 60 Hz ended the substep with its centre 7.5 cm inside, the narrow phase put the
@@ -2502,11 +2537,11 @@ impl PhysicsWorld {
                 let ((ma, mqa), (mb, mqb)) = (self.pose_after(idx_a, meets), self.pose_after(idx_b, meets));
                 let there = NarrowPhase::test_collision_manifold(shape_a, ma, mqa, shape_b, mb, mqb);
                 if !there.is_empty() {
-                    return self.brought_back((idx_a, idx_b), there, meets, self.solver.slop);
+                    return self.brought_back((idx_a, idx_b), there, meets, slop);
                 }
             }
         }
-        self.brought_back((idx_a, idx_b), found, dt, self.solver.slop)
+        self.brought_back((idx_a, idx_b), found, dt, slop)
     }
 
     /// [`near_contacts`](Self::near_contacts) for a pair with a body turning fast for its size
@@ -2540,7 +2575,7 @@ impl PhysicsWorld {
         let sweep = (moved(idx_a) - moved(idx_b)).length() + turn_a.unwrap_or(0.0) + turn_b.unwrap_or(0.0);
         let step = FAST_SHARE * (shape_a.half_thickness() + shape_b.half_thickness());
         let samples = (sweep / step.max(1e-4)).ceil().clamp(1.0, MAX_SAMPLES) as u32;
-        let slop = self.solver.slop;
+        let slop = self.pair_slop(idx_a, idx_b);
         let mut out = 0.0;
         for k in 1..=samples {
             let at = dt * k as f32 / samples as f32;
@@ -2584,7 +2619,7 @@ impl PhysicsWorld {
         // Not met this substep: a ball rolling fast on a floor closes on it by gravity's `g·dt`
         // alone. Its contact where the substep ends, brought back, was a third of a metre ahead of
         // it at 60 Hz, and lifted it off the floor (2026-11-26).
-        let meets = (gap + self.solver.slop) / closing;
+        let meets = (gap + self.pair_slop(idx_a, idx_b)) / closing;
         if meets > dt {
             return Vec::new();
         }
