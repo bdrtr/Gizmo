@@ -50,6 +50,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`zar`, five dice thrown into a walled tray.** They tumble off each other and the walls, come to
+  rest on a face and fall asleep; the faces up are the throw's score, and the next throw comes a
+  second later (or on Space). `--test` throws sixty times: every die asleep within six seconds,
+  inside the tray, and — unless it leans on a wall or another die, a cocked die, which is not
+  counted — flat on a face, with the six faces' χ² under the 1 % line. Now 299 counted, χ² 1.7, the
+  worst 0.0065 rad off flat, one cocked. Writing it found a die resting tilted on the floor (a body
+  still being pushed out of a contact fell asleep, see Fixed).
 - **A surface has textures of its own; a shader graph samples them.** `MaterialMaps::surface` names
   them, and they are one 2D array at binding 5 of the material group (`t_surface` in
   `gizmo::material`), a layer each, at the size of the largest, read as sRGB, mipmapped. A shader
