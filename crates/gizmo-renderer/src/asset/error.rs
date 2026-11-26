@@ -76,6 +76,29 @@ pub enum AssetError {
         height: u32,
     },
 
+    /// [`AssetManager::move_asset`](super::AssetManager::move_asset) found nothing to move.
+    MoveSourceMissing {
+        /// The path asked to be moved.
+        path: PathBuf,
+    },
+
+    /// [`AssetManager::move_asset`](super::AssetManager::move_asset) found something already where
+    /// the asset was to go: a file or folder, or a sidecar of that name. Nothing was moved.
+    MoveDestinationTaken {
+        /// What is in the way.
+        path: PathBuf,
+    },
+
+    /// The filesystem refused a move. What had moved before it was moved back.
+    MoveFailed {
+        /// Where it was.
+        from: PathBuf,
+        /// Where it was to go.
+        to: PathBuf,
+        /// What the filesystem reported.
+        source: std::io::Error,
+    },
+
     /// A network fetch for an asset (WASM target) failed.
     Fetch {
         /// The URL that was fetched.
@@ -168,6 +191,11 @@ impl std::fmt::Display for AssetError {
             AssetError::Fetch { url, message } => {
                 write!(f, "fetch failed for '{url}': {message}")
             }
+            AssetError::MoveSourceMissing { path } => write!(f, "nothing to move at {}", path.display()),
+            AssetError::MoveDestinationTaken { path } => write!(f, "cannot move there: {} already exists", path.display()),
+            AssetError::MoveFailed { from, to, source } => {
+                write!(f, "could not move {} to {}: {source}", from.display(), to.display())
+            }
             AssetError::HeightmapTooSmall {
                 path,
                 width,
@@ -207,6 +235,7 @@ impl std::error::Error for AssetError {
             AssetError::ImageDecode { source, .. } => Some(source),
             AssetError::ObjLoad { source, .. } => Some(source),
             AssetError::GltfImport { source, .. } => Some(source),
+            AssetError::MoveFailed { source, .. } => Some(source),
             _ => None,
         }
     }

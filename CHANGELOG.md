@@ -50,6 +50,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The editor renames and moves assets, and their identity goes with them.** The browser's tile
+  menu renames (✏️; the extension, which is what the loader reads a file as, cannot change), and a
+  tile dropped on a folder moves into it. `AssetManager::move_asset` moves the file or folder with
+  its `.meta` sidecars and updates the registry, refusing to overwrite anything (`AssetError::Move*`).
+  The studio then rewrites every component of the open world that names a moved file: meshes in
+  each of their key forms, materials and their maps, terrain, particles, decals, cookies, fonts,
+  sprites, tilemaps, glTF models, scripts and sounds. Scene files on disk need nothing, since their
+  identities find the new path. Refused during ▶.
+- **An asset renamed outside the editor keeps its identity** when the file did not change in the
+  move. Sidecars record the file's length and FNV-1a (`AssetMeta::content`, `ContentId`). A scan
+  gives a file with no sidecar the identity of the one orphaned sidecar that recorded its bytes
+  (in memory only); an import moves that sidecar onto it. Before, the identity was orphaned and an
+  import minted a new one. An import also records content in sidecars written before it, and keeps
+  it current.
+
 - **A rollback session checks its peer before it plays** (`RollbackSession::handshake`). Both
   peers must start from bit-identical worlds stepped alike, and nothing checked it: two peers with a
   different substep rate, gravity, solver setting or body mass, or with player ids that did not

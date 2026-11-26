@@ -56,6 +56,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
         crate::systems::shortcuts::handle_editor_shortcuts(world, editor_state, state, input);
         crate::systems::simulation::handle_simulation(world, editor_state, state, dt, input);
         crate::systems::scene_ops::handle_scene_operations(world, editor_state, state);
+        crate::systems::asset_moves::handle_asset_move(world, editor_state, state.session.is_some());
 
         // Garbage Collection & Auto-Save (her frame kontrol, belirli aralıklarla çalışır)
         crate::systems::gc::garbage_collection_system(world, state, editor_state, dt);

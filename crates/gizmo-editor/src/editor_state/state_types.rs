@@ -322,6 +322,12 @@ pub struct AssetBrowserState {
         std::path::PathBuf,
         (Instant, Vec<(std::path::PathBuf, String)>, usize),
     >,
+    /// A move or rename the browser asked for, `(from, to)`. The host carries it out with the
+    /// asset's identity (`AssetManager::move_asset`: the file and its `.meta` sidecar together) and
+    /// rewrites what the open world and the editor name by the old path.
+    pub move_request: Option<(std::path::PathBuf, std::path::PathBuf)>,
+    /// A rename being typed: the file or folder, and the name so far.
+    pub rename: Option<(std::path::PathBuf, String)>,
 }
 impl AssetBrowserState {
     /// The project directory the browser opens in, and the one whose asset identities an
@@ -346,6 +352,8 @@ impl Default for AssetBrowserState {
             workspace_rx: None,
             cached_dir: None,
             tree_cache: std::collections::HashMap::new(),
+            move_request: None,
+            rename: None,
         }
     }
 }

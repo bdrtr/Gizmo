@@ -13,6 +13,7 @@ pub mod primitives;
 pub mod procedural;
 /// Texture decoding, upload and the built-in fallback textures.
 pub mod texture;
+mod moving;
 
 pub use error::{AssetError, ObjIndexKind};
 pub use loaders::GltfNodeData;
@@ -25,11 +26,54 @@ pub use loaders::GltfNodeData;
 ///
 /// Stable UUIDs let editor tools and serialised scenes reference assets by
 /// identity rather than by path, surviving renames and moves.
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct AssetMeta {
     /// The asset's stable identifier, which is what a scene file references — a path can move,
     /// this cannot.
     pub uuid: Uuid,
+    /// What the file held when the sidecar was last written, so that an identity whose file was
+    /// renamed without it can be found again (see [`ContentId`]). `None` in a sidecar written before
+    /// 2026-11-26, and absent from the file then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<ContentId>,
+}
+
+impl AssetMeta {
+    /// A sidecar naming `uuid`, with no content recorded.
+    pub fn new(uuid: Uuid) -> Self {
+        Self { uuid, content: None }
+    }
+}
+
+/// A file's length and a 64-bit FNV-1a hash of its bytes: enough to recognise a file under a new
+/// name, which is all it is used for — an asset renamed outside the editor, its sidecar left behind
+/// under the old name. FNV-1a and not the standard library's hasher, whose output Rust does not
+/// promise to keep, because this is written to disk and read back by later builds.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct ContentId {
+    /// The file's length in bytes.
+    pub len: u64,
+    /// FNV-1a (64-bit) of its bytes.
+    pub fnv1a: u64,
+}
+
+impl ContentId {
+    /// The content id of `bytes`.
+    pub fn of(bytes: &[u8]) -> Self {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Self { len: bytes.len() as u64, fnv1a: h }
+    }
+
+    /// The content id of the file at `path`, or `None` if it cannot be read.
+    pub fn of_file(path: &Path) -> Option<Self> {
+        std::fs::read(path).ok().map(|b| Self::of(&b))
+    }
 }
 
 // ============================================================================
@@ -900,128 +944,145 @@ impl AssetManager {
     /// decision — writing into someone's asset tree is an action a project-import flow takes
     /// deliberately, not a thing that happens because a directory got walked.
     ///
+    /// One exception to "skipped", which writes nothing either: an asset with no sidecar whose
+    /// bytes are those a sidecar left behind under another name recorded ([`ContentId`]) is the
+    /// same asset renamed outside the editor, and is registered under that sidecar's identity —
+    /// in memory; [`import_assets_directory`](Self::import_assets_directory) moves the sidecar.
+    ///
     /// Safe to call repeatedly; entries are updated, not duplicated.
     pub fn scan_assets_directory(&mut self, dir: &Path) {
-        self.walk_assets(dir, false);
+        self.register_assets(dir, false);
     }
 
     /// Like [`Self::scan_assets_directory`], but **writes**: any asset with no `.meta` sidecar
-    /// gets a fresh UUID and a sidecar next to it.
+    /// gets one — the identity a sidecar left behind under its old name if its content says it is
+    /// that asset, a fresh UUID otherwise — and every sidecar records its file's current content.
     ///
-    /// This is the import action. Note what identity by sidecar can and cannot do: the sidecar
-    /// travels with the filename, so a rename orphans it and mints a new UUID for the new name —
-    /// this repository's own `assets/` holds 10 orphaned sidecars from deleted `.glb` files
-    /// against 6 live assets. Re-adding a file under its old name recovers the old identity;
-    /// renaming does not preserve it.
+    /// What identity by sidecar can and cannot do: the sidecar travels with the filename, so a
+    /// rename outside the editor leaves it behind. Recorded content is what lets this find it
+    /// again — when the file was not changed in the same move, and when exactly one orphaned
+    /// sidecar and one unclaimed file share that content. A sidecar written before 2026-11-26
+    /// recorded none; an import records it. Inside the editor a move carries the sidecar
+    /// ([`move_asset`](Self::move_asset)), and nothing has to be found.
     pub fn import_assets_directory(&mut self, dir: &Path) {
-        self.walk_assets(dir, true);
+        self.register_assets(dir, true);
     }
 
-    /// The shared walker. `mint` decides whether a missing sidecar is created or the asset is
-    /// skipped — the only difference between scanning and importing.
-    fn walk_assets(&mut self, dir: &Path, mint: bool) {
-        if !dir.is_dir() {
+    /// The shared walker. `mint` decides whether a missing sidecar is written or only looked for
+    /// — the only difference between scanning and importing.
+    fn register_assets(&mut self, dir: &Path, mint: bool) {
+        let mut found = FoundAssets::default();
+        collect_assets(dir, &mut found);
+
+        let mut claimed = std::collections::HashSet::new();
+        for (asset, meta) in &found.with_sidecar {
+            let meta_path = sidecar_path(asset);
+            let uuid = match meta {
+                Ok(meta) => {
+                    if mint {
+                        let content = ContentId::of_file(asset);
+                        if content.is_some() && meta.content != content {
+                            write_asset_meta(&meta_path, &AssetMeta { uuid: meta.uuid, content });
+                        }
+                    }
+                    meta.uuid
+                }
+                Err(e) if mint => {
+                    tracing::error!(
+                        "[AssetManager] WARN: corrupt .meta for '{}' ({e}). Regenerating UUID — \
+                         existing scene references to this asset will break.",
+                        asset.display()
+                    );
+                    let meta = AssetMeta { uuid: Uuid::new_v4(), content: ContentId::of_file(asset) };
+                    write_asset_meta(&meta_path, &meta);
+                    meta.uuid
+                }
+                // Scanning: a corrupt sidecar is left alone, and the asset has no identity.
+                Err(_) => continue,
+            };
+            claimed.insert(uuid);
+            self.register(asset, uuid);
+        }
+
+        let adopted = self.adopt_orphans(&found, &claimed, mint);
+        if !mint {
             return;
         }
-
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::error!(
-                    "[AssetManager] Cannot read directory {}: {e}",
-                    dir.display()
-                );
-                return;
-            }
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-
-            if path.is_dir() {
-                self.walk_assets(&path, mint);
-                continue;
-            }
-
-            let is_asset = path
-                .extension()
-                .map(|ext| {
-                    matches!(
-                        ext.to_string_lossy().to_lowercase().as_str(),
-                        "obj"
-                            | "gltf"
-                            | "glb"
-                            | "png"
-                            | "jpg"
-                            | "jpeg"
-                            | "hdr"
-                            | "wav"
-                            | "mp3"
-                            | "ogg"
-                            | "ttf"
-                            | "otf"
-                            | "ron"
-                    )
-                })
-                .unwrap_or(false);
-
-            if !is_asset {
-                continue;
-            }
-
-            let meta_path = PathBuf::from(format!("{}.meta", path.display()));
-            let Some(uuid) = self.read_meta_or_mint(&path, &meta_path, mint) else {
-                continue; // scanning, and this asset has no identity yet
-            };
-
-            let normalized = Self::normalize_path(&path.to_string_lossy());
-            self.path_to_uuid.insert(normalized.clone(), uuid);
-            self.uuid_to_path.insert(uuid, normalized);
+        for asset in found.bare.iter().filter(|a| !adopted.contains(*a)) {
+            let meta = AssetMeta { uuid: Uuid::new_v4(), content: ContentId::of_file(asset) };
+            write_asset_meta(&sidecar_path(asset), &meta);
+            self.register(asset, meta.uuid);
         }
     }
 
-    /// Read an existing `.meta` file, and mint one only if `mint` is set.
-    ///
-    /// Returns `None` when there is no usable identity and we were not asked to create one.
-    fn read_meta_or_mint(&self, asset_path: &Path, meta_path: &Path, mint: bool) -> Option<Uuid> {
-        if meta_path.exists() {
-            match std::fs::read_to_string(meta_path)
-                .map_err(|e| e.to_string())
-                .and_then(|s| ron::from_str::<AssetMeta>(&s).map_err(|e| e.to_string()))
-            {
-                Ok(meta) => return Some(meta.uuid),
-                Err(e) => {
-                    tracing::error!(
-                        "[AssetManager] WARN: corrupt .meta for '{}' ({e}). \
-                         Regenerating UUID — existing scene references to this \
-                         asset will break.",
-                        asset_path.display()
-                    );
-                    // Fall through: an import replaces it, a scan leaves it alone.
+    /// Gives an asset with no sidecar the identity of the orphaned sidecar whose recorded content
+    /// is its own — when that pairing is the only one either side has, and the identity is not
+    /// already some other file's. Returns the assets it gave one.
+    fn adopt_orphans(
+        &mut self,
+        found: &FoundAssets,
+        claimed: &std::collections::HashSet<Uuid>,
+        mint: bool,
+    ) -> std::collections::HashSet<PathBuf> {
+        use std::collections::HashMap;
+        let mut adopted = std::collections::HashSet::new();
+        let mut orphans: HashMap<ContentId, Vec<&(PathBuf, AssetMeta)>> = HashMap::new();
+        for orphan in &found.orphans {
+            if let Some(content) = orphan.1.content {
+                if !claimed.contains(&orphan.1.uuid) {
+                    orphans.entry(content).or_default().push(orphan);
                 }
             }
         }
-
-        if !mint {
-            return None;
+        if orphans.is_empty() {
+            return adopted;
         }
-
-        let uuid = Uuid::new_v4();
-        let meta = AssetMeta { uuid };
-
-        match ron::ser::to_string_pretty(&meta, ron::ser::PrettyConfig::default()) {
-            Ok(ron_str) => {
-                if let Err(e) = std::fs::write(meta_path, ron_str) {
-                    tracing::error!(
-                        "[AssetManager] WARN: could not write .meta for '{}': {e}",
-                        asset_path.display()
-                    );
+        // Only a file whose length some orphan recorded is read.
+        let lengths: std::collections::HashSet<u64> = orphans.keys().map(|c| c.len).collect();
+        let mut bare: HashMap<ContentId, Vec<&PathBuf>> = HashMap::new();
+        for asset in &found.bare {
+            let len = std::fs::metadata(asset).map(|m| m.len()).ok();
+            if len.is_some_and(|l| lengths.contains(&l)) {
+                if let Some(content) = ContentId::of_file(asset) {
+                    bare.entry(content).or_default().push(asset);
                 }
             }
-            Err(e) => tracing::error!("[AssetManager] WARN: RON serialisation failed: {e}"),
         }
+        for (content, assets) in bare {
+            let (Some(candidates), [asset]) = (orphans.get(&content), assets.as_slice()) else {
+                continue;
+            };
+            let [(orphan_path, meta)] = candidates.as_slice() else {
+                continue;
+            };
+            if mint {
+                let to = sidecar_path(asset);
+                if let Err(e) = std::fs::rename(orphan_path, &to) {
+                    tracing::error!("[AssetManager] could not move {} to {}: {e}", orphan_path.display(), to.display());
+                    continue;
+                }
+            }
+            tracing::info!(
+                uuid = %meta.uuid,
+                sidecar = %orphan_path.display(),
+                asset = %asset.display(),
+                "[AssetManager] an asset renamed without its sidecar keeps its identity"
+            );
+            self.register(asset, meta.uuid);
+            adopted.insert((*asset).clone());
+        }
+        adopted
+    }
 
-        Some(uuid)
+    /// Records `uuid` as the asset at `path`, forgetting the path it had before, if any.
+    pub(crate) fn register(&mut self, path: &Path, uuid: Uuid) {
+        let normalized = Self::normalize_path(&path.to_string_lossy());
+        if let Some(old) = self.uuid_to_path.insert(uuid, normalized.clone()) {
+            if old != normalized && self.path_to_uuid.get(&old) == Some(&uuid) {
+                self.path_to_uuid.remove(&old);
+            }
+        }
+        self.path_to_uuid.insert(normalized, uuid);
     }
 
     // ── Placeholder mesh ──────────────────────────────────────────────────
@@ -1083,6 +1144,81 @@ impl AssetManager {
             Vec3::ZERO,
             "__async_loading__".to_string(),
         )
+    }
+}
+
+/// What a walk of an asset tree found.
+#[derive(Default)]
+struct FoundAssets {
+    /// Assets with a sidecar, and what reading it gave.
+    with_sidecar: Vec<(PathBuf, Result<AssetMeta, String>)>,
+    /// Assets with none.
+    bare: Vec<PathBuf>,
+    /// Sidecars whose asset is not there, with what they hold.
+    orphans: Vec<(PathBuf, AssetMeta)>,
+}
+
+/// Whether `path` names a file the registry gives an identity to.
+pub(crate) fn is_registered_asset(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| {
+        matches!(
+            ext.to_string_lossy().to_lowercase().as_str(),
+            "obj" | "gltf" | "glb" | "png" | "jpg" | "jpeg" | "hdr" | "wav" | "mp3" | "ogg" | "ttf" | "otf" | "ron"
+        )
+    })
+}
+
+/// The sidecar beside `asset`: `<file>.meta`.
+pub(crate) fn sidecar_path(asset: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.meta", asset.display()))
+}
+
+fn collect_assets(dir: &Path, found: &mut FoundAssets) {
+    if !dir.is_dir() {
+        return;
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!("[AssetManager] Cannot read directory {}: {e}", dir.display());
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_assets(&path, found);
+        } else if is_registered_asset(&path) {
+            let meta_path = sidecar_path(&path);
+            if meta_path.exists() {
+                let meta = std::fs::read_to_string(&meta_path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|s| ron::from_str::<AssetMeta>(&s).map_err(|e| e.to_string()));
+                found.with_sidecar.push((path, meta));
+            } else {
+                found.bare.push(path);
+            }
+        } else if path.extension().is_some_and(|x| x == "meta") {
+            let asset = path.with_extension("");
+            if is_registered_asset(&asset) && !asset.exists() {
+                if let Some(meta) = std::fs::read_to_string(&path).ok().and_then(|s| ron::from_str::<AssetMeta>(&s).ok()) {
+                    found.orphans.push((path, meta));
+                }
+            }
+        }
+    }
+}
+
+/// Writes a sidecar, reporting (not returning) a failure: an identity that could not be written is
+/// still the asset's for this session.
+pub(crate) fn write_asset_meta(meta_path: &Path, meta: &AssetMeta) {
+    match ron::ser::to_string_pretty(meta, ron::ser::PrettyConfig::default()) {
+        Ok(text) => {
+            if let Err(e) = std::fs::write(meta_path, text) {
+                tracing::error!("[AssetManager] WARN: could not write {}: {e}", meta_path.display());
+            }
+        }
+        Err(e) => tracing::error!("[AssetManager] WARN: RON serialisation failed: {e}"),
     }
 }
 
@@ -1182,7 +1318,7 @@ mod asset_meta_tests {
     /// The shape the sidecars on disk actually have round-trips.
     #[test]
     fn the_committed_sidecar_shape_round_trips() {
-        let meta = AssetMeta { uuid: uuid::Uuid::new_v4() };
+        let meta = AssetMeta::new(uuid::Uuid::new_v4());
         let text = ron::ser::to_string(&meta).unwrap();
         let back: AssetMeta = ron::from_str(&text).unwrap();
         assert_eq!(back.uuid, meta.uuid);
@@ -1426,7 +1562,7 @@ mod scan_does_not_write_tests {
         let known = uuid::Uuid::new_v4();
         std::fs::write(
             dir.join("thing.png.meta"),
-            ron::ser::to_string(&super::AssetMeta { uuid: known }).unwrap(),
+            ron::ser::to_string(&super::AssetMeta::new(known)).unwrap(),
         )
         .unwrap();
 

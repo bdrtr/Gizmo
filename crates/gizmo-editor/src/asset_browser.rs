@@ -2,7 +2,7 @@
 
 use crate::editor_state::EditorState;
 use egui;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
@@ -60,6 +60,80 @@ pub fn ui_asset_browser(ui: &mut egui::Ui, state: &mut EditorState) {
     egui::ScrollArea::both().show(ui, |ui| {
         ui.horizontal_wrapped(|ui| asset_grid(ui, state));
     });
+    rename_dialog(ui, state);
+}
+
+/// Where renaming `from` to `name` puts it: beside it, under the new name. Refused, with the
+/// sentence the user reads, when the name is empty, the same, names a folder (`/`, `\`, `..`), or
+/// changes an asset's extension — the extension is what the loader reads a file as, so `tree.obj`
+/// renamed `tree.png` would be a texture that does not decode.
+pub fn rename_target(from: &Path, name: &str) -> Result<PathBuf, &'static str> {
+    let name = name.trim();
+    if name.is_empty() || name == "." {
+        return Err("Ad boş olamaz.");
+    }
+    if name.contains('/') || name.contains('\\') || name == ".." {
+        return Err("Ad bir klasör içeremez — taşımak için bir klasöre sürükleyin.");
+    }
+    if from.file_name().is_some_and(|old| old == name) {
+        return Err("Ad aynı.");
+    }
+    let to = from.with_file_name(name);
+    if !from.is_dir() && from.extension() != to.extension() {
+        return Err("Uzantı değiştirilemez: dosya o uzantıyla okunuyor.");
+    }
+    Ok(to)
+}
+
+/// Where dropping `from` on `folder` puts it: inside, under its own name. `None` where it already
+/// is, on itself, or into a folder inside it.
+pub fn move_into(from: &Path, folder: &Path) -> Option<PathBuf> {
+    if from == folder || from.parent() == Some(folder) || folder.starts_with(from) {
+        return None;
+    }
+    Some(folder.join(from.file_name()?))
+}
+
+/// The rename box, while one is being typed: ⏎ or "Tamam" asks the host to move it, Esc or "İptal"
+/// drops it. A refused name keeps the box open and says why.
+fn rename_dialog(ui: &mut egui::Ui, state: &mut EditorState) {
+    let Some((from, mut name)) = state.assets.rename.take() else {
+        return;
+    };
+    let mut keep = true;
+    let mut refusal = None;
+    egui::Window::new("Yeniden Adlandır").collapsible(false).resizable(false).show(ui.ctx(), |ui| {
+        ui.label(from.display().to_string());
+        let field = ui.text_edit_singleline(&mut name);
+        // Typed into as soon as it opens, without taking the focus back from anything else.
+        if ui.memory(|m| m.focused().is_none()) {
+            field.request_focus();
+        }
+        // ⏎ while the box is open confirms it, wherever the focus went.
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let target = rename_target(&from, &name);
+        if let Err(why) = target {
+            if name.trim() != from.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default() {
+                refusal = Some(why);
+            }
+        }
+        if let Some(why) = refusal {
+            ui.label(egui::RichText::new(why).color(egui::Color32::YELLOW));
+        }
+        ui.horizontal(|ui| {
+            let ok = ui.add_enabled(target.is_ok(), egui::Button::new("Tamam")).clicked();
+            if (ok || enter) && target.is_ok() {
+                state.assets.move_request = target.clone().ok().map(|to| (from.clone(), to));
+                keep = false;
+            }
+            if ui.button("İptal").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                keep = false;
+            }
+        });
+    });
+    if keep {
+        state.assets.rename = Some((from, name));
+    }
 }
 
 /// Takes the folder the workspace dialog chose, once it has answered.
@@ -308,6 +382,13 @@ fn asset_tile(ui: &mut egui::Ui, state: &mut EditorState, path: &Path, name: &st
         if drag_response.drag_started() {
             state.dragged_asset = Some(path_str.clone());
         }
+        // A tile dropped on a folder moves into it, identity and all; the viewport never sees it.
+        if is_dir && response.contains_pointer() && ui.input(|i| i.pointer.any_released()) {
+            if let Some(to) = state.dragged_asset.as_deref().and_then(|from| move_into(Path::new(from), path)) {
+                let from = PathBuf::from(state.dragged_asset.take().unwrap_or_default());
+                state.assets.move_request = Some((from, to));
+            }
+        }
 
         if response.double_clicked() {
             if is_dir {
@@ -381,6 +462,10 @@ fn tile_menu(ui: &mut egui::Ui, state: &mut EditorState, kind: AssetKind, path: 
     }
     if kind == AssetKind::Scene && ui.button("📂 Bu Sahneyi Yükle").clicked() {
         state.request_scene_load(path.to_string());
+        ui.close();
+    }
+    if ui.button("✏️ Yeniden Adlandır").clicked() {
+        state.assets.rename = Some((PathBuf::from(path), name.to_string()));
         ui.close();
     }
     if ui.button("📋 Yolu Kopyala").clicked() {
@@ -1133,5 +1218,92 @@ mod tests {
     #[test]
     fn leading_dot_dotfile_is_generic_file() {
         assert_eq!(get_file_icon(".gitignore"), "📄");
+    }
+}
+
+/// Renaming and moving from the browser: what a name is allowed to be, where a drop puts a file,
+/// and the rename box.
+#[cfg(test)]
+mod rename_tests {
+    use super::{move_into, rename_target};
+    use std::path::{Path, PathBuf};
+
+    /// A rename stays beside the file and keeps its extension, which is what the loader reads it
+    /// as; a name that is empty, the same or a path is refused with a sentence.
+    #[test]
+    fn a_rename_keeps_the_folder_and_the_extension() {
+        let file = Path::new("demo/assets/tree.obj");
+        assert_eq!(rename_target(file, " oak.obj "), Ok(PathBuf::from("demo/assets/oak.obj")));
+        assert!(rename_target(file, "oak.png").is_err(), "an OBJ renamed to a texture");
+        assert!(rename_target(file, "oak").is_err(), "an extension dropped");
+        for bad in ["", "  ", "tree.obj", "../tree2.obj", "sub/oak.obj", "sub\\oak.obj", ".."] {
+            assert!(rename_target(file, bad).is_err(), "{bad:?} was allowed");
+        }
+    }
+
+    /// A drop on a folder moves into it under the same name; onto itself, into its own folder or
+    /// into a folder inside it, nothing moves.
+    #[test]
+    fn a_drop_on_a_folder_moves_into_it() {
+        let (file, props) = (Path::new("a/tree.obj"), Path::new("a/props"));
+        assert_eq!(move_into(file, props), Some(PathBuf::from("a/props/tree.obj")));
+        assert_eq!(move_into(file, Path::new("a")), None, "already there");
+        assert_eq!(move_into(props, props), None, "onto itself");
+        assert_eq!(move_into(Path::new("a"), Path::new("a/props")), None, "into itself");
+        assert_eq!(move_into(props, Path::new("b")), Some(PathBuf::from("b/props")));
+    }
+
+    /// The box asks for the move on ⏎ with a good name, and says why for a bad one without asking.
+    #[test]
+    fn the_rename_box_asks_for_the_move_and_explains_a_refusal() {
+        let dir = std::env::temp_dir().join("gizmo_rename_box");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("tree.obj");
+        std::fs::write(&file, b"o tree").unwrap();
+
+        let mut state = crate::EditorState::default();
+        state.assets.root = dir.to_string_lossy().into_owned();
+        state.assets.rename = Some((file.clone(), "oak.png".into()));
+        let ctx = egui::Context::default();
+        let frame = |state: &mut crate::EditorState, events: Vec<egui::Event>| {
+            let input = egui::RawInput { events, ..Default::default() };
+            let output = ctx.run_ui(input, |ui| super::ui_asset_browser(ui, state));
+            let mut texts = Vec::new();
+            fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+                match shape {
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+                    egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+                    _ => {}
+                }
+            }
+            output.shapes.iter().for_each(|s| collect(&s.shape, &mut texts));
+            output.drop_without_applying_deltas();
+            texts
+        };
+        let enter = || {
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }]
+        };
+
+        // An egui window spends its first frame measuring itself, unseen.
+        frame(&mut state, vec![]);
+        let texts = frame(&mut state, vec![]);
+        assert!(texts.iter().any(|t| t == "Yeniden Adlandır"), "no rename box: {texts:?}");
+        assert!(texts.iter().any(|t| t.starts_with("Uzantı değiştirilemez")), "no reason given: {texts:?}");
+        frame(&mut state, enter());
+        assert!(state.assets.move_request.is_none(), "a refused name was moved");
+        assert!(state.assets.rename.is_some(), "and the box stays open");
+
+        state.assets.rename = Some((file.clone(), "oak.obj".into()));
+        frame(&mut state, vec![]);
+        frame(&mut state, enter());
+        assert_eq!(state.assets.move_request, Some((file, dir.join("oak.obj"))));
+        assert!(state.assets.rename.is_none(), "the box closed");
     }
 }

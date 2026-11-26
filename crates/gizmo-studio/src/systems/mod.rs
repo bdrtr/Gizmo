@@ -1,3 +1,5 @@
+/// Moving or renaming an asset from the browser, with its identity and the references to it.
+pub mod asset_moves;
 /// Exporting a game: the build requests the toolbar raises, and what packages a runtime.
 pub mod build;
 /// The editor camera: fly controls, focusing, and the orbit the viewport drives.

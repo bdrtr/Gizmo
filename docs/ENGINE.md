@@ -179,8 +179,10 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    only grown; `compact` shrinks its capacity but does not truncate past the last valid slot, as
 >    it does for the sparse index. Waits on proving the row-location invariant for the unguarded
 >    index sites (round three of that audit is not advanced). Entry: "Open, filed 2026-08-31".
-> 2. **The editor cannot move or rename an asset**, and a rename done outside it leaves the `.meta`
->    sidecar behind and orphans the asset's identity. Entry: "Asset identity".
+> 2. ~~**The editor cannot move or rename an asset**, and a rename done outside it leaves the `.meta`
+>    sidecar behind and orphans the asset's identity.~~ *Closed 2026-11-26:* the browser renames and
+>    moves (`AssetManager::move_asset`, the studio rewriting the open world), and a file renamed
+>    outside it is recognised by the content its sidecar recorded. Entry: "Asset identity".
 > 3. **Audio routing: no sends/returns** (a reverb bus fed from other buses). Every bus is a gain
 >    on the sounds routed to it, and the effects are either inside each source (muffle, reverb) or
 >    on the whole mix (EQ, compressor, limiter); a send needs buses that sum their sounds and carry
@@ -1731,10 +1733,13 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
     learn what an asset is; the impl lives in `gizmo-app`, the first layer holding both halves,
     which is also why the app's own initial-scene load gets repair for free.
   - **What it survives, exactly:** a file or folder that MOVED with its `.meta` sidecar — dragging
-    a folder, `git mv`, reorganising `demo/assets` — which is the case a path cannot survive. Not a
-    rename that leaves the sidecar behind: the sidecar is named after its file, so the identity is
-    orphaned and a later import mints a new one. That is a property of sidecar identity, and
-    overclaiming it would be worse than the gap.
+    a folder, `git mv`, reorganising `demo/assets` — which is the case a path cannot survive. *And
+    since 2026-11-26* a rename that leaves the sidecar behind, when the file was not changed in the
+    same move and the pairing is unambiguous: a sidecar records its file's length and FNV-1a
+    (`ContentId`), and a scan gives a file with no sidecar the identity of the one orphaned sidecar
+    that recorded its bytes (in memory; an import moves the sidecar). A sidecar written before then
+    recorded nothing until an import; a file edited and renamed at once is a new asset. Before, the
+    identity was orphaned and a later import minted a new one.
   - Two defects fell out of writing the tests: `normalize_path` gave absolute paths a **doubled
     leading slash** (`//tmp/x`, harmless in a lookup because both sides normalise, wrong in the
     value handed to a loader), and `./demo/x` vs `demo/x` were two registry keys for one file.
@@ -1755,10 +1760,16 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
     rule now lives once, in `MeshSource::split_gltf_key` in `gizmo-core` (below both consumers),
     and the renderer's loader was rewritten onto it: it had its own copy, and two parses of one
     key shape is how the loader and the saver come to disagree about where a file name ends.
-  - **Writing identity is on for the editor and the app, and that is the whole rollout.** There is
-    no asset rename/move action in the editor yet (the browser is read-only), so nothing else needs
-    it. **Trigger for more:** an editor move/rename action — which should carry the sidecar, and at
-    that point is also what makes the orphan case above worth fixing.
+  - **Writing identity is on for the editor and the app.** *Closed 2026-11-26: the editor moves and
+    renames.* The browser's tile menu renames (✏️, keeping the extension the loader reads the file
+    by) and a tile dropped on a folder moves into it. `AssetManager::move_asset` moves the file or
+    folder with its sidecars and the registry's paths, refusing to overwrite anything; the studio
+    (`systems::asset_moves`) then rewrites every component of the open world that names a moved
+    file, in each form a name takes (an `obj:` mesh, a glTF sub-mesh key, an image inside a model,
+    a bare path), and the editor's own paths. Scene files on disk need nothing: their identities
+    find the new paths. Refused during ▶, where the world in front of the editor is the play
+    world. Paths are compared normalised, not canonicalised: a reference spelled absolute while the
+    browser lists relative is not recognised as the same file.
 - **Collider shapes — `Cylinder` and `Heightfield` landed (2026-08-17), closing an audit item
   that was never carried onto this list.** The 2026-08 audit found three shape gaps (§Y1,
   "Cylinder, Cone, Heightfield yok") and its phase B carried them as B7, *"Cylinder + Heightfield
