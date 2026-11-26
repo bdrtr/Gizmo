@@ -1220,6 +1220,12 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A planar body stays in its plane through a bounce and a hold.** A speculative contact's bounce is
+  added after position integration, after the axis locks were enforced, and it was added unmasked;
+  the hold after the solve (`hold_set_going`) moved a body along the normal it was held at, out of the
+  plane too. A planar box bounced off a ramp tilted out of its plane stepped 2.7 cm off it at 60 Hz,
+  and on macOS's arm64 a planar body's debris ended a step with 1.8 mm/s across its plane
+  (`fracture_in_play`, CI). Both are masked by the locks now.
 - **A sound plays whole, at its own rate, from its first sample.** rodio builds a player's rate
   converter when the player is connected to its mixer, from what its queue holds then — its empty
   start, which reads as 48 kHz — and the sound appended after was converted at that rate for the

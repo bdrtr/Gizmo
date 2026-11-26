@@ -62,3 +62,38 @@ fn planar_xy_sets_exactly_the_three_locks() {
     assert!(b.lock_translation_z && b.lock_rotation_x && b.lock_rotation_y);
     assert!(!b.lock_translation_x && !b.lock_translation_y && !b.lock_rotation_z);
 }
+
+/// A planar body bounced off a surface tilted out of its plane keeps its plane: no velocity across
+/// it at the end of a step and no step off it. The bounce of a speculative contact is added after
+/// the locks were enforced, and was added unmasked; the hold after the solve moved a body along the
+/// normal it was held at, out of the plane too (2026-11-26, seen on macOS's arm64 in
+/// `fracture_in_play`).
+#[test]
+fn a_planar_body_bounced_off_a_tilted_surface_stays_in_its_plane() {
+    use gizmo_physics_core::components::{CombineMode, PhysicsMaterial};
+    for hz in [60, 240] {
+        for speed in [10.0f32, 60.0, 200.0] {
+            let mut w = gizmo_physics_rigid::PhysicsWorld::new().with_substep_rate(hz).unwrap().with_gravity(gizmo_math::Vec3::ZERO);
+            let bouncy = PhysicsMaterial { restitution: 0.8, restitution_combine: CombineMode::Max, ..Default::default() };
+            let mut ramp = gizmo_physics_core::Transform::new(gizmo_math::Vec3::ZERO);
+            ramp.rotation = gizmo_math::Quat::from_rotation_x(0.5) * gizmo_math::Quat::from_rotation_z(0.3);
+            w.add_body(gizmo_physics_core::BodyHandle::from_id(1), gizmo_physics_rigid::RigidBody::new_static(), ramp, gizmo_physics_rigid::Velocity::default(), gizmo_physics_core::Collider::box_collider(gizmo_math::Vec3::new(5.0, 0.2, 5.0)).with_material(bouncy));
+            for (id, shape) in [(2u32, gizmo_physics_core::Collider::sphere(0.2)), (3, gizmo_physics_core::Collider::box_collider(gizmo_math::Vec3::new(0.3, 0.1, 0.2)))] {
+                let c = shape.with_material(bouncy);
+                let mut rb = gizmo_physics_rigid::RigidBody::new(1.0, true).planar_xy();
+                rb.update_inertia_from_collider(&c);
+                let x = if id == 2 { -1.0 } else { 1.0 };
+                w.add_body(gizmo_physics_core::BodyHandle::from_id(id), rb, gizmo_physics_core::Transform::new(gizmo_math::Vec3::new(x, 3.0, 0.0)), gizmo_physics_rigid::Velocity::new(gizmo_math::Vec3::new(0.0, -speed, 0.0)), c);
+            }
+            for frame in 0..60 {
+                w.step(1.0 / 60.0).unwrap();
+                for id in [2u32, 3] {
+                    let i = *w.entity_index_map.get(&id).unwrap();
+                    let (p, v) = (w.transforms[i].position, w.velocities[i]);
+                    assert!(v.linear.z == 0.0 && p.z == 0.0, "{hz} Hz, {speed} m/s, body {id}, frame {frame}: z {}, vz {}", p.z, v.linear.z);
+                    assert!(v.angular.x == 0.0 && v.angular.y == 0.0, "{hz} Hz, {speed} m/s, body {id}, frame {frame}: turns out of the plane {:?}", v.angular);
+                }
+            }
+        }
+    }
+}

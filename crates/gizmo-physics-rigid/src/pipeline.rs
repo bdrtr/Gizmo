@@ -1803,6 +1803,10 @@ impl PhysicsWorld {
             if self.rigid_bodies[idx].is_sleeping || !self.rigid_bodies[idx].is_dynamic() {
                 continue;
             }
+            // After position integration, so after the locks were enforced for this substep: a
+            // bounce is masked by them itself. Unmasked, a planar body's debris ended a step with
+            // 1.8 mm/s across its plane on macOS's arm64 (CI, 2026-11-26).
+            let (linear, angular) = self.rigid_bodies[idx].mask_locked(linear, angular);
             let vel = &mut self.velocities[idx];
             vel.linear += linear;
             vel.angular += angular;
@@ -2075,6 +2079,9 @@ impl PhysicsWorld {
                         continue;
                     }
                     if let Some((at, rotation)) = self.held_at(&look, i, j) {
+                        // Along its unlocked axes only: a planar body is held in its plane.
+                        let now = self.transforms[i].position;
+                        let at = now + self.rigid_bodies[i].mask_locked(at - now, Vec3::ZERO).0;
                         self.transforms[i].position = at;
                         self.transforms[i].rotation = rotation;
                         // The cached matrix too, so the hold is visible to an end-of-frame snapshot.
