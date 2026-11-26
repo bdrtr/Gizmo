@@ -73,15 +73,14 @@ proptest! {
         for c in &contacts {
             prop_assert!(c.normal.is_finite(), "normal NaN/Inf");
             prop_assert!((c.normal.length() - 1.0).abs() < 1e-3, "normal birim değil: {:?}", c.normal);
-            // Köşe BAŞINA sıfır derinlik meşru, ve bu bilinçli bir tasarım: `clip_box_box`
-            // referans yüzeyin tam üstündeki köşeleri `DEPTH_TOLERANCE` ile kabul edip
-            // derinliği `max(0.0)` ile kırpıyor. O tolerans tam temastaki yığınları düzelten
-            // değişikliğin kendisi — onsuz dört köşe de eleniyor, manifold GJK'nın tek
-            // noktasına çöküyor ve yığın tork alamıyor (bkz. contacts.rs'teki DEPTH_TOLERANCE
-            // yorumu). Bu iddia eskiden `> 0.0` idi ve o toleranstan ÖNCEYE aitti; proptest
-            // 2026-08-07'de bunu yakaladı (seed .proptest-regressions'a işlendi).
-            prop_assert!(c.penetration.is_finite() && c.penetration >= 0.0,
-                "penetrasyon geçersiz: {}", c.penetration);
+            // A point of the patch may be at zero depth — `clip_box_box` takes a corner on the
+            // reference face within `DEPTH_TOLERANCE`, without which a stack at exact contact lost
+            // its four corners to GJK's one point — or in front of the other box by no more than the
+            // speculative margin: a point about to touch, at its separation as a negative depth
+            // (`SPECULATIVE_MARGIN`, 1 cm, since 2026-11-26). This read `>= 0.0` until then, and
+            // `> 0.0` before the tolerance (caught 2026-08-07, seed in .proptest-regressions).
+            prop_assert!(c.penetration.is_finite() && c.penetration >= -0.01 - 1e-4,
+                "a point further out than the speculative margin: {}", c.penetration);
             prop_assert!(c.point.is_finite(), "temas noktası NaN/Inf");
         }
         // Ama testin ASIL iddiası duruyor, manifold seviyesinde: kutular gerçekten örtüşüyor

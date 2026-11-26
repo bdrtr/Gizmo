@@ -76,6 +76,17 @@ pub(super) fn patch_depth(behind: f32, tolerance: f32) -> Option<f32> {
     }
 }
 
+/// A patch reduced to its four contacts — or none, when nothing of it touches: then its points are
+/// all ones about to touch, and the pair's overlap is somewhere the faces do not say (a capsule's end
+/// over a box's edge), which the caller's one point from GJK/EPA does. A patch of points in front
+/// of the box alone lost a capsule's overlap of the box 3 mm deep (2026-11-26).
+pub(super) fn touching_patch(contacts: Vec<ContactPoint>) -> Vec<ContactPoint> {
+    if contacts.iter().all(|c| c.penetration < 0.0) {
+        return Vec::new();
+    }
+    select_4_contacts(contacts)
+}
+
 /// Build a `ContactPoint` with zeroed warm-start fields.
 #[inline]
 pub(super) fn mk_contact(point: Vec3, normal: Vec3, penetration: f32) -> ContactPoint {
@@ -333,7 +344,7 @@ pub(super) fn clip_box_box(
         })
         .collect();
 
-    select_4_contacts(contacts)
+    touching_patch(contacts)
 }
 
 /// One Sutherland–Hodgman step: the part of the convex `polygon` with `p · axis <= offset`. A
@@ -601,7 +612,7 @@ fn clip_to_reference(mut polygon: Vec<Vec3>, reference: &[Vec3], ref_n: Vec3, re
     if contacts.len() > 1 && contacts[0].point.distance_squared(contacts[contacts.len() - 1].point) < 1e-12 {
         contacts.pop();
     }
-    select_4_contacts(contacts)
+    touching_patch(contacts)
 }
 
 /// The contacts of a shape with a plane (`normal · x = offset`, the solid side behind it): every

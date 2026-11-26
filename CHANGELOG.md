@@ -1229,7 +1229,10 @@ asking the compiler, and by reading the list of public items the workspace never
   millimetre, so a cylinder landing 0.001 rad off level was struck on one end alone and turned 3 rad/s.
   Box clipping, a shape on a triangle's face, a box on a plane and a shape's feature on a plane now
   keep the points within 1 cm in front of the other surface, at their separation as a negative depth
-  (`SPECULATIVE_MARGIN`), as Box2D's manifolds do. The manifold's deepest point still touches.
+  (`SPECULATIVE_MARGIN`), as Box2D's manifolds do. The manifold's deepest point still touches: a
+  patch with nothing of it touching is no patch (`touching_patch`), and the pair keeps GJK/EPA's
+  point — a capsule's end over a box's edge had its overlap replaced by points 3 mm in front of the
+  box, which a seeded proptest found on Windows CI after the change went in.
 - **A patch's four contacts span its corners.** The reduction to four started from the deepest point,
   and on a flat patch, all one depth, that was the rounding's choice: of a box where six mesh triangles
   meet, a point on a triangle's edge inside the face, and the box stood on three corners and the middle

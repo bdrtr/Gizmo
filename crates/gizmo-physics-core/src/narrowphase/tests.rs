@@ -633,3 +633,19 @@ fn a_ball_on_a_mesh_ridge_rests_on_its_edge() {
         assert!(c.normal.dot(-Vec3::Y) > 0.99, "pushed straight up off the crest, not along a slope: {c:?}");
     }
 }
+
+/// A capsule overlapping a box where the box's face says nothing of it — its end over an edge —
+/// keeps a touching contact. Its face-clipped line lay all in front of the face, within the
+/// speculative margin, and that patch took the place of GJK/EPA's point: a manifold 3 mm in front of
+/// a box it overlapped (proptest, 2026-11-26).
+#[test]
+fn a_capsule_over_a_box_edge_keeps_its_touching_contact() {
+    let s = 0.261_084_17;
+    let capsule = ColliderShape::Capsule(crate::components::CapsuleShape { radius: s * 0.5, half_height: s });
+    let cube = ColliderShape::Box(BoxShape { half_extents: Vec3::splat(s) });
+    let (pa, qa) = (Vec3::new(2.840_365_2, -3.163_487_4, -2.024_427_4), Quat::from_xyzw(-0.172_071_28, 0.402_052_13, -0.496_161_67, 0.750_046_1));
+    let (pb, qb) = (Vec3::new(2.795_484_8, -3.093_446_3, -1.330_310_2), Quat::from_xyzw(-0.501_061_3, 0.811_769_96, -0.163_374_65, 0.251_546_83));
+    let contacts = NarrowPhase::test_collision_manifold(&capsule, pa, qa.normalize(), &cube, pb, qb.normalize());
+    let deepest = contacts.iter().map(|c| c.penetration).fold(f32::NEG_INFINITY, f32::max);
+    assert!(deepest >= 0.0, "the deepest of {} contacts is {deepest}", contacts.len());
+}
