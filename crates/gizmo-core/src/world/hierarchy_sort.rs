@@ -23,8 +23,8 @@ impl World {
             mut_arch.swap_rows(row_a, row_b);
         }
 
-        self.entity_locations[entity_a as usize].row = row_b as u32;
-        self.entity_locations[entity_b as usize].row = row_a as u32;
+        self.set_location_row(entity_a as usize, row_b as u32);
+        self.set_location_row(entity_b as usize, row_a as u32);
     }
 
     /// Clusters parent and child nodes that are in the same archetype so that they sit back to back in memory. O(N) cache swap.

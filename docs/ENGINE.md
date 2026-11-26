@@ -175,10 +175,12 @@ the first write (Unity's material instance — a hidden un-sharing).
 > on 2026-11-24. What is open is listed here; each line points at its entry, which keeps the
 > detail. Everything else in this section is closed or decided, and says so where it stands.
 >
-> 1. **`World::entity_locations` is never cut back.** Indexed by entity id at 8 bytes an id and
->    only grown; `compact` shrinks its capacity but does not truncate past the last valid slot, as
->    it does for the sparse index. Waits on proving the row-location invariant for the unguarded
->    index sites (round three of that audit is not advanced). Entry: "Open, filed 2026-08-31".
+> 1. ~~**`World::entity_locations` is never cut back.**~~ *Closed 2026-11-26, without the proof it
+>    was waiting on:* every read past its end says `INVALID` and every write past its end of an
+>    invalid location is skipped (`location_at`, `set_location`, `set_location_row`; the 29 bare
+>    index sites are gone), so the slots `compact` now cuts — all past the last valid one, all
+>    `INVALID` — read the same whether they are there or not. Whether an entity listed in a row can
+>    have a slot past the cut no longer matters to the cut. Entry: "Open, filed 2026-08-31".
 > 2. ~~**The editor cannot move or rename an asset**, and a rename done outside it leaves the `.meta`
 >    sidecar behind and orphans the asset's identity.~~ *Closed 2026-11-26:* the browser renames and
 >    moves (`AssetManager::move_asset`, the studio rewriting the open world), and a file renamed
@@ -191,8 +193,12 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    sum. Entry: "M7.5".
 > 4. **A shader graph has no texture of its own**: it samples the five maps the material's group
 >    binds, and a sixth needs a binding the web's four groups have no room for. Entry: "Shader Graph".
-> 5. **Friction holds velocity, not position**: no positional term in the tangent channel. What it
->    costs is measured at 10 µm of creep over 200 s at the friction limit. Entry: "Friction has no
+> 5. ~~**Friction holds velocity, not position**~~ *Decided 2026-11-26 (the owner's choice): not
+>    built.* No positional term in the tangent channel, and what it costs is 10 µm of creep over
+>    200 s for an awake box pushed at 99 % of its friction limit — a body at rest sleeps and creeps
+>    not at all. Friction anchors (two body-local points carried with a contact, a tangent bias in the
+>    scalar, block and wide sweeps) are the fix if a game needs sub-millimetre hold at the limit;
+>    until then their cost in the solver's hot loop buys nothing seen. Entry: "Friction has no
 >    positional term".
 > 6. **Gamepads, waiting on something outside the engine:** a control held at launch is unseen until
 >    it moves (gilrs reads no initial state); the browser's pad is built and linted, never tried in a
@@ -682,6 +688,15 @@ state instead.
       ordering restored: `entity 1 at archetype 2 row 0, location says archetype 1 row 1`. The
       location writes moved ahead of the user code — the same reordering `despawn` and
       `insert_batch` received, and the third and last site with that shape.
+
+    **Closed 2026-11-26, by making the question moot rather than answering it.** The cut needed
+    the invariant only because 29 sites indexed `entity_locations[id]` bare, and past a cut they
+    would panic where an `INVALID` slot used to be read. They all go through three accessors now —
+    `location_at` (`INVALID` past the end), `set_location` (grows for a valid location, skips an
+    invalid one past the end) and `set_location_row` (skips a slot that is not there) — so a
+    slot past the end and an `INVALID` slot are the same to every reader and writer, and `compact`
+    cuts past the last valid slot (`compact_cuts_entity_locations_past_the_last_live_entity`). The
+    invariant check stays in debug builds, as a check on corruption rather than on the cut.
 
     **So all eleven are answered**, eight by the fixes above and three by the observation that
     they require calling `flush_spawn` twice for one reserved id, which its own contract forbids

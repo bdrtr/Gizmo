@@ -1307,7 +1307,8 @@ mod tests {
     /// number of entries, and nothing but `clear_entities` used to give that back. `compact`
     /// existed to return RAM "towards the initial defragmented state" and walked straight past
     /// one of the two largest allocations in the world — the other being `entity_locations`,
-    /// which is the same shape at twice the bytes per id and is not truncated (see `compact`).
+    /// the same shape at twice the bytes per id, cut back the same way since 2026-11-26
+    /// (`compact_cuts_entity_locations_past_the_last_live_entity`).
     ///
     /// The assertion is on `len()`, not `capacity()`: `Vec::shrink_to_fit` is allowed to keep
     /// more than it needs, so an exact capacity is not a promise the standard library makes.
@@ -1365,6 +1366,85 @@ mod tests {
             Some(0),
             "compaction must not lose the entry it kept"
         );
+    }
+
+    /// `entity_locations` is cut back past its last valid slot, as the sparse index is, and what
+    /// follows the cut works as it did: the survivor keeps its components, the ids past the cut are
+    /// recycled, spawned into, given and stripped of components (a table one and a sparse one, so
+    /// every migration path runs for an id past the end) and despawned again. Until 2026-11-26 a
+    /// world that once held N entities kept N slots of 8 bytes for ever.
+    #[test]
+    fn compact_cuts_entity_locations_past_the_last_live_entity() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct T(i32);
+        impl crate::component::Component for T {}
+        #[derive(Clone, Debug, PartialEq)]
+        struct S(i32);
+        impl crate::component::Component for S {
+            fn storage_type() -> crate::component::StorageType {
+                crate::component::StorageType::SparseSet
+            }
+        }
+        let mut world = World::new();
+        world.register_component_type::<T>();
+        world.register_component_type::<S>();
+        const N: usize = 2_000;
+        let ents: Vec<_> = (0..N)
+            .map(|i| {
+                let e = world.spawn();
+                world.add_component(e, T(i as i32));
+                e
+            })
+            .collect();
+        for &e in &ents[1..] {
+            world.despawn(e);
+        }
+        assert_eq!(world.entity_locations.len(), N, "premise: the list is as long as the largest id");
+        world.compact();
+        assert_eq!(world.entity_locations.len(), 1, "every slot past the survivor is invalid and goes");
+        assert!(world.entity_locations.capacity() < N, "and the allocation shrinks");
+        assert_eq!(world.query_entity::<&T>(ents[0]).map(|c| c.0), Some(0), "the survivor keeps its row");
+
+        // Recycled ids, all past the cut.
+        let again: Vec<_> = (0..N).map(|_| world.spawn()).collect();
+        for (i, &e) in again.iter().enumerate() {
+            world.add_component(e, T(i as i32));
+            world.add_component(e, S(i as i32));
+        }
+        for &e in again.iter().step_by(2) {
+            world.remove_component::<T>(e);
+        }
+        for &e in again.iter().step_by(3) {
+            world.remove_component::<S>(e);
+        }
+        for (i, &e) in again.iter().enumerate() {
+            let t = world.query_entity::<&T>(e).map(|c| c.0);
+            let s = world.query_entity::<&S>(e).map(|c| c.0);
+            assert_eq!(t, (i % 2 != 0).then_some(i as i32), "entity {i}'s table component");
+            assert_eq!(s, (i % 3 != 0).then_some(i as i32), "entity {i}'s sparse component");
+        }
+        assert_eq!(world.query::<&T>().iter().count(), 1 + N / 2);
+        for &e in &again {
+            world.despawn(e);
+        }
+        world.compact();
+        assert_eq!(world.entity_locations.len(), 1, "cut back again");
+        assert_eq!(world.query::<&T>().iter().count(), 1);
+    }
+
+    /// The cut stops at the last live entity, however high: "past the last valid slot", not "as
+    /// many as live".
+    #[test]
+    fn compact_keeps_entity_locations_long_enough_for_a_high_surviving_id() {
+        let mut world = World::new();
+        const N: usize = 512;
+        let ents: Vec<_> = (0..N).map(|_| world.spawn()).collect();
+        for &e in &ents[..N - 1] {
+            world.despawn(e);
+        }
+        world.compact();
+        assert_eq!(world.entity_locations.len(), N);
+        assert!(world.entity_location(ents[N - 1].id()).is_valid());
     }
 
     /// After compaction, a **live entity id can be larger than `sparse.len()`** — a world state

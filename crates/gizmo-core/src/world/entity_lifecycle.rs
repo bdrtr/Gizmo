@@ -157,10 +157,10 @@ impl World {
             self.entity_locations
                 .resize(loc_idx + 1, EntityLocation::INVALID);
         }
-        self.entity_locations[loc_idx] = EntityLocation {
+        self.set_location(loc_idx, EntityLocation {
             archetype_id: 0,
             row,
-        };
+        });
         tracing::trace!(entity = eid, row, "spawn: entity placed in empty archetype");
     }
 
@@ -248,10 +248,10 @@ impl World {
                 self.entity_locations
                     .resize(idx + 1, EntityLocation::INVALID);
             }
-            self.entity_locations[idx] = EntityLocation {
+            self.set_location(idx, EntityLocation {
                 archetype_id: arch_id as u32,
                 row,
-            };
+            });
             self.archetype_index.entity_archetype.insert(id, arch_id);
             // NOT: on_spawn çağırmıyoruz çünkü batch_clone_row zaten entity'yi
             // doğru archetype'a ekledi. on_spawn boş archetype'a (0) tekrar eklerdi.
@@ -446,10 +446,10 @@ impl World {
                     row
                 };
 
-                self.entity_locations[loc_idx] = crate::archetype::EntityLocation {
+                self.set_location(loc_idx, crate::archetype::EntityLocation {
                     archetype_id: target_arch_id as u32,
                     row: new_row,
-                };
+                });
                 self.archetype_index.entity_archetype.insert(eid, target_arch_id);
 
                 entities.push(entity);
@@ -880,17 +880,15 @@ impl World {
     ///
     /// What it still does not reclaim: an empty set's `HashMap` entry — after shrinking, such a
     /// set holds no heap at all, so dropping it would buy a slot and would change
-    /// `WorldStats::sparse_set_components`. And, deliberately, **`entity_locations`**, which is
-    /// the same defect one size larger: it too is indexed directly by entity id, at 8 bytes per
-    /// id against a sparse index's 4, and this function only `shrink_to_fit`s it. Truncating it
-    /// is the same argument — everything past the last valid slot is absent — but it is not the
-    /// same *audit*: `entity_locations[..]` is indexed from **dozens** of places against the one
-    /// blind indexer `sparse` has, and each would have to be shown to run only for an entity that
-    /// owns a row. Count them rather than trusting a number here — the first two counts written
-    /// down for this were both wrong, once by including the two mentions inside comments and once
-    /// by missing that four sites carry their own length check. `grep -rn 'entity_locations\['`
-    /// over `crates/gizmo-core/src`, drop the comment lines, then drop the ones whose preceding
-    /// lines test `entity_locations.len()`. That is its own change, not a rider on this one.
+    /// `WorldStats::sparse_set_components`.
+    ///
+    /// **`entity_locations` is cut back past its last valid slot** (since 2026-11-26), as the
+    /// sparse index is. It is indexed by entity id at 8 bytes an id and only grows, so a world that
+    /// once held a million entities kept 8 MB for them. Every read of it says
+    /// [`EntityLocation::INVALID`] past its end and every write past its end of an invalid location
+    /// is skipped (`location_at`, `set_location`, `set_location_row`), so what is cut is what reads
+    /// the same whether it is there or not: no proof is needed that no entity listed in a row has a
+    /// slot past the cut — the invariant an audit failed to establish on 2026-08-31.
     #[tracing::instrument(skip_all, name = "compact")]
     pub fn compact(&mut self) {
         // 1. Önce eski, kullanılmayan boş archetype'ları silelim (GC).
@@ -911,6 +909,9 @@ impl World {
 
         // 3. World seviyesindeki listeleri daraltalım.
         self.entities_to_despawn.shrink_to_fit();
+        // Past the last valid slot every slot is `INVALID`, and reads as it when it is not there.
+        let keep = self.entity_locations.iter().rposition(|l| l.is_valid()).map_or(0, |last| last + 1);
+        self.entity_locations.truncate(keep);
         self.entity_locations.shrink_to_fit();
 
         // 4. SparseSet depolaması archetype'ların dışında yaşıyor, o yüzden yukarıdaki hiçbir
@@ -922,24 +923,13 @@ impl World {
             set.shrink_to_fit();
         }
 
-        // 5. THE INVARIANT CHECK, and the truncation it was written for is NOT here.
+        // 5. THE INVARIANT CHECK: every entity listed in an archetype has a location naming it.
         //
-        // `entity_locations` is the same id-indexed shape as a sparse index at twice the bytes
-        // per id, and truncating it past the last VALID slot would be the same fix. It is not
-        // done, because truncation is only sound while every entity listed in an archetype has
-        // a location naming it — and an adversarial sweep on 2026-08-31 constructed that
-        // violation ten different ways, all confirmed, several through ordinary public API.
-        // ALL ELEVEN are answered now (an eleventh turned up when the sweep was re-run against
-        // the tree with the first ten closed); `docs/ENGINE.md` §3 carries what each one was.
-        // What is not answered is whether a TWELFTH exists, and the round that closed
-        // `gc_empty_archetypes` below did not settle it: that defect was in the renumbering
-        // rather than in a generator, so it neither adds to the list nor shortens it.
-        //
-        // The check stays anyway, and is the useful half. It runs in every debug build — the
-        // whole test suite, the property test, Miri — and reports the violation at the GC tick
-        // with its own shape named. Without it the same corruption surfaces later as a wrong
-        // component value or an out-of-bounds write in whatever migration trips over it, with
-        // nothing to say why.
+        // The truncation above does not need it (see the doc comment), but an entity whose
+        // location does not name its row is corruption all the same — an adversarial sweep on
+        // 2026-08-31 constructed it eleven ways, every one now closed — and in a debug build (the
+        // whole test suite, the property test, Miri) it is reported here, with its shape named,
+        // instead of surfacing later as a wrong component value.
         #[cfg(debug_assertions)]
         for (arch_idx, arch) in self.archetype_index.archetypes.iter().enumerate() {
             for (row, entity) in arch.entities().iter().enumerate() {
@@ -954,8 +944,7 @@ impl World {
                         && loc.archetype_id as usize == arch_idx
                         && loc.row as usize == row,
                     "compact: entity {id} is listed at archetype {arch_idx} row {row}, but its \
-                     location says archetype {} row {} — truncating would drop a slot that is \
-                     still in use",
+                     location says archetype {} row {}",
                     loc.archetype_id,
                     loc.row
                 );
@@ -1119,11 +1108,35 @@ impl World {
     /// Returns the Entity's archetype location — O(1) lookup.
     #[inline]
     pub fn entity_location(&self, entity_id: u32) -> EntityLocation {
-        let loc_idx = entity_id as usize;
-        if loc_idx < self.entity_locations.len() {
-            self.entity_locations[loc_idx]
-        } else {
-            EntityLocation::INVALID
+        self.location_at(entity_id as usize)
+    }
+
+    /// The location in slot `index` — `INVALID` past the end, which is what a slot there held
+    /// before [`compact`](Self::compact) cut it.
+    #[inline]
+    pub(crate) fn location_at(&self, index: usize) -> EntityLocation {
+        self.entity_locations.get(index).copied().unwrap_or(EntityLocation::INVALID)
+    }
+
+    /// Writes slot `index`, growing the list for a valid location; an invalid one past the end is
+    /// already what that slot reads as.
+    #[inline]
+    pub(crate) fn set_location(&mut self, index: usize, location: EntityLocation) {
+        if index >= self.entity_locations.len() {
+            if !location.is_valid() {
+                return;
+            }
+            self.entity_locations.resize(index + 1, EntityLocation::INVALID);
+        }
+        self.entity_locations[index] = location;
+    }
+
+    /// Moves slot `index`'s location to `row` of the same archetype — the entity a swap-remove moved
+    /// down. A slot past the end has no location to move.
+    #[inline]
+    pub(crate) fn set_location_row(&mut self, index: usize, row: u32) {
+        if let Some(slot) = self.entity_locations.get_mut(index) {
+            slot.row = row;
         }
     }
 

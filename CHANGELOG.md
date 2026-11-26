@@ -1220,6 +1220,13 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **`World::compact` gives back the entity locations of entities long gone.** The list is indexed
+  by entity id at 8 bytes an id and only grew, so a world that once held a million entities kept
+  8 MB for them however few it held after. `compact` now cuts it past its last valid slot, as it
+  already did the sparse sets' reverse index. What made that unsafe before — 29 places indexing the
+  list bare, which would panic past the cut where they used to read an invalid slot — is gone: every
+  read and write goes through accessors to which a slot past the end and an invalid slot are the
+  same.
 - **A planar body stays in its plane through a bounce and a hold.** A speculative contact's bounce is
   added after position integration, after the axis locks were enforced, and it was added unmasked;
   the hold after the solve (`hold_set_going`) moved a body along the normal it was held at, out of the

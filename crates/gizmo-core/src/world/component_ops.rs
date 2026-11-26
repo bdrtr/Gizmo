@@ -103,9 +103,9 @@ impl World {
 
         // An id RESERVED from the allocator but never flushed (`Commands::spawn` hands one
         // out before its queued `flush_spawn` runs) is `is_alive` yet owns no archetype row.
-        // Every path below indexes `entity_locations[eid]` raw, so such an entity panicked:
-        // out of bounds when the slot was never allocated, or — for a recycled id, whose
-        // slot exists but holds `EntityLocation::INVALID` — it fed `row == u32::MAX` into
+        // Every path below reads its location and goes on to its row, so such an entity
+        // panicked: out of bounds when the slot was never allocated, or — for a recycled id,
+        // whose slot holds `EntityLocation::INVALID` — it fed `row == u32::MAX` into
         // `move_entity_to`. Bail out instead, which is exactly what `add_component` and
         // `Bundle::apply` already do for Table components on such an entity.
         //
@@ -229,7 +229,7 @@ impl World {
         // already ships five `Bundle` impls whose `write_to_archetype` body is empty. Writing
         // at the live row keeps tick stamping, duplicate-type leak semantics and ZST
         // handling byte-identical to today by construction rather than by argument.
-        let loc = self.entity_locations[eid as usize];
+        let loc = self.location_at(eid as usize);
         let row = loc.row as usize;
         let tick = self.tick;
 
@@ -358,7 +358,7 @@ impl World {
             "add_bundle: archetype migration"
         );
 
-        let old_loc = self.entity_locations[eid as usize];
+        let old_loc = self.location_at(eid as usize);
 
         // Which of the bundle's components will arrive at the new row ALIVE: exactly those the
         // old archetype already had, which `move_entity_to` copies across. Everything else is
@@ -431,14 +431,14 @@ impl World {
         );
 
         if let Some(moved) = moved_eid {
-            self.entity_locations[moved as usize].row = old_loc.row;
+            self.set_location_row(moved as usize, old_loc.row);
         }
 
         // Out of the source and not yet in the target: for the length of the window below this
         // entity owns no row anywhere, and INVALID is the only true thing to say about it. It is
         // also not a new state — it is the "reserved but never flushed" one that `add_component`,
         // `remove_component`, `despawn` and this function's own entry guard all already handle.
-        self.entity_locations[eid as usize] = EntityLocation::INVALID;
+        self.set_location(eid as usize, EntityLocation::INVALID);
 
         let tick = self.tick;
         let arch = &mut self.archetype_index.archetypes[target_arch_id];
@@ -460,10 +460,10 @@ impl World {
 
         match outcome {
             Ok(()) => {
-                self.entity_locations[eid as usize] = EntityLocation {
+                self.set_location(eid as usize, EntityLocation {
                     archetype_id: target_arch_id as u32,
                     row: new_row,
-                };
+                });
                 self.archetype_index.entity_archetype.insert(eid, target_arch_id);
             }
             Err(payload) => {
@@ -577,7 +577,7 @@ impl World {
             "remove_bundle: archetype migration"
         );
 
-        let old_loc = self.entity_locations[eid as usize];
+        let old_loc = self.location_at(eid as usize);
         // THE DEFERRED FORM, as `remove_component`: the bundle's destructors are user code and
         // this function's own bookkeeping has to be final before they run. This is the caller
         // that can detach MORE THAN ONE column, so more than one destructor waits on it.
@@ -602,13 +602,13 @@ impl World {
         );
 
         if let Some(moved) = moved_eid {
-            self.entity_locations[moved as usize].row = old_loc.row;
+            self.set_location_row(moved as usize, old_loc.row);
         }
 
-        self.entity_locations[eid as usize] = EntityLocation {
+        self.set_location(eid as usize, EntityLocation {
             archetype_id: target_arch_id as u32,
             row: new_row,
-        };
+        });
         self.archetype_index.entity_archetype.insert(eid, target_arch_id);
 
         // ONLY NOW the destructors — see `remove_component` for what running them inside the
@@ -767,7 +767,7 @@ impl World {
             }
             return;
         };
-        let old_loc = self.entity_locations[eid as usize];
+        let old_loc = self.location_at(eid as usize);
 
         if old_loc.archetype_id == target_arch_id as u32 {
             // Zaten bu archetype'ta (aynı tip tekrar eklenmiş olabilir) — sadece üzerine yaz
@@ -835,7 +835,7 @@ impl World {
         );
 
         if let Some(moved) = moved_eid {
-            self.entity_locations[moved as usize].row = old_row as u32;
+            self.set_location_row(moved as usize, old_row as u32);
         }
 
         // 3. Yeni component'ı hedef archetype'a ekle
@@ -856,10 +856,10 @@ impl World {
         }
 
         // 4. Location güncellemeleri
-        self.entity_locations[eid as usize] = EntityLocation {
+        self.set_location(eid as usize, EntityLocation {
             archetype_id: target_arch_id as u32,
             row: new_row,
-        };
+        });
         self.archetype_index
             .entity_archetype
             .insert(eid, target_arch_id);
@@ -1036,14 +1036,14 @@ impl World {
         );
 
         if let Some(moved) = moved_eid {
-            self.entity_locations[moved as usize].row = old_loc.row;
+            self.set_location_row(moved as usize, old_loc.row);
         }
 
         // 3. Location güncelle
-        self.entity_locations[eid as usize] = EntityLocation {
+        self.set_location(eid as usize, EntityLocation {
             archetype_id: target_arch_id as u32,
             row: new_row,
-        };
+        });
         self.archetype_index
             .entity_archetype
             .insert(eid, target_arch_id);
@@ -1195,7 +1195,7 @@ impl World {
                     // too, but only because the language says the value operand goes first;
                     // written out, the ordering is the code's rather than the reference's.
                     let value = component.clone();
-                    let row = self.entity_locations[e.id() as usize].row as usize;
+                    let row = self.location_at(e.id() as usize).row as usize;
                     // Same-archetype overwrite: the slot already holds a live `T`, so the old
                     // value has to be dropped and `ptr::write` alone would leak it (a
                     // String/Vec/Handle re-asserted every frame is unbounded heap growth). It
@@ -1240,7 +1240,7 @@ impl World {
                 // the loop instead would be wrong: one clone per entity is the point.
                 let value = component.clone();
 
-                let old_loc = self.entity_locations[eid as usize];
+                let old_loc = self.location_at(eid as usize);
                 let old_row = old_loc.row as usize;
 
                 // Disjoint ödünç (source != target, yukarıda 422'de guard'landı).
@@ -1261,7 +1261,7 @@ impl World {
         );
 
                 if let Some(moved) = moved_eid {
-                    self.entity_locations[moved as usize].row = old_row as u32;
+                    self.set_location_row(moved as usize, old_row as u32);
                 }
 
                 {
@@ -1277,10 +1277,10 @@ impl World {
                     }
                 }
 
-                self.entity_locations[eid as usize] = EntityLocation {
+                self.set_location(eid as usize, EntityLocation {
                     archetype_id: target_arch_id as u32,
                     row: new_row,
-                };
+                });
                 self.archetype_index.entity_archetype.insert(eid, target_arch_id);
             }
 
@@ -1371,7 +1371,7 @@ impl World {
 
             for e in &group_entities {
                 let eid = e.id();
-                let old_loc = self.entity_locations[eid as usize];
+                let old_loc = self.location_at(eid as usize);
 
                 // Disjoint ödünç (source != target, yukarıda 520'de guard'landı).
                 // THE DEFERRED FORM, as the two single-entity removals. It matters more here,
@@ -1395,13 +1395,13 @@ impl World {
         );
 
                 if let Some(moved) = moved_eid {
-                    self.entity_locations[moved as usize].row = old_loc.row;
+                    self.set_location_row(moved as usize, old_loc.row);
                 }
 
-                self.entity_locations[eid as usize] = EntityLocation {
+                self.set_location(eid as usize, EntityLocation {
                     archetype_id: target_arch_id as u32,
                     row: new_row,
-                };
+                });
                 self.archetype_index.entity_archetype.insert(eid, target_arch_id);
 
                 // ONLY NOW `T`'s destructor. A panic here abandons the rest of the group — every
