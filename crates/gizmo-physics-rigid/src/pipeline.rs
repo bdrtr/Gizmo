@@ -1152,6 +1152,23 @@ impl PhysicsWorld {
         // solve and the joints.
         let mut island_sleep: Vec<(bool, Vec<usize>)> = Vec::new();
 
+        // The bodies still being pushed out of something: a contact deeper than the slop, which the
+        // solve's soft bias is taking out, slowly. Such a body is not at rest whatever its speed
+        // (`advance_sleep_counter` below): a 40 cm box landed on a corner, 10 mm in, was pushed out
+        // at under the sleep threshold's 0.05 rad/s, fell asleep, and stayed 1.2° over for good;
+        // a 1.6 cm die, 3.3° (2026-11-26).
+        let mut digging = vec![false; self.entities.len()];
+        let deep = self.solver.slop + DIGGING;
+        for (manifold, end) in manifolds.iter().zip(&ends) {
+            if manifold.contacts.iter().any(|c| c.penetration > deep) {
+                for &b in &end.bodies {
+                    if let Some(d) = digging.get_mut(b as usize) {
+                        *d = true;
+                    }
+                }
+            }
+        }
+
         // The joints' pass opens before the contacts: a joint whose body is in a contact island is
         // solved there, in the island's own sweeps (`solve_island_contacts`); `coupled` marks those.
         let joints_open = !self.joints.is_empty() && self.joint_solver.begin(&mut self.joints, dt);
@@ -1200,9 +1217,12 @@ impl PhysicsWorld {
         // is 0.041 at 240 Hz under Earth's gravity and passed only by that margin — under the
         // −15 m/s² of `platformer` (0.0625) or a world at 120 Hz (0.082) nothing ever slept.
         let required = self.sleep_steps();
-        for (rb, vel) in self.rigid_bodies.iter_mut().zip(&self.velocities) {
+        for ((rb, vel), &dig) in self.rigid_bodies.iter_mut().zip(&self.velocities).zip(&digging) {
             if rb.is_dynamic() && !rb.is_sleeping {
                 rb.advance_sleep_counter(vel, required);
+                if dig {
+                    rb.sleep_counter = 0;
+                }
             }
         }
 
@@ -2313,6 +2333,11 @@ impl PhysicsWorld {
         Some((gap, normal))
     }
 }
+
+/// How much deeper than the slop a contact must be for its bodies to count as still being pushed out
+/// of it, and not at rest (`constraint_solve_step`): a millimetre, so a pile whose contacts settle at
+/// the slop, give or take the solve's last fraction, is let sleep.
+const DIGGING: f32 = 1e-3;
 
 /// How far short of what it reached a body is held (`PhysicsWorld::hold_set_going`): a millimetre,
 /// ten times the gap at which the path's look (`Gjk::conservative_advancement`) calls a pair

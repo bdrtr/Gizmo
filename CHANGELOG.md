@@ -1236,6 +1236,14 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A body still being pushed out of something does not fall asleep.** A contact deeper than the
+  slop is taken out by the solve's soft bias, slowly; a body doing that is not at rest, however
+  slowly it moves. A 40 cm box landed on a corner 10 mm in was pushed out at under the sleep
+  threshold's 0.05 rad/s, fell asleep part way and stayed 1.2° over for good; a 1.6 cm die, 3.3°.
+  Its bodies' sleep counters start again on any substep with a contact more than a millimetre past
+  the slop (`DIGGING`). Of 300 dice thrown at each of four sizes, the worst rest is now the half
+  millimetre of `resting_level`'s threshold across the die: 0.003 rad for 40 cm, 0.05 for 1.6 cm, and
+  the faces come up fairly (χ² under the 5 % line at every size).
 - **A turning body follows Euler's equations.** The integrator kept a body's angular velocity as
   it was given when nothing pushed it, where what is kept is its angular *momentum*: a body turning
   about anything but a principal axis changes its `ω` as it turns. A box spun 1 % off its

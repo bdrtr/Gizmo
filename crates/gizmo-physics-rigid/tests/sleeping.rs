@@ -210,3 +210,43 @@ fn the_time_to_fall_asleep_is_a_duration() {
     assert_eq!(RigidBody::sleep_steps(1.0), 1, "never less than one step");
     assert_eq!(PhysicsWorld::new().sleep_steps(), 60, "the default world keeps its quarter second");
 }
+
+/// A body still being pushed out of something does not fall asleep: a contact deeper than the slop
+/// is being taken out by the solve's soft bias, slowly, and the body is not at rest however slowly
+/// it moves. A 40 cm box let go with a corner 12 mm in the floor was pushed out under the sleep
+/// threshold's speed, fell asleep part way, and stayed tilted for good (2026-11-26, seen throwing
+/// dice: 1.2° over, and 3.3° for a 1.6 cm die).
+#[test]
+fn a_body_still_pushed_out_of_the_floor_does_not_fall_asleep() {
+    use gizmo_physics_core::{BodyHandle, NarrowPhase};
+    for hz in [60u32, 240] {
+        let mut w = gizmo_physics_rigid::PhysicsWorld::new().with_substep_rate(hz).unwrap();
+        w.add_body(BodyHandle::from_id(1), RigidBody::new_static(), Transform::new(Vec3::new(0.0, -0.5, 0.0)), Velocity::default(), Collider::box_collider(Vec3::new(10.0, 0.5, 10.0)));
+        let c = Collider::box_collider(Vec3::splat(0.2));
+        let mut rb = RigidBody::new(64.0, true);
+        rb.update_inertia_from_collider(&c);
+        let tilt = 0.03f32;
+        let mut at = Transform::new(Vec3::ZERO);
+        at.rotation = gizmo_math::Quat::from_rotation_z(tilt);
+        // The lowest corner 12 mm in.
+        let lowest = [-1.0f32, 1.0].iter().flat_map(|&x| [-1.0f32, 1.0].map(move |y| at.rotation * Vec3::new(0.2 * x, 0.2 * y, 0.0))).map(|p| p.y).fold(f32::MAX, f32::min);
+        at.position.y = -lowest - 0.012;
+        w.add_body(BodyHandle::from_id(2), rb, at, Velocity::default(), c.clone());
+        let slop = w.solver.slop;
+        for frame in 0..600 {
+            w.step(1.0 / 60.0).unwrap();
+            if w.rigid_bodies[1].is_sleeping {
+                let t = w.transforms[1];
+                let deepest = NarrowPhase::test_collision_manifold(&c.shape, t.position, t.rotation, &w.colliders[0].shape, w.transforms[0].position, w.transforms[0].rotation)
+                    .iter()
+                    .map(|p| p.penetration)
+                    .fold(0.0f32, f32::max);
+                assert!(deepest <= slop + 1e-3, "{hz} Hz: asleep at frame {frame} with a contact {deepest} deep");
+                let left = (t.rotation * Vec3::Y).angle_between(Vec3::Y);
+                assert!(left < 0.005, "{hz} Hz: asleep {left} rad over");
+                break;
+            }
+            assert!(frame < 599, "{hz} Hz: never fell asleep");
+        }
+    }
+}
