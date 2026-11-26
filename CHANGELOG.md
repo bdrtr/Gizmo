@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A surface has textures of its own; a shader graph samples them.** `MaterialMaps::surface` names
+  them, and they are one 2D array at binding 5 of the material group (`t_surface` in
+  `gizmo::material`), a layer each, at the size of the largest, read as sRGB, mipmapped. A shader
+  graph's are its own (`ShaderGraph::textures`, `add_texture`; a **Surface Texture** node samples one
+  by index, and the Shader Graph tab lists them); resolving the graph writes them to the material.
+  `MaterialBuilder::surface` binds an array built by hand. `dunya`'s terrain moved its five ground
+  textures there from the map slots it had borrowed.
+
 - **Buses sum their sounds, carry a reverb and send to each other.** Every bus is a node of its own —
   a mixer its sounds connect to — whose sum goes through its own reverb
   (`AudioManager::set_bus_reverb`) and on to the master. `Mixer::set_send(from, to, level)` copies a
@@ -584,6 +592,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   WebGPU's 16, which nothing did.
 
 ### Changed
+
+- **Occlusion rides the metallic-roughness map's red channel** (glTF's ORM). The material group has
+  no occlusion texture of its own any more: binding 5 is the surface's own textures. A material with
+  a separate occlusion map has the two drawn into one texture on the GPU when it is built
+  (`material_pack`); one whose maps are a single ORM image uses it as it is. `MaterialMaps::occlusion`
+  and `MaterialBuilder::occlusion` are unchanged as sources; a shader of a game's own that read
+  binding 5 as the occlusion map reads `t_mr.r`. WebGPU's 16 sampled textures a stage had left the
+  forward-only layout one, which the surface's array needed.
 
 - **`PhysicsWorld::state_hash` covers what a snapshot carries and no pose shows**, so its values
   change: the time not yet stepped, the weather, each body's sleep counter and gathered forces,

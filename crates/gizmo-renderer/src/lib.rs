@@ -114,6 +114,7 @@
 //! Implementation: [`frustum_cull`] re-exports [`Frustum`] and helpers from `gizmo-math`;
 //! [`visibility`] holds the index.
 
+pub(crate) mod material_pack;
 pub mod material_sync;
 // Which engine fields a keyed property track may animate, and the world's registry of them.
 pub mod property_animation;

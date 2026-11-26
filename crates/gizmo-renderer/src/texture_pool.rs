@@ -274,7 +274,7 @@ impl TexturePool {
             &d.flat_normal_view,
             &d.white_view,
             &d.white_view,
-            &d.white_view,
+            &d.pool_placeholder_view,
             &d.white_view,
             &d.params_buffer,
             &view,

@@ -302,8 +302,8 @@ pub fn reflectance_from_ior(ior: f32) -> f32 {
 ///
 /// A path is read as [`Material::texture_source`] is (a file, an embedded asset or an asset's
 /// UUID). The normal, metallic-roughness and occlusion maps are data and are read linear; the
-/// emissive map is a colour and is read as sRGB, as the base colour is. A map that is `None`, or
-/// does not load, is the neutral one: flat, white, white, white.
+/// emissive map and the surface's own textures are colours and are read as sRGB, as the base colour
+/// is. A map that is `None`, or does not load, is the neutral one: flat, white, white, white.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -321,7 +321,8 @@ pub struct MaterialMaps {
     /// The emissive map's multiplier, linear RGB. White by default, so a map set is a map seen; with
     /// no emissive map it is not used.
     pub emissive_factor: gizmo_math::Vec3,
-    /// Ambient occlusion in red: 1 is open.
+    /// Ambient occlusion in red: 1 is open. Drawn into the metallic-roughness map's red, glTF's ORM
+    /// (`material_pack`); the same path for both is an ORM texture, used as it is.
     pub occlusion: Option<String>,
     /// How much of the occlusion map applies: 0 none, 1 all. glTF's `occlusionTexture.strength`.
     pub occlusion_strength: f32,
@@ -350,6 +351,13 @@ pub struct MaterialMaps {
     /// How a texture shown larger than it is fills the pixels between its texels: blended, or the
     /// nearest one (pixel art). glTF's `magFilter`.
     pub mag_filter: TextureFilter,
+    /// **The surface's own textures**, by path: what a custom surface
+    /// ([`MaterialType::CustomSurface`]) or a shader graph samples beyond the maps above — a
+    /// terrain's grass, rock and sand. One array at binding 5 of the material's group, a layer each in
+    /// this order (`t_surface` in `gizmo::material`), drawn at the size of the largest and read as
+    /// sRGB colours. A shader graph's are its own (`ShaderGraph::textures`), written here when it is
+    /// resolved.
+    pub surface: Vec<String>,
     /// How one shown smaller is read. glTF's `minFilter`.
     pub min_filter: TextureFilter,
 }
@@ -440,6 +448,7 @@ impl Default for MaterialMaps {
             wrap_v: TextureWrap::Repeat,
             mag_filter: TextureFilter::Linear,
             min_filter: TextureFilter::Linear,
+            surface: Vec::new(),
         }
     }
 }
@@ -479,6 +488,7 @@ impl MaterialMaps {
             && self.emissive.is_none()
             && self.occlusion.is_none()
             && self.lightmap.is_none()
+            && self.surface.is_empty()
     }
 
     /// The per-material constants the shader reads beside the maps: the strengths, with the emissive
@@ -532,6 +542,13 @@ impl MaterialMaps {
     pub fn with_occlusion(mut self, path: impl Into<String>, strength: f32) -> Self {
         self.occlusion = Some(path.into());
         self.occlusion_strength = strength;
+        self
+    }
+
+    /// With these as the surface's own textures ([`surface`](Self::surface)), in this order.
+    #[must_use]
+    pub fn with_surface<S: Into<String>>(mut self, paths: impl IntoIterator<Item = S>) -> Self {
+        self.surface = paths.into_iter().map(Into::into).collect();
         self
     }
 }

@@ -191,8 +191,14 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    a frame late; a send that would close a loop is refused, `SendError`). A sound's bus is the one it
 >    starts on: `set_sink_bus` is gone, since a sound summed on one bus cannot be moved to another's
 >    sum. Entry: "M7.5".
-> 4. **A shader graph has no texture of its own**: it samples the five maps the material's group
->    binds, and a sixth needs a binding the web's four groups have no room for. Entry: "Shader Graph".
+> 4. ~~**A shader graph has no texture of its own**~~ *Closed 2026-11-26:* a graph has textures of
+>    its own (`ShaderGraph::textures`, sampled by a Surface Texture node), and so does any custom
+>    surface (`MaterialMaps::surface`): one 2D array at binding 5 of the material group. The reason
+>    recorded was wrong — the web's four groups were never the limit, bindings inside a group are free
+>    — and the measured one was WebGPU's 16 sampled textures a stage, of which the forward-only layout
+>    had one left. The occlusion map gave its slot up (the owner's choice): it is drawn into the
+>    metallic-roughness map's red, glTF's ORM (`material_pack`), so the slot holds an array of any
+>    number of textures and the web keeps the one it had. Entry: "Shader Graph".
 > 5. ~~**Friction holds velocity, not position**~~ *Decided 2026-11-26 (the owner's choice): not
 >    built.* No positional term in the tangent channel, and what it costs is 10 µm of creep over
 >    200 s for an awake box pushed at 99 % of its friction limit — a body at rest sleeps and creeps
@@ -1945,10 +1951,15 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   landed the same day:** `gizmo-editor`'s Shader Graph tab (`shader_graph_panel`, its drags tested
   headlessly with real pointer events) and the `SurfaceGraph` component, which a scene saves and
   `resolve_surface_graphs` draws — one surface per distinct graph, released with its last entity
-  (`a_surface_graph_is_built_once_and_released_with_its_last_entity`). **Still open, each its own
-  piece:** a texture of the graph's own (a graph samples the five maps group 1 binds — base colour,
-  normal, metallic-roughness, emissive, occlusion — since the same day, and a sixth needs a binding
-  the web's four groups have no room for, see `custom_material`). "Apply" is a step of the editor's
+  (`a_surface_graph_is_built_once_and_released_with_its_last_entity`). **A texture of the graph's own
+  closed 2026-11-26:** a graph samples the five maps group 1 binds — base colour, normal,
+  metallic-roughness, emissive, occlusion — and its own textures (`ShaderGraph::textures`, a Surface
+  Texture node each, listed in the tab), which become the material's `MaterialMaps::surface`: one
+  2D array at binding 5. What made room was not a group — bindings inside one are free — but a
+  texture: WebGPU's 16 a stage left the forward-only layout one, and the occlusion map gave its own
+  up by moving into the metallic-roughness map's red (glTF's ORM, `material_pack`, drawn on the GPU
+  when the two are separate; an ORM texture is used as it is). `dunya`'s terrain had borrowed the
+  five map slots for its five ground textures and reads them from the array now. "Apply" is a step of the editor's
   undo history (`EditorAction::SurfaceGraphsChanged`); the edits after it follow the tab's graph,
   which has its own undo.
 

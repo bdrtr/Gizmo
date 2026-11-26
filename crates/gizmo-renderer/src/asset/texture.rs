@@ -105,6 +105,12 @@ impl super::AssetManager {
         (texture.create_view(&wgpu::TextureViewDescriptor::default()), mip_level_count)
     }
 
+    /// [`Self::upload_rgba_texture`] for a test: `rgba` uploaded and mipmapped as a material texture is.
+    #[cfg(test)]
+    pub(crate) fn upload_rgba_texture_for_tests(device: &wgpu::Device, queue: &wgpu::Queue, rgba: &[u8], width: u32, height: u32, format: wgpu::TextureFormat) -> (wgpu::TextureView, u32) {
+        Self::upload_rgba_texture(device, queue, "test", rgba, width, height, format)
+    }
+
     /// [`Self::upload_rgba_texture`]'s texture itself, with its mip count: what the texture pool
     /// copies into a layer of its array (it asks for `COPY_SRC` in `usage` too), so that a pooled
     /// picture is the same pixels at every level.
@@ -256,6 +262,9 @@ impl super::AssetManager {
         let occlusion = view(&maps.occlusion, false, "occlusion");
         // Baked light is a quantity of light, not a colour on a surface: read linear.
         let lightmap = view(&maps.lightmap, false, "lightmap");
+        // The surface's own textures, one array (`material_pack`). A texture that does not load is
+        // white in its layer, so the others keep their places.
+        let surface_layers: Vec<Option<Arc<wgpu::TextureView>>> = maps.surface.iter().map(|p| view(&Some(p.clone()), true, "surface")).collect();
         let params = {
             use wgpu::util::DeviceExt;
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -298,6 +307,15 @@ impl super::AssetManager {
         }
         if let Some(v) = lightmap.as_deref() {
             builder = builder.lightmap(v);
+        }
+        let surface = (!surface_layers.is_empty()).then(|| {
+            self.ensure_material_defaults(device, queue);
+            let d = self.material_defaults.as_ref().expect("material defaults ensured above");
+            let layers: Vec<&wgpu::TextureView> = surface_layers.iter().map(|l| l.as_deref().unwrap_or(&d.white_view)).collect();
+            d.packer.layers(device, queue, &layers)
+        });
+        if let Some(v) = surface.as_ref() {
+            builder = builder.surface(v);
         }
         let bind_group = builder.build(self, device, queue, layout);
         // **Entries no material holds any more go before a new one comes in.** The key holds the
@@ -438,7 +456,7 @@ impl super::AssetManager {
             return cached.clone();
         }
 
-        // A fully-neutral material: white base + flat normal + white MR/emissive/AO
+        // A fully-neutral material: white base + flat normal + white ORM/emissive
         // + default params. Everything sourced from the shared defaults.
         self.ensure_material_defaults(device, queue);
         let d = self
@@ -452,7 +470,7 @@ impl super::AssetManager {
             &d.flat_normal_view,
             &d.white_view,
             &d.white_view,
-            &d.white_view,
+            &d.pool_placeholder_view,
             &d.white_view,
             &d.params_buffer,
             &d.pool_placeholder_view,

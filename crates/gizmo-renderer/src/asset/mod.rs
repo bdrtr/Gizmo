@@ -274,6 +274,8 @@ pub(crate) struct MaterialDefaults {
     pub pool_placeholder_view: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
     pub params_buffer: wgpu::Buffer,
+    /// What a material's occlusion and its own textures are drawn into (`crate::material_pack`).
+    pub(crate) packer: crate::material_pack::MaterialPacker,
 }
 
 impl MaterialDefaults {
@@ -378,6 +380,7 @@ impl MaterialDefaults {
             pool_placeholder_view,
             sampler,
             params_buffer,
+            packer: crate::material_pack::MaterialPacker::new(device),
         }
     }
 }
@@ -504,8 +507,9 @@ impl AssetManager {
         self.material_defaults = Some(MaterialDefaults::new(device, queue));
     }
 
-    /// Assemble a full 7-entry textured-PBR material bind group from explicit
-    /// texture views + a params buffer.  Every material bind group MUST be built
+    /// Assemble a full textured-PBR material bind group from explicit
+    /// texture views + a params buffer: `orm_view` is occlusion, roughness and metalness in one
+    /// (`crate::material_pack`), `surface_view` the surface's own textures, an array.  Every material bind group MUST be built
     /// through here (or [`assemble_single_texture_bind_group`](Self::assemble_single_texture_bind_group))
     /// so it stays layout-compatible with `texture_bind_group_layout`.
     #[allow(clippy::too_many_arguments)]
@@ -515,9 +519,9 @@ impl AssetManager {
         base_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         normal_view: &wgpu::TextureView,
-        mr_view: &wgpu::TextureView,
+        orm_view: &wgpu::TextureView,
         emissive_view: &wgpu::TextureView,
-        ao_view: &wgpu::TextureView,
+        surface_view: &wgpu::TextureView,
         lightmap_view: &wgpu::TextureView,
         params_buffer: &wgpu::Buffer,
         pool_view: &wgpu::TextureView,
@@ -541,7 +545,7 @@ impl AssetManager {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(mr_view),
+                    resource: wgpu::BindingResource::TextureView(orm_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
@@ -549,7 +553,7 @@ impl AssetManager {
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: wgpu::BindingResource::TextureView(ao_view),
+                    resource: wgpu::BindingResource::TextureView(surface_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
@@ -569,7 +573,7 @@ impl AssetManager {
 
     /// Starts a [`MaterialBuilder`].
     ///
-    /// This is the public door to the 7-entry PBR bind group. Set only what you have; **every**
+    /// This is the public door to the PBR bind group. Set only what you have; **every**
     /// slot left alone takes a neutral default, base colour and sampler included, so
     /// `AssetManager::material().normal(&view).build(..)` is a complete material. See
     /// [`MaterialBuilder`] for what "neutral" means for each and for why this exists.
@@ -583,6 +587,7 @@ impl AssetManager {
             metallic_roughness: None,
             emissive: None,
             occlusion: None,
+            surface: None,
             params: None,
             label: None,
         }
@@ -618,7 +623,7 @@ impl AssetManager {
             &d.flat_normal_view,
             &d.white_view,
             &d.white_view,
-            &d.white_view,
+            &d.pool_placeholder_view,
             &d.white_view,
             &d.params_buffer,
             &d.pool_placeholder_view,
@@ -1615,8 +1620,8 @@ mod scan_does_not_write_tests {
 
 /// Builds a full PBR material bind group, filling in whatever you do not supply.
 ///
-/// The 7-entry layout — base colour, sampler, normal, metallic-roughness, emissive, occlusion,
-/// params — was reachable only through `AssetManager::assemble_material_bind_group`, which is
+/// The layout — base colour, sampler, normal, metallic-roughness, emissive, occlusion, params, and
+/// since then the lightmap, the pool and the surface's own textures — was reachable only through `AssetManager::assemble_material_bind_group`, which is
 /// `pub(crate)`. So a hand-built scene could bind exactly one texture, through
 /// [`create_white_texture`](AssetManager::create_white_texture) and friends, and the other four
 /// maps were unreachable: the only way to add surface detail was to add geometry.
@@ -1680,6 +1685,7 @@ pub struct MaterialBuilder<'a> {
     metallic_roughness: Option<&'a wgpu::TextureView>,
     emissive: Option<&'a wgpu::TextureView>,
     occlusion: Option<&'a wgpu::TextureView>,
+    surface: Option<&'a wgpu::TextureView>,
     lightmap: Option<&'a wgpu::TextureView>,
     params: Option<&'a wgpu::Buffer>,
     label: Option<&'a str>,
@@ -1726,10 +1732,24 @@ impl<'a> MaterialBuilder<'a> {
         self
     }
 
-    /// The ambient-occlusion map. Unset, white: no occlusion.
+    /// The ambient-occlusion map, read in red. Unset, white: no occlusion.
+    ///
+    /// The group has no occlusion texture of its own: occlusion rides the metallic-roughness map's
+    /// red channel (glTF's ORM), and [`build`](Self::build) draws the two into one texture
+    /// (`crate::material_pack`). The same view as the metallic-roughness map — an ORM texture — is
+    /// used as it is.
     #[must_use]
     pub fn occlusion(mut self, view: &'a wgpu::TextureView) -> Self {
         self.occlusion = Some(view);
+        self
+    }
+
+    /// The surface's own textures: a 2D **array** view, each layer one of them, for a custom
+    /// surface's or a shader graph's WGSL to sample at `t_surface` (`gizmo::material`). Unset, two
+    /// white layers. [`AssetManager::load_material`] makes it from `MaterialMaps::surface`.
+    #[must_use]
+    pub fn surface(mut self, view: &'a wgpu::TextureView) -> Self {
+        self.surface = Some(view);
         self
     }
 
@@ -1794,15 +1814,24 @@ impl<'a> MaterialBuilder<'a> {
             .material_defaults
             .as_ref()
             .expect("material defaults ensured above");
+        let packed;
+        let orm = match (self.occlusion, self.metallic_roughness) {
+            (None, None) => &d.white_view,
+            (Some(ao), Some(mr)) if ao.texture() == mr.texture() => mr,
+            (ao, mr) => {
+                packed = d.packer.orm(device, queue, ao.unwrap_or(&d.white_view), mr.unwrap_or(&d.white_view));
+                &packed
+            }
+        };
         AssetManager::assemble_material_bind_group(
             device,
             layout,
             self.base.unwrap_or(&d.white_view),
             self.sampler.unwrap_or(&d.sampler),
             self.normal.unwrap_or(&d.flat_normal_view),
-            self.metallic_roughness.unwrap_or(&d.white_view),
+            orm,
             self.emissive.unwrap_or(&d.white_view),
-            self.occlusion.unwrap_or(&d.white_view),
+            self.surface.unwrap_or(&d.pool_placeholder_view),
             self.lightmap.unwrap_or(&d.white_view),
             self.params.unwrap_or(&d.params_buffer),
             &d.pool_placeholder_view,

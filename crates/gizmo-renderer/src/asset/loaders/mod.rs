@@ -171,6 +171,7 @@ impl super::AssetManager {
             .expect("material defaults ensured above");
         let gltf_materials = build_gltf_materials(
             device,
+            queue,
             texture_bind_group_layout,
             file_path,
             &document,

@@ -122,20 +122,24 @@ fn shadow_entries() -> [Entry; 5] {
 }
 
 /// Per-material texture set (bind group 1). The base-colour texture + sampler at bindings 0/1 are the
-/// original layout; bindings 2..=5 add the textured-PBR maps (normal, metallic-roughness, emissive,
-/// ambient-occlusion) and binding 6 carries the scalar `MaterialParams` (emissive factor, normal
-/// scale, AO strength). Forward/decal shaders that only reference bindings 0/1 remain valid — wgpu
-/// permits a layout with more entries than a shader uses — but every bind group built against this
-/// layout MUST populate all nine entries (binding 7 is the lightmap, binding 8 the texture pool's
-/// array) (see `AssetManager::assemble_material_bind_group`).
+/// original layout; bindings 2..=4 add the textured-PBR maps (normal, occlusion-roughness-metalness,
+/// emissive), binding 5 the surface's own textures (`crate::material_pack`) and binding 6 carries the
+/// scalar `MaterialParams` (emissive factor, normal scale, AO strength). Forward/decal shaders that
+/// only reference bindings 0/1 remain valid — wgpu permits a layout with more entries than a shader
+/// uses — but every bind group built against this layout MUST populate all nine entries (binding 7
+/// is the lightmap, binding 8 the texture pool's array) (see
+/// `AssetManager::assemble_material_bind_group`).
 fn texture_entries() -> [Entry; 9] {
     [
         fragment_texture(0, Dim::D2, FILTERED), // base colour
         fragment_sampler(1, Sampler::Filtering),
         fragment_texture(2, Dim::D2, FILTERED), // normal map
-        fragment_texture(3, Dim::D2, FILTERED), // metallic-roughness (ARM/MR)
+        // Occlusion in red, roughness in green, metalness in blue: glTF's ORM (`crate::material_pack`).
+        fragment_texture(3, Dim::D2, FILTERED),
         fragment_texture(4, Dim::D2, FILTERED), // emissive
-        fragment_texture(5, Dim::D2, FILTERED), // ambient occlusion
+        // The surface's own textures, one array (`MaterialMaps::surface`); the pool's two white layers
+        // in a material with none.
+        fragment_texture(5, Dim::D2Array, FILTERED),
         buffer_entry(6, Stages::VERTEX_FRAGMENT, BufferType::Uniform),
         // The lightmap: baked light, read at the vertex's second UV set (`Vertex::lightmap_uv`).
         fragment_texture(7, Dim::D2, FILTERED),

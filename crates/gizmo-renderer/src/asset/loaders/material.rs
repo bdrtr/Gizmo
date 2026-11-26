@@ -177,8 +177,10 @@ pub fn split_gltf_image_key(key: &str) -> Option<(&str, usize)> {
     Some((file, index.parse().ok()?))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_gltf_materials(
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
     file_path: &str,
     document: &gltf::Document,
@@ -299,15 +301,27 @@ pub(super) fn build_gltf_materials(
                     contents: bytemuck::cast_slice(&[params]),
                     usage: wgpu::BufferUsages::UNIFORM,
                 });
+                // Occlusion rides the metallic-roughness map's red (`crate::material_pack`): drawn into
+                // it unless the two are one image already, as most exporters write them.
+                let packed;
+                // Neither map (the white default stands for both), or one image for both.
+                let orm = if (material.occlusion_texture().is_none() && pbr.metallic_roughness_texture().is_none())
+                    || ao_view.texture() == mr_view.texture()
+                {
+                    mr_view
+                } else {
+                    packed = defaults.packer.orm(device, queue, ao_view, mr_view);
+                    &packed
+                };
                 crate::asset::AssetManager::assemble_material_bind_group(
                     device,
                     layout,
                     base_view,
                     mat_sampler,
                     normal_view,
-                    mr_view,
+                    orm,
                     emissive_view,
-                    ao_view,
+                    &defaults.pool_placeholder_view,
                     &defaults.white_view,
                     &params_buffer,
                     &defaults.pool_placeholder_view,
@@ -340,6 +354,7 @@ pub(super) fn build_gltf_materials(
                 wrap_v: crate::components::TextureWrap::from_address_mode(mat_sampler_key.wrap_v),
                 mag_filter: crate::components::TextureFilter::from_filter_mode(mat_sampler_key.mag),
                 min_filter: crate::components::TextureFilter::from_filter_mode(mat_sampler_key.min),
+                surface: Vec::new(),
             };
             // The bind group above holds these maps: not to be built again on the first frame.
             mat.mark_maps_bound();

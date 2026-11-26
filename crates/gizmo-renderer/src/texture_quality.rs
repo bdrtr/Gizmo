@@ -152,8 +152,8 @@ impl MipmapBlitter {
         }
     }
 
-    /// Fills levels 1..`mip_level_count` of `texture`, sampling each from the one before it.
-    /// Level 0 must already have been written.
+    /// Fills levels 1..`mip_level_count` of `texture`, sampling each from the one before it, in every
+    /// layer of it. Level 0 must already have been written.
     ///
     /// It records the commands into the given `encoder` and **does not submit.** That is what
     /// lets a batch of textures be gathered into a single command buffer.
@@ -173,27 +173,32 @@ impl MipmapBlitter {
             return;
         }
 
-        let views: Vec<wgpu::TextureView> = (0..mip_level_count)
-            .map(|mip| {
-                texture.create_view(&wgpu::TextureViewDescriptor {
-                    label: Some(&format!("Mip {mip}")),
-                    format: None,
-                    dimension: None,
-                    usage: None,
-                    aspect: wgpu::TextureAspect::All,
-                    base_mip_level: mip,
-                    mip_level_count: Some(1),
-                    base_array_layer: 0,
-                    array_layer_count: None,
-                })
-            })
-            .collect();
-
         let bind_group_layout = self.pipeline.get_bind_group_layout(0);
+        for layer in 0..texture.depth_or_array_layers() {
+            let views: Vec<wgpu::TextureView> = (0..mip_level_count)
+                .map(|mip| {
+                    texture.create_view(&wgpu::TextureViewDescriptor {
+                        label: Some(&format!("Mip {mip} layer {layer}")),
+                        format: None,
+                        dimension: Some(wgpu::TextureViewDimension::D2),
+                        usage: None,
+                        aspect: wgpu::TextureAspect::All,
+                        base_mip_level: mip,
+                        mip_level_count: Some(1),
+                        base_array_layer: layer,
+                        array_layer_count: Some(1),
+                    })
+                })
+                .collect();
+            self.record_layer(device, encoder, &bind_group_layout, &views);
+        }
+    }
 
-        for target_mip in 1..mip_level_count as usize {
+    /// One layer's chain, from its level views.
+    fn record_layer(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, bind_group_layout: &wgpu::BindGroupLayout, views: &[wgpu::TextureView]) {
+        for target_mip in 1..views.len() {
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &bind_group_layout,
+                layout: bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,

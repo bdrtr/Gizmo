@@ -1,6 +1,6 @@
 #define_import_path gizmo::material
 
-// The engine's own material: its seven-entry bind group (group 1), as `AssetManager::material` fills
+// The engine's own material: its bind group (group 1), as `AssetManager::material` fills
 // it, and the instance's values, turned into a `gizmo::surface::Surface`. The G-buffer and the
 // forward shader both come here, so a map or a material knob cannot work on one path and not on the
 // other. `shader.wgsl` read only the base colour for as long as both existed, which is how normal
@@ -21,9 +21,14 @@ struct MaterialParams {
 @group(1) @binding(0) var t_diffuse:  texture_2d<f32>;
 @group(1) @binding(1) var s_diffuse:  sampler;
 @group(1) @binding(2) var t_normal:   texture_2d<f32>;
-@group(1) @binding(3) var t_mr:       texture_2d<f32>;  // g=roughness, b=metallic
+// r=occlusion, g=roughness, b=metallic: glTF's ORM. The group has no occlusion texture of its own —
+// WebGPU's 16 textures a stage had one left on the forward-only path — and a material's occlusion map
+// is drawn into this one's red (`material_pack.rs`).
+@group(1) @binding(3) var t_mr:       texture_2d<f32>;
 @group(1) @binding(4) var t_emissive: texture_2d<f32>;
-@group(1) @binding(5) var t_ao:       texture_2d<f32>;  // r=occlusion
+// The surface's own textures, one per layer (`MaterialMaps::surface`): what a custom surface or a
+// shader graph samples beyond the engine's maps. Colours, read from sRGB as a base colour is.
+@group(1) @binding(5) var t_surface:  texture_2d_array<f32>;
 @group(1) @binding(6) var<uniform> material: MaterialParams;
 @group(1) @binding(7) var t_lightmap: texture_2d<f32>; // baked light, linear, at the second UV set
 // The texture pool's array (`texture_pool`): a pooled material's base colour is one of its layers.
@@ -93,11 +98,11 @@ fn evaluate_surface(
     // White-default map → sampled g=b=1 → scalar factors preserved.
     let mr = textureSample(t_mr, s_diffuse, uv);
 
-    // ── Ambient occlusion (glTF: 1 + strength·(ao-1)) ─────────────────────
+    // ── Ambient occlusion (glTF: 1 + strength·(ao-1)), the ORM map's red ──
     // White-default map (r=1) → ao=1 → no darkening. The G-buffer has no channel of its own for AO,
     // so it goes into the albedo, here for both paths.
     let ao_strength = material.occlusion_uv_rot_offset.x;
-    let ao = 1.0 + ao_strength * (textureSample(t_ao, s_diffuse, uv).r - 1.0);
+    let ao = 1.0 + ao_strength * (mr.r - 1.0);
 
     var surface: Surface;
     surface.base_color = inst_albedo.rgb * tex_color.rgb;

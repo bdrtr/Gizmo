@@ -176,8 +176,12 @@ pub enum NodeKind {
     MetallicRoughnessMap,
     /// The material's emissive map at a UV.
     EmissiveMap,
-    /// The material's occlusion map at a UV: 1 is unoccluded.
+    /// The material's occlusion map at a UV: 1 is unoccluded. (The red of its ORM texture,
+    /// `material_pack`.)
     OcclusionMap,
+    /// One of the graph's own textures ([`ShaderGraph::textures`]) at a UV: the one at this index.
+    /// What a graph samples beyond the material's maps — a pattern, a mask, a second colour.
+    SurfaceTexture(u32),
 
     // ── Constants ───────────────────────────────────────────────────────────
     /// A number.
@@ -295,7 +299,7 @@ impl NodeKind {
         use NodeKind::*;
         vec![
             Uv, WorldPosition, WorldNormal, ViewDirection, VertexColor, Time, CameraPosition, ScreenPosition,
-            Material, Standard, Texture, NormalMap, MetallicRoughnessMap, EmissiveMap, OcclusionMap,
+            Material, Standard, Texture, NormalMap, MetallicRoughnessMap, EmissiveMap, OcclusionMap, SurfaceTexture(0),
             Float(1.0), Vector2([0.0, 0.0]), Vector3([0.0, 0.0, 0.0]), Color([1.0, 1.0, 1.0, 1.0]),
             Add, Subtract, Multiply, Divide, Power, Minimum, Maximum, Modulo,
             Abs, Floor, Ceil, Fract, Sin, Cos, Sqrt, Exp, Negate, OneMinus, Saturate,
@@ -313,7 +317,7 @@ impl NodeKind {
         match self {
             Output => "Output",
             Uv | WorldPosition | WorldNormal | ViewDirection | VertexColor | Time | CameraPosition | ScreenPosition
-            | Material | Standard | Texture | NormalMap | MetallicRoughnessMap | EmissiveMap | OcclusionMap => "Input",
+            | Material | Standard | Texture | NormalMap | MetallicRoughnessMap | EmissiveMap | OcclusionMap | SurfaceTexture(_) => "Input",
             Float(_) | Vector2(_) | Vector3(_) | Color(_) => "Constant",
             Add | Subtract | Multiply | Divide | Power | Minimum | Maximum | Modulo | Abs | Floor | Ceil | Fract
             | Sin | Cos | Sqrt | Exp | Negate | OneMinus | Saturate | Lerp | Clamp | Step | Smoothstep | Remap => {
@@ -345,6 +349,7 @@ impl NodeKind {
             MetallicRoughnessMap => "Metallic-Roughness Map",
             EmissiveMap => "Emissive Map",
             OcclusionMap => "Occlusion Map",
+            SurfaceTexture(_) => "Surface Texture",
             Float(_) => "Float",
             Vector2(_) => "Vector2",
             Vector3(_) => "Vector3",
@@ -409,7 +414,7 @@ impl NodeKind {
                     value("strength", F, 1.0),
                 ]
             },
-            MetallicRoughnessMap | EmissiveMap | OcclusionMap => const {
+            MetallicRoughnessMap | EmissiveMap | OcclusionMap | SurfaceTexture(_) => const {
                 &[InputSlot { name: "uv", ty: SlotType::Fixed(V2), default: InputDefault::MaterialUv }]
             },
             Add | Subtract => const { &[any("a", 0.0), any("b", 0.0)] },
@@ -480,6 +485,7 @@ impl NodeKind {
             MetallicRoughnessMap => const { &[out("roughness", F), out("metallic", F)] },
             EmissiveMap => const { &[out("rgb", V3)] },
             OcclusionMap => const { &[out("occlusion", F)] },
+            SurfaceTexture(_) => const { &[out("rgb", V3), out("a", F)] },
             Float(_) => const { &[out("value", F)] },
             Vector2(_) => const { &[out("value", V2)] },
             Vector3(_) => const { &[out("value", V3)] },
@@ -566,6 +572,13 @@ pub enum GraphError {
     Cycle(NodeId),
     /// A value of this node is NaN or infinite, which WGSL cannot write.
     NotFinite(NodeId),
+    /// A [`NodeKind::SurfaceTexture`] names a texture the graph does not have.
+    NoSuchTexture {
+        /// The node.
+        node: NodeId,
+        /// The index it names.
+        index: u32,
+    },
 }
 
 impl std::fmt::Display for GraphError {
@@ -581,6 +594,7 @@ impl std::fmt::Display for GraphError {
             Self::InputLinkedTwice { node, input } => write!(f, "input {input} of node {} has two links", node.0),
             Self::Cycle(id) => write!(f, "the links run in a loop through node {}", id.0),
             Self::NotFinite(id) => write!(f, "node {} holds a value that is not a finite number", id.0),
+            Self::NoSuchTexture { node, index } => write!(f, "node {} samples texture {index} of a graph that has fewer", node.0),
         }
     }
 }
@@ -592,6 +606,11 @@ impl std::error::Error for GraphError {}
 pub struct ShaderGraph {
     nodes: Vec<GraphNode>,
     links: Vec<Link>,
+    /// The graph's own textures, by the path or asset id the material loads them from: what its
+    /// [`NodeKind::SurfaceTexture`] nodes sample, by index. Drawn into one array at binding 5 of the
+    /// material it draws (`MaterialMaps::surface`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    textures: Vec<String>,
 }
 
 impl Default for ShaderGraph {
@@ -605,7 +624,36 @@ impl ShaderGraph {
     #[must_use]
     pub fn new() -> Self {
         let output = GraphNode { id: NodeId(0), kind: NodeKind::Output, position: [0.0, 0.0], values: Vec::new() };
-        Self { nodes: vec![output], links: Vec::new() }
+        Self { nodes: vec![output], links: Vec::new(), textures: Vec::new() }
+    }
+
+    /// The graph's own textures, by index: what its [`NodeKind::SurfaceTexture`] nodes sample.
+    #[must_use]
+    pub fn textures(&self) -> &[String] {
+        &self.textures
+    }
+
+    /// Adds a texture of the graph's own, by path or asset id, and gives the index a
+    /// [`NodeKind::SurfaceTexture`] samples it at.
+    pub fn add_texture(&mut self, path: impl Into<String>) -> u32 {
+        self.textures.push(path.into());
+        (self.textures.len() - 1) as u32
+    }
+
+    /// The graph's texture at `index`, changed to another path; `false` when it has none there.
+    pub fn set_texture(&mut self, index: u32, path: impl Into<String>) -> bool {
+        match self.textures.get_mut(index as usize) {
+            Some(slot) => {
+                *slot = path.into();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Takes the graph's last texture away; a node sampling it no longer builds.
+    pub fn remove_last_texture(&mut self) -> Option<String> {
+        self.textures.pop()
     }
 
     /// Every node, in the order they were added.
@@ -774,6 +822,12 @@ impl ShaderGraph {
 
     fn compile(&self) -> Result<Compiled, GraphError> {
         let output = self.output()?;
+        if let Some((node, index)) = self.nodes.iter().find_map(|n| match n.kind {
+            NodeKind::SurfaceTexture(index) if index as usize >= self.textures.len() => Some((n.id, index)),
+            _ => None,
+        }) {
+            return Err(GraphError::NoSuchTexture { node, index });
+        }
         let mut into: HashMap<(NodeId, usize), Link> = HashMap::new();
         for link in &self.links {
             let source = self.node(link.from).ok_or(GraphError::NoSuchNode(link.from))?;
@@ -891,7 +945,7 @@ impl ShaderGraph {
         let mut wgsl = String::from(
             "// Generated from a shader graph (gizmo_renderer::shader_graph).\n\
              #import gizmo::surface::{Surface, SurfaceInput}\n\
-             #import gizmo::material::{standard_surface, surface_uv, base_colour, t_diffuse, s_diffuse, t_normal, t_mr, t_emissive, t_ao}\n\n",
+             #import gizmo::material::{standard_surface, surface_uv, base_colour, t_diffuse, s_diffuse, t_normal, t_mr, t_emissive, t_surface}\n\n",
         );
         if noise {
             wgsl.push_str(NOISE_WGSL);
@@ -938,7 +992,9 @@ impl ShaderGraph {
 /// [`MaterialType::CustomSurface`](crate::components::MaterialType::CustomSurface) to it, and puts it
 /// back after anything else writes the material type, so a scene that loads a stale id draws the
 /// graph. A graph that is not one surface draws the engine's material and says why once. Removing
-/// the component gives the entity the engine's material back.
+/// the component gives the entity the engine's material back. The graph's own textures
+/// ([`ShaderGraph::textures`]) become the material's [`surface`](crate::components::MaterialMaps::surface)
+/// textures.
 #[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
 pub struct SurfaceGraph {
     /// The graph.
@@ -1014,6 +1070,8 @@ pub fn resolve_surface_graphs(world: &mut gizmo_core::World, renderer: &mut crat
         if let (Some(id), Some(mut material)) = (surface, world.query_mut::<&mut Material>().get_mut(entity)) {
             if material.material_type == MaterialType::CustomSurface(id) {
                 material.material_type = MaterialType::Pbr;
+                // And its textures, which were the graph's.
+                material.maps.surface.clear();
             }
         }
         world.remove_component::<ResolvedSurfaceGraph>(entity);
@@ -1022,17 +1080,22 @@ pub fn resolve_surface_graphs(world: &mut gizmo_core::World, renderer: &mut crat
     // Every material drawn by a graph says so, whatever wrote its type since.
     let mut used = std::collections::HashSet::new();
     {
-        let resolved: Vec<(Entity, crate::custom_material::SurfaceId)> = world
+        let resolved: Vec<(Entity, crate::custom_material::SurfaceId, Vec<String>)> = world
             .query::<(Entity, &ResolvedSurfaceGraph)>()
             .iter()
-            .filter_map(|(e, r)| r.surface.map(|s| (e, s)))
+            .filter_map(|(e, r)| r.surface.map(|s| (e, s, r.graph.textures.clone())))
             .collect();
         let mut materials = world.query_mut::<&mut Material>();
-        for (entity, id) in resolved {
+        for (entity, id, textures) in resolved {
             used.insert(id);
             if let Some(mut material) = materials.get_mut(entity) {
                 if material.material_type != MaterialType::CustomSurface(id) {
                     material.material_type = MaterialType::CustomSurface(id);
+                }
+                // The graph's own textures are the material's surface textures: its bind group is built
+                // again with them when they change, as for any other map.
+                if material.maps.surface != textures {
+                    material.maps.surface = textures;
                 }
             }
         }
@@ -1153,7 +1216,11 @@ fn node_exprs(node: &GraphNode, id: NodeId, a: &[String], any: ValueType, body: 
             vec![format!("n{}_mr.g", id.0), format!("n{}_mr.b", id.0)]
         }
         EmissiveMap => vec![format!("textureSample(t_emissive, s_diffuse, {}).rgb", a[0])],
-        OcclusionMap => vec![format!("textureSample(t_ao, s_diffuse, {}).r", a[0])],
+        OcclusionMap => vec![format!("textureSample(t_mr, s_diffuse, {}).r", a[0])],
+        SurfaceTexture(layer) => {
+            let _ = writeln!(body, "    let n{}_surface = textureSample(t_surface, s_diffuse, {}, {}i);", id.0, a[0], layer);
+            vec![format!("n{}_surface.rgb", id.0), format!("n{}_surface.a", id.0)]
+        }
         Float(v) => vec![literal(&[*v], id)?],
         Vector2(v) => vec![literal(v, id)?],
         Vector3(v) => vec![literal(v, id)?],
@@ -1285,6 +1352,8 @@ mod tests {
         let catalogue = NodeKind::catalogue();
         let names: std::collections::HashSet<&str> = catalogue.iter().map(NodeKind::name).collect();
         assert_eq!(names.len(), catalogue.len(), "the catalogue names a kind twice");
+        // What its Surface Texture node samples.
+        graph.add_texture("pattern.png");
         for kind in catalogue {
             let outputs = kind.outputs().len();
             let node = graph.add(kind, [0.0, 0.0]);
@@ -1309,6 +1378,34 @@ mod tests {
         compose_everywhere(&wgsl);
         // The sum carries the widest thing added: a vec4 from `Combine`.
         assert_eq!(graph.output_types().unwrap()[&(last, 0)], ValueType::Vec4);
+    }
+
+    /// A Surface Texture node samples one of the graph's own textures, by index, at the material's
+    /// UV: an index the graph has no texture at does not build, and one it has samples `t_surface`
+    /// there, on both paths.
+    #[test]
+    fn a_surface_texture_samples_one_of_the_graphs_own() {
+        let mut graph = ShaderGraph::new();
+        let output = graph.output().unwrap();
+        let node = graph.add(NodeKind::SurfaceTexture(1), [0.0, 0.0]);
+        graph.connect(node, 0, output, 0).unwrap();
+        assert_eq!(graph.add_texture("grass.png"), 0);
+        assert_eq!(graph.to_wgsl(), Err(GraphError::NoSuchTexture { node, index: 1 }));
+        assert_eq!(graph.add_texture("rock.png"), 1);
+        let wgsl = graph.to_wgsl().expect("compiles with a second texture");
+        assert!(wgsl.contains("textureSample(t_surface, s_diffuse,") && wgsl.contains(", 1i)"), "{wgsl}");
+        compose_everywhere(&wgsl);
+        assert!(graph.set_texture(1, "sand.png"));
+        assert_eq!(graph.textures(), ["grass.png", "sand.png"]);
+        assert_eq!(graph.remove_last_texture().as_deref(), Some("sand.png"));
+        assert!(graph.to_wgsl().is_err(), "a node sampling the texture taken away does not build");
+        // A saved graph with no textures reads as one, and one with them keeps them.
+        let mut with = ShaderGraph::new();
+        with.add_texture("a.png");
+        let json = serde_json::to_string(&with).unwrap();
+        assert_eq!(serde_json::from_str::<ShaderGraph>(&json).unwrap(), with);
+        let none = serde_json::to_string(&ShaderGraph::new()).unwrap();
+        assert!(!none.contains("textures"), "an empty list is not written: {none}");
     }
 
     /// A link joins any two types: a float spreads, a longer vector is cut short, a shorter one is

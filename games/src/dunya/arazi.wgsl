@@ -4,12 +4,8 @@
 // kesmiyor, gölgesini ve derinliğini motorun kendi boru hatları çiziyor — bu fonksiyon gölge
 // katmanlarında çalışmıyor. Işığı, gölgeyi, sisi motor veriyor.
 //
-// Materyal grubunun (1) yuvaları burada başka anlamda — motorun `MaterialDesc`'i doldurduğu gibi:
-//   taban renk  (sRGB)    çim
-//   ışıyan      (sRGB)    kaya
-//   normal      (doğrusal) toprak   — sRGB kodlu bir fotoğraf, burada çözülüyor
-//   metal-pürüz (doğrusal) kar      — aynı
-//   örtüşme     (doğrusal) kum      — aynı
+// Beş doku, yüzeyin kendi dokuları (`MaterialMaps::surface`): materyal grubunun (1) 5. yuvasında
+// tek dizi, katmanları sırayla çim, toprak, kaya, kar, kum — sRGB, motor çözüyor.
 //
 // Köşe rengi ağırlık: kırmızı toprak, yeşil kaya, mavi kar; kalanı çim. Kum, su seviyesinin hemen
 // üstünde, yükseklikten. Doku dünyada dört metrede bir tekrar ediyor; tekrar belli olmasın diye her
@@ -22,12 +18,14 @@
 
 #import gizmo::surface::{Surface, SurfaceInput}
 
-@group(1) @binding(0) var t_grass: texture_2d<f32>;
 @group(1) @binding(1) var s_tile: sampler;
-@group(1) @binding(2) var t_dirt: texture_2d<f32>;
-@group(1) @binding(3) var t_snow: texture_2d<f32>;
-@group(1) @binding(4) var t_rock: texture_2d<f32>;
-@group(1) @binding(5) var t_sand: texture_2d<f32>;
+@group(1) @binding(5) var t_ground: texture_2d_array<f32>;
+
+const GRASS: i32 = 0;
+const DIRT: i32 = 1;
+const ROCK: i32 = 2;
+const SNOW: i32 = 3;
+const SAND: i32 = 4;
 
 // Su seviyesi: oyunun `su::WATER`'ı.
 const WATER: f32 = 3.5;
@@ -39,14 +37,10 @@ const SEEN: f32 = 0.004;
 const FAR: f32 = 0.23;
 const FAR_SHIFT: vec2<f32> = vec2<f32>(0.37, 0.71);
 
-fn decode(c: vec3<f32>) -> vec3<f32> {
-    return pow(c, vec3<f32>(2.2));
-}
-
 // İki ölçekte: yakında ayrıntı, uzakta tekrarın deseni kırık. `dx`, `dy`: `uv`'nin ekran türevleri.
-fn two_scales(t: texture_2d<f32>, uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec3<f32> {
-    let near = textureSampleGrad(t, s_tile, uv, dx, dy).rgb;
-    let far = textureSampleGrad(t, s_tile, uv * FAR + FAR_SHIFT, dx * FAR, dy * FAR).rgb;
+fn two_scales(layer: i32, uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec3<f32> {
+    let near = textureSampleGrad(t_ground, s_tile, uv, layer, dx, dy).rgb;
+    let far = textureSampleGrad(t_ground, s_tile, uv * FAR + FAR_SHIFT, layer, dx * FAR, dy * FAR).rgb;
     return mix(near, far, 0.35);
 }
 
@@ -76,13 +70,15 @@ fn material_surface(input: SurfaceInput) -> Surface {
 
     var colour = vec3<f32>(0.0);
     if (w_grass > SEEN) {
-        let grass = two_scales(t_grass, uv, dx, dy);
+        let grass = two_scales(GRASS, uv, dx, dy);
         // Çimin geniş lekeleri: toprak dokusundan, çok büyük ölçekte okunan parlaklık.
-        let blotch = dot(textureSampleGrad(t_dirt, s_tile, uv * 0.031, dx * 0.031, dy * 0.031).rgb, vec3<f32>(0.333));
+        // Eşikler fotoğrafın kodlu (sRGB) parlaklığında: dizi çözülmüş veriyor, geri kodlanıyor.
+        let dirt_far = textureSampleGrad(t_ground, s_tile, uv * 0.031, DIRT, dx * 0.031, dy * 0.031).rgb;
+        let blotch = dot(pow(dirt_far, vec3<f32>(1.0 / 2.2)), vec3<f32>(0.333));
         colour += grass * mix(0.75, 1.2, smoothstep(0.25, 0.65, blotch)) * w_grass;
     }
     if (w_dirt > SEEN) {
-        colour += decode(two_scales(t_dirt, uv, dx, dy)) * w_dirt;
+        colour += two_scales(DIRT, uv, dx, dy) * w_dirt;
     }
     if (w.g > SEEN) {
         // Kaya: üç düzlemden, normale göre; hafif kalan düzlem okunmuyor.
@@ -90,21 +86,21 @@ fn material_surface(input: SurfaceInput) -> Surface {
         k = k / (k.x + k.y + k.z);
         var rock = vec3<f32>(0.0);
         if (k.x > 0.02) {
-            rock += textureSampleGrad(t_rock, s_tile, side_x, sx_dx, sx_dy).rgb * k.x;
+            rock += textureSampleGrad(t_ground, s_tile, side_x, ROCK, sx_dx, sx_dy).rgb * k.x;
         }
         if (k.y > 0.02) {
-            rock += textureSampleGrad(t_rock, s_tile, uv, dx, dy).rgb * k.y;
+            rock += textureSampleGrad(t_ground, s_tile, uv, ROCK, dx, dy).rgb * k.y;
         }
         if (k.z > 0.02) {
-            rock += textureSampleGrad(t_rock, s_tile, side_z, sz_dx, sz_dy).rgb * k.z;
+            rock += textureSampleGrad(t_ground, s_tile, side_z, ROCK, sz_dx, sz_dy).rgb * k.z;
         }
         colour += rock * w.g;
     }
     if (w.b > SEEN) {
-        colour += decode(two_scales(t_snow, uv, dx, dy)) * w.b;
+        colour += two_scales(SNOW, uv, dx, dy) * w.b;
     }
     if (w_sand > SEEN) {
-        colour += decode(two_scales(t_sand, uv, dx, dy)) * w_sand;
+        colour += two_scales(SAND, uv, dx, dy) * w_sand;
     }
     let total = w_grass + w_dirt + w.g + w.b + w_sand;
     let albedo = colour / max(total, 0.001);

@@ -314,7 +314,7 @@ fn input_row(kind: &NodeKind, slot: usize) -> usize {
 }
 
 fn has_value_row(kind: &NodeKind) -> bool {
-    matches!(kind, NodeKind::Float(_) | NodeKind::Vector2(_) | NodeKind::Vector3(_) | NodeKind::Color(_))
+    matches!(kind, NodeKind::Float(_) | NodeKind::Vector2(_) | NodeKind::Vector3(_) | NodeKind::Color(_) | NodeKind::SurfaceTexture(_))
 }
 
 fn node_height(kind: &NodeKind) -> f32 {
@@ -405,6 +405,7 @@ fn toolbar(ui: &mut egui::Ui, panel: &mut ShaderGraphPanelState, has_selection: 
         }
         ui.toggle_value(&mut panel.show_wgsl, "WGSL");
     });
+    textures(ui, panel);
     ui.horizontal(|ui| match panel.wgsl() {
         Ok(_) => {
             ui.label(egui::RichText::new("✔ compiles").color(palette::TEXT_MUTED));
@@ -414,6 +415,37 @@ fn toolbar(ui: &mut egui::Ui, panel: &mut ShaderGraphPanelState, has_selection: 
         }
         Err(e) => {
             ui.label(egui::RichText::new(format!("✖ {e}")).color(palette::DANGER));
+        }
+    });
+}
+
+/// The graph's own textures, by path: what its Surface Texture nodes sample, by index.
+fn textures(ui: &mut egui::Ui, panel: &mut ShaderGraphPanelState) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new("Textures").color(palette::TEXT_DIM));
+        let mut edited: Option<(u32, String)> = None;
+        for (i, path) in panel.graph.textures().iter().enumerate() {
+            let mut text = path.clone();
+            let response = ui.add(egui::TextEdit::singleline(&mut text).desired_width(160.0).hint_text("path or asset id"));
+            ui.label(egui::RichText::new(format!("{i}")).color(palette::TEXT_DIM));
+            if response.changed() {
+                edited = Some((i as u32, text));
+            }
+        }
+        if let Some((i, text)) = edited {
+            panel.record();
+            panel.graph.set_texture(i, text);
+            panel.changed();
+        }
+        if ui.small_button("+").on_hover_text("Add a texture of the graph's own").clicked() {
+            panel.record();
+            panel.graph.add_texture(String::new());
+            panel.changed();
+        }
+        if ui.add_enabled(!panel.graph.textures().is_empty(), egui::Button::new("−").small()).on_hover_text("Remove the last texture").clicked() {
+            panel.record();
+            panel.graph.remove_last_texture();
+            panel.changed();
         }
     });
 }
@@ -593,6 +625,11 @@ fn node_ui(
             NodeKind::Float(v) => ui.put(r, egui::DragValue::new(v).speed(0.01)).changed(),
             NodeKind::Vector2(v) => drag_row(ui, r, v),
             NodeKind::Vector3(v) => drag_row(ui, r, v),
+            // Which of the graph's own textures it samples.
+            NodeKind::SurfaceTexture(index) => {
+                let last = panel.graph.textures().len().saturating_sub(1) as u32;
+                ui.put(r, egui::DragValue::new(index).range(0..=last).prefix("texture ")).changed()
+            }
             NodeKind::Color(c) => {
                 let mut rgba = egui::Rgba::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
                 let changed = ui

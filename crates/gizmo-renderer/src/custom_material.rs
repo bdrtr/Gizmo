@@ -53,12 +53,19 @@
 //! a custom material brings its own group would work on the desktop and fail to compile a shader
 //! in the browser, which is the worst of the two possible failures.
 //!
-//! The room that does exist is inside **group 1**, and it is not small: the material bind group is
-//! seven entries — base colour, sampler, normal, metallic-roughness, emissive, occlusion, and a
-//! uniform buffer — and a custom shader is free to mean something else by all of them. Four
-//! textures and a uniform buffer, with no new group and no platform split. A surface that reads the
-//! engine's material imports its bindings from `gizmo::material`; one that means something else by
-//! them declares group 1 itself and does not import that module.
+//! The room that does exist is inside **group 1**. The material bind group is base colour, sampler,
+//! normal, occlusion-roughness-metalness (glTF's ORM, `crate::material_pack`), emissive, **the
+//! surface's own textures** — one 2D array, binding 5 — a uniform buffer, the lightmap and the
+//! texture pool's array. A surface's own textures are the way in for what is not one of the
+//! engine's maps: [`MaterialMaps::surface`](crate::components::MaterialMaps::surface) names them, a
+//! layer each, and a surface samples them at `t_surface` (`gizmo::material`) or declares binding 5
+//! itself as a `texture_2d_array`. A custom shader is also free to mean something else by the other
+//! slots; one that does declares group 1 itself and does not import that module.
+//!
+//! Not a texture of its own per slot: WebGPU gives a stage 16 sampled textures, and the
+//! forward-only layout — every browser's and phone's frame — had one left (2026-11-26), which the
+//! occlusion map gave up by moving into the ORM texture's red so that an array of any number of
+//! textures could have it.
 //!
 //! [`AssetManager::material`](crate::asset::AssetManager::material) is how they are filled;
 //! `params` is the caller's own buffer:
@@ -66,7 +73,7 @@
 //! ```ignore
 //! let bind_group = AssetManager::material()
 //!     .base_colour(&flow_field)     // whatever your shader decides these mean
-//!     .normal(&noise)
+//!     .surface(&my_layers)          // a 2D array view: the surface's own textures
 //!     .params(&my_uniforms)
 //!     .build(&mut assets, device, queue, layout);
 //! ```
@@ -198,7 +205,8 @@ impl CustomMaterial {
     ///
     /// The shader must declare group 0 as the scene uniforms and group 1 as the material bind
     /// group; it may leave the later groups undeclared. See the module docs for what goes where —
-    /// there is no spare bind group, and group 1's seven entries are the room.
+    /// there is no spare bind group, and group 1's entries — the surface's own textures among them —
+    /// are the room.
     ///
     /// # Panics
     ///

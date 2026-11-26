@@ -14950,6 +14950,78 @@ fn a_surface_graph_is_built_once_and_released_with_its_last_entity() {
     });
 }
 
+/// **A shader graph's own texture is drawn.** Two cubes with one graph sampling its texture 0 into
+/// the albedo, each graph naming a picture of its own — red for one, green for the other — show
+/// those colours; the graph's textures are the material's surface textures, and taken off with the
+/// graph. Until 2026-11-26 a graph could sample only the five maps of the material it was on.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_shader_graphs_own_texture_is_drawn() {
+    use gizmo_renderer::shader_graph::{NodeKind, ShaderGraph, SurfaceGraph};
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("gizmo-graph-textures-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let picture = |name: &str, rgb: [u8; 3]| {
+        let path = dir.join(name);
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([rgb[0], rgb[1], rgb[2], 255])).save(&path).expect("png");
+        path.to_string_lossy().into_owned()
+    };
+    let (red, green) = (picture("red.png", [230, 20, 20]), picture("green.png", [20, 230, 20]));
+    let graph_of = |texture: &str| {
+        let mut graph = ShaderGraph::new();
+        let index = graph.add_texture(texture);
+        let output = graph.output().expect("one output");
+        let sample = graph.add(NodeKind::SurfaceTexture(index), [0.0, 0.0]);
+        graph.connect(sample, 0, output, 0).expect("its colour into the albedo");
+        graph
+    };
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        renderer.taa = None;
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let mut world = World::new();
+        let mut cubes = Vec::new();
+        for (x, texture) in [(-1.2, &red), (1.2, &green)] {
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(x, 0.0, 0.0)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(cube, Material::new(tex.clone()).with_pbr(Vec4::ONE, 0.5, 0.0));
+            world.add_component(cube, MeshRenderer::new());
+            world.add_component(cube, SurfaceGraph::new(graph_of(texture)));
+            cubes.push(cube);
+        }
+        world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+        world.spawn_bundle(DirectionalLightBundle::default());
+        // The first frame resolves the graphs and writes their textures to the materials; the next
+        // binds the materials built with them.
+        render_world(&mut renderer, &mut world).await;
+        let frame = render_world(&mut renderer, &mut world).await;
+        let surface = |world: &World, e| world.query::<&Material>().get(e).map(|m| m.maps.surface.clone()).unwrap_or_default();
+        assert_eq!(surface(&world, cubes[0]), vec![red.clone()]);
+        assert_eq!(surface(&world, cubes[1]), vec![green.clone()]);
+        let at = |x: u32| {
+            let i = ((64 * 128 + x) * 4) as usize;
+            [frame[i], frame[i + 1], frame[i + 2]]
+        };
+        let (left, right) = (at(40), at(88));
+        assert!(left[0] > 2 * left[1].max(left[2]), "the red graph's cube is {left:?}");
+        assert!(right[1] > 2 * right[0].max(right[2]), "the green graph's cube is {right:?}");
+
+        world.remove_component::<SurfaceGraph>(cubes[0]);
+        render_world(&mut renderer, &mut world).await;
+        assert!(surface(&world, cubes[0]).is_empty(), "the graph's textures stayed on the material it left");
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Which material the cube in `render_surface_cube` carries.
 #[derive(Clone, Copy, PartialEq)]
 enum SurfaceCase {

@@ -70,15 +70,11 @@ pub(super) fn water_look(surface: gizmo::renderer::custom_material::SurfaceId) -
 /// Arazinin materyali, motorun özel yüzeyi kaydedilmişse: hücreler bununla çiziliyor.
 pub(super) struct GroundLook(pub(super) MaterialDesc);
 
-/// `surface`'ta kayıtlı arazi gölgelendiricisi için materyal: yuvalara dokular, gölgelendiricinin
-/// beklediği sırayla.
+/// `surface`'ta kayıtlı arazi gölgelendiricisi için materyal: dokular yüzeyin kendi dokuları,
+/// gölgelendiricinin beklediği sırayla (çim, toprak, kaya, kar, kum).
 pub(super) fn ground_look(surface: gizmo::renderer::custom_material::SurfaceId) -> GroundLook {
-    let maps = gizmo::renderer::components::MaterialMaps::default()
-        .with_normal(GROUND[1], 1.0)
-        .with_metallic_roughness(GROUND[3])
-        .with_emissive(GROUND[2], Vec3::ONE)
-        .with_occlusion(GROUND[4], 1.0);
-    let mut look = MaterialDesc::new().with_pbr(Vec4::ONE, 0.95, 0.0).with_texture_source(GROUND[0].to_string()).with_maps(maps);
+    let maps = gizmo::renderer::components::MaterialMaps::default().with_surface(GROUND);
+    let mut look = MaterialDesc::new().with_pbr(Vec4::ONE, 0.95, 0.0).with_maps(maps);
     look.material_type = gizmo::renderer::components::MaterialType::CustomSurface(surface);
     GroundLook(look)
 }
