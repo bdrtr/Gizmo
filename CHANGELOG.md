@@ -561,8 +561,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **`PhysicsWorld::state_hash` covers what a snapshot carries and no pose shows**, so its values
-  change: the time not yet stepped, the weather, each body's sleep counter and gathered forces, and
-  what a joint's solve leaves in it — its reference pose, a hinge's angle, a slider's travel. Two
+  change: the time not yet stepped, the weather, each body's sleep counter and gathered forces,
+  what a joint's solve leaves in it — its reference pose, a hinge's angle, a slider's travel — and
+  the contacts the last solve left, whose impulses the next one starts from (walked in pair order,
+  so the slot a pair sits in does not count). Two
   worlds that differed only in one of these hashed alike and stepped apart, and two rollback peers
   agreed on them. The joint's were in `settings_hash` instead, so a world with a hinge changed its
   *settings* by stepping; they are out of it, and so is a fluid zone's fog, which only the picture

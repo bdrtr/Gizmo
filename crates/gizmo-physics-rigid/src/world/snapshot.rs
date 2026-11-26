@@ -146,8 +146,8 @@ impl PhysicsWorld {
     /// of a rollback session built differently — never hash alike, even before they have moved. So
     /// is what a step reads and no pose shows: the time not yet stepped, the weather (a vehicle's
     /// grip), each body's sleep counter and gathered forces, and what each joint's solve left in it
-    /// (its reference pose, a hinge's angle, a slider's travel). The contacts' warm-start impulses
-    /// are not.
+    /// (its reference pose, a hinge's angle, a slider's travel), and the contacts the last solve
+    /// left: their warm-start impulses, whether they slid, which pairs have touched.
     ///
     /// The guarantee: on the **same platform and the same binary**, stepping the same initial
     /// state with the same `dt` matches step for step (which is what replay/rollback needs).
@@ -182,6 +182,8 @@ impl PhysicsWorld {
             h.write_u8(rb.is_sleeping as u8);
             h.write_u32(rb.sleep_counter);
         }
+
+        self.contact_cache.hash_into(&mut h);
 
         // Joint solver state. `is_broken`, the endpoint pair and what `JointData::take_state`
         // takes are CARRIED state: a broken joint or a reference pose cannot be recomputed from
