@@ -240,6 +240,16 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    Jacobian put in the inverse inertia every solver reads (`(I + dt·([ω]×I − [Iω]×))⁻¹`, not
 >    symmetric): it blew up, +175 J at 60 Hz. The fix is the gyroscopic term in the constraint solve
 >    itself, with the solvers made to take a non-symmetric response — a piece of work of its own.
+> 11. **The hold after the solve moves a body back and leaves its velocity.** `hold_set_going`
+>    puts a body it stops where its way first sank past the limit (`held_turning`, `held_moving`),
+>    and the velocity the solve gave it stays. Where the solve gives the same velocity again from
+>    there, the substep repeats itself and the body stands frozen, awake, mid-motion. Seen
+>    2026-11-26 only with the thin-body slop tried in the hold: 42 of 200 2 mm coins at 60 Hz stood
+>    tilted on their rims for good (the soft contact leaves a rocking coin 1 mm in at a substep's end,
+>    and the hold allowed 0.5). At the solver's slop, which the hold keeps, nothing in the suite or
+>    the games reaches it — but nothing rules it out. The fix is a hold that takes out the velocity
+>    it denied (the approach along the held contact's normal, as `kinematic_ccd_step` does for a
+>    kinematic body), measured against the hill and CCD tests the hold exists for.
 >
 > **Closed in the same sweep, each where it stands:** the irradiance volume "connected to nothing"
 > (it is drawn); no default font (`bundled-font`); no EQ or compressor (`gizmo_audio::{equalizer,
