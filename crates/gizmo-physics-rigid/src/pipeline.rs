@@ -1654,6 +1654,15 @@ impl PhysicsWorld {
             // and a body that was solved belongs to an island whether or not it woke.
             in_island[idx] = true;
             if !self.rigid_bodies[idx].is_sleeping {
+                // Within the body's locks: the contact solve's impulses are along their normals, a
+                // planar body's too, and what they give it across its plane was taken out only by
+                // the next position integration — which a body falling asleep on this substep does
+                // not get. A planar box asleep on a ramp tilted out of its plane kept 2.2 cm/s across
+                // it, and on macOS's arm64 `fracture_in_play` saw a piece's (2026-11-26).
+                let mut vel = vel;
+                let rb = &self.rigid_bodies[idx];
+                rb.enforce_locks(&mut vel);
+                (vel.pre_linear, vel.pre_angular) = rb.mask_locked(vel.pre_linear, vel.pre_angular);
                 self.velocities[idx] = vel;
             }
         }

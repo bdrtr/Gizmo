@@ -1272,7 +1272,10 @@ asking the compiler, and by reading the list of public items the workspace never
   axis, given before their locks could act: a piece came out at 1.8 m/s across the plane and was
   stopped only by the next step's integration, so on macOS's arm64, where the lander of
   `fracture_in_play` broke on the test's last frame, CI went red. A piece's velocity is masked by its
-  locks as it is made.
+  locks as it is made. And what CI was red with was a third such writer: the contact solve's
+  velocity, written back unmasked and masked only by the next position integration, which a body
+  falling asleep on that substep does not get — a planar box went to sleep on a ramp tilted out of
+  its plane with 2.2 cm/s across it. The write-back is masked by the body's locks now.
 - **A sound plays whole, at its own rate, from its first sample.** rodio builds a player's rate
   converter when the player is connected to its mixer, from what its queue holds then — its empty
   start, which reads as 48 kHz — and the sound appended after was converted at that rate for the

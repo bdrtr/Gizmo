@@ -97,3 +97,32 @@ fn a_planar_body_bounced_off_a_tilted_surface_stays_in_its_plane() {
         }
     }
 }
+
+/// A planar body on a ramp tilted out of its plane has no velocity across the plane at the end of
+/// any step, the one it falls asleep on included. The contact solve's impulse is along the ramp's
+/// normal and gave it some, which only the next position integration took out — and a body falling
+/// asleep does not get one: a box went to sleep with 2.2 cm/s across its plane at 60 Hz, and on
+/// macOS's arm64 `fracture_in_play` saw a piece's (2026-11-26).
+#[test]
+fn a_planar_body_ends_every_step_in_its_plane_asleep_or_awake() {
+    for hz in [60u32, 240] {
+        for tilt in [0.1f32, 0.3, 0.6] {
+            let mut w = PhysicsWorld::new().with_substep_rate(hz).unwrap();
+            let mut ramp = Transform::new(Vec3::ZERO);
+            ramp.rotation = gizmo_math::Quat::from_rotation_x(tilt);
+            w.add_body(gizmo_physics_core::BodyHandle::from_id(1), RigidBody::new_static(), ramp, Velocity::default(), Collider::box_collider(Vec3::new(5.0, 0.2, 5.0)));
+            let c = Collider::box_collider(Vec3::new(0.3, 0.1, 0.2));
+            let mut rb = RigidBody::new(1.0, true).planar_xy();
+            rb.update_inertia_from_collider(&c);
+            w.add_body(gizmo_physics_core::BodyHandle::from_id(2), rb, Transform::new(Vec3::new(0.0, 1.0, 0.0)), Velocity::default(), c);
+            let mut slept = false;
+            for frame in 0..600 {
+                w.step(1.0 / 60.0).unwrap();
+                let v = w.velocities[1];
+                assert_eq!((v.linear.z, v.angular.x, v.angular.y), (0.0, 0.0, 0.0), "{hz} Hz, tilt {tilt}, frame {frame}: {v:?}");
+                slept |= w.rigid_bodies[1].is_sleeping;
+            }
+            assert!(slept, "premise: {hz} Hz, tilt {tilt}: it falls asleep");
+        }
+    }
+}
