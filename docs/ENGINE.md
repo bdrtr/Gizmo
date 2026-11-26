@@ -228,6 +228,16 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    cannot push it out in time. Reproduce: that test with seed 37, shot `field240:57`. Found
 >    2026-11-26 with Euler's equations (`integrator::gyroscopic_change`), which made it tumble as it
 >    should; none of the 2000 does without them, and none of the test's own 400.
+> 10. **A fast top on a pivot loses energy, at a rate that grows with the step.** A 1 kg disk on a
+>    ball-socket pivot, 0.5 m out, tilted 30° and spun 50 rad/s precesses at 0.81 rad/s — Euler's
+>    equations' slow precession for it, 0.813 (`integrator::gyroscopic_change`; before them it went
+>    at 1.82) — but its energy runs down: 4.6 J in 4 s at 60 Hz, 0.63 at 240, 0.15 at 960 (of 156),
+>    and the axis sags where it should nod between 30° and 32°: to 66° at 60 Hz, 43° at 240. The
+>    gyroscopic step and the joint are solved one after the other; the free body keeps its energy
+>    exactly, and with the term left out the pivot keeps it too, at the wrong precession. Tried and
+>    measured 2026-11-26: the body's frame taken at mid-step (loss halved, sag worse), the step
+>    split around the solve (Strang: 960 Hz right, 60 Hz worse). The fix is the gyroscopic term in
+>    the constraint solve itself — its Jacobian in the effective mass — a piece of work of its own.
 >
 > **Closed in the same sweep, each where it stands:** the irradiance volume "connected to nothing"
 > (it is drawn); no default font (`bundled-font`); no EQ or compressor (`gizmo_audio::{equalizer,
