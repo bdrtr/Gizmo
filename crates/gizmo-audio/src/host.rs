@@ -198,16 +198,14 @@ pub fn play_flat_sources(world: &mut World) {
         }
 
         if should_start_flat(&source) {
-            let started = if source.loop_sound {
-                audio.play_looped(&source.sound_name)
-            } else {
-                audio.play(&source.sound_name)
-            };
-            match started {
+            // Its bus, volume and pitch from the first sample: set after `play`, the sound was on
+            // the device at unity on the default bus until they arrived.
+            let options = crate::PlayOptions::on_bus(&source.bus)
+                .looped(source.loop_sound)
+                .volume(source.volume)
+                .pitch(source.pitch);
+            match audio.play_with(&source.sound_name, &options) {
                 Ok(id) => {
-                    audio.set_sink_bus(id, &source.bus);
-                    audio.set_volume(id, source.volume);
-                    audio.set_pitch(id, source.pitch);
                     source._internal_sink_id = Some(id);
                 }
                 Err(e) => {

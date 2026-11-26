@@ -181,9 +181,11 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    index sites (round three of that audit is not advanced). Entry: "Open, filed 2026-08-31".
 > 2. **The editor cannot move or rename an asset**, and a rename done outside it leaves the `.meta`
 >    sidecar behind and orphans the asset's identity. Entry: "Asset identity".
-> 3. **Audio routing:** no sends/returns (a reverb bus fed from other buses); the underwater muffle
->    applies to every bus, menu music too, with no per-bus opt-out (`Mixer::set_underwater`); a
->    sound cannot be started on its bus (`play` then `set_sink_bus`, one buffer late). Entry: "M7.5".
+> 3. **Audio routing: no sends/returns** (a reverb bus fed from other buses). Every bus is a gain
+>    on the sounds routed to it, and the effects are either inside each source (muffle, reverb) or
+>    on the whole mix (EQ, compressor, limiter); a send needs buses that sum their sounds and carry
+>    effects of their own. *The per-bus opt-out from the environment (`Mixer::set_bus_dry`) and
+>    starting a sound on its bus (`play_with`) closed 2026-11-26.* Entry: "M7.5".
 > 4. **A shader graph has no texture of its own**: it samples the five maps the material's group
 >    binds, and a sixth needs a binding the web's four groups have no room for. Entry: "Shader Graph".
 > 5. **Friction holds velocity, not position**: no positional term in the tangent channel. What it
@@ -1150,11 +1152,22 @@ state instead.
   the filter's own feedback path and turns **every** later sample into `NaN` — silence on the
   device, from a number a game is allowed to ask for.
 
-  **Still not done:** sends/returns (a reverb bus fed from other buses) and a per-bus opt-out from
-  the environment modifier, since today the menu music muffles when the camera goes under water.
-  **Trigger for the opt-out:** a game with non-diegetic sound that dives. **Trigger for starting a
-  sound already on its bus** (rather than `play` + `set_sink_bus`): a game that can hear the gap,
-  which is one mixer buffer and audible only into a muted bus.
+  **Closed 2026-11-26: a sound starts as it was asked, and a bus can be outside the world.**
+  `play_with` / `play_3d_with` take `PlayOptions` (bus, loop, volume, pitch, reach), and the sound is
+  routed, priced and given its environment *before* it is appended to its player. Until then a
+  sound reached the device first and had its numbers written after: the scene's `AudioSource` was
+  started on the default bus at unity and moved, and a `crossfade` started its track at full volume
+  and then set its fade to zero, so the first buffer could be loud, on the wrong bus, or dry under
+  water. `Mixer::set_bus_dry` takes a bus out of the listener's environment: no underwater level or
+  low-pass and no reverb for its sounds, those already playing included, so a menu's music stays
+  as it was mixed. For that the muffle's corner and a reverb switch are per sound (each source's own
+  control, written by the manager from the mixer like its volume); the reverb's shape stays
+  shared. The tests run without a device: the manager can be built on an output it does not hand
+  to a device (`AudioManager::on_output`), and they pull the mix it makes.
+
+  **Still not done: sends/returns** (a reverb bus fed from other buses). It needs buses that sum
+  the sounds routed to them and carry effects of their own, where today a bus is a gain on each
+  sound. That is a separate piece of work.
 - ~~Optional: cross-platform determinism (as a feature — see §5), gizmo-net on WASM.~~ *Closed
   2026-11-24:* cross-platform bit-exactness is out of scope (§5), and networking is native-only by
   decision (STATUS).

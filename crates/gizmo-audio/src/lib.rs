@@ -55,6 +55,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 // ======================== ERRORS ========================
@@ -206,6 +207,79 @@ impl AudioSource {
     }
 }
 
+/// How [`AudioManager::play_with`] and [`AudioManager::play_3d_with`] start a sound: on which
+/// mixer bus, whether it loops, and at what volume and pitch. All of it holds from the sound's
+/// first sample, which setting it after `play` cannot promise: the sound is on the device by then.
+///
+/// ```
+/// # use gizmo_audio::{Mixer, PlayOptions};
+/// let theme = PlayOptions::on_bus(Mixer::MUSIC).looped(true).volume(0.6);
+/// assert_eq!((theme.bus.as_str(), theme.looped, theme.volume), (Mixer::MUSIC, true, 0.6));
+/// assert_eq!(PlayOptions::default().bus, Mixer::DEFAULT_BUS);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct PlayOptions {
+    /// The bus the sound plays on. See [`Mixer`].
+    pub bus: String,
+    /// Whether it plays again from the start when it ends.
+    pub looped: bool,
+    /// The volume it is asked to play at, as [`AudioManager::set_volume`] takes it; for a 3D
+    /// sound, at the emitter, before the distance takes its share.
+    pub volume: f32,
+    /// The pitch, as [`AudioManager::set_pitch`] takes it.
+    pub pitch: f32,
+    /// For a 3D sound, the distance at which it has faded out, in metres. See
+    /// [`AudioSource::max_distance`].
+    pub max_distance: f32,
+}
+
+impl Default for PlayOptions {
+    fn default() -> Self {
+        Self { bus: default_bus(), looped: false, volume: 1.0, pitch: 1.0, max_distance: DEFAULT_MAX_DISTANCE }
+    }
+}
+
+impl PlayOptions {
+    /// A one-shot on `bus`, at unity.
+    pub fn on_bus(bus: &str) -> Self {
+        Self { bus: bus.to_string(), ..Self::default() }
+    }
+
+    /// Sets whether it loops, returning the options.
+    pub fn looped(mut self, looped: bool) -> Self {
+        self.looped = looped;
+        self
+    }
+
+    /// Sets the volume, returning the options.
+    pub fn volume(mut self, volume: f32) -> Self {
+        self.volume = volume;
+        self
+    }
+
+    /// Sets the pitch, returning the options.
+    pub fn pitch(mut self, pitch: f32) -> Self {
+        self.pitch = pitch;
+        self
+    }
+
+    /// Sets a 3D sound's reach, returning the options.
+    pub fn max_distance(mut self, max_distance: f32) -> Self {
+        self.max_distance = max_distance;
+        self
+    }
+}
+
+/// What one playing sound reads from its environment on the audio thread, its own and not shared:
+/// the low-pass corner of its muffle and whether the reverb reaches it. Per sound, because a sound
+/// on a dry bus has neither (`Mixer::set_bus_dry`); the reverb's shape stays shared.
+#[derive(Debug)]
+struct SinkEnvironment {
+    muffle: Arc<MuffleControl>,
+    reverb_send: Arc<AtomicBool>,
+}
+
 // ======================== AUDIO MANAGER ========================
 
 /// Resource that owns the audio output device and manages loaded sounds and
@@ -215,8 +289,9 @@ pub struct AudioManager {
     // the mixer that every player connects to. (rodio 0.22 merged the old `OutputStream` +
     // `OutputStreamHandle` pair into this one value; "sink" in *our* vocabulary still means one
     // playing sound, which rodio now calls a `Player`.)
-    // Held, never read since the bus below took over: dropping it stops the stream.
-    _device_sink: MixerDeviceSink,
+    // Held, never read since the bus below took over: dropping it stops the stream. `None` for a
+    // manager on an output of its own (the tests, which pull the mix themselves).
+    _device_sink: Option<MixerDeviceSink>,
     // What every player connects to: a mixer of our own, whose sum goes through the master
     // limiter into the device's mixer. The device's mixer cannot be wrapped (it is the stream's
     // own), so the limiter needs a sum it owns to sit on.
@@ -240,11 +315,11 @@ pub struct AudioManager {
     // would have it resumed on the next frame by a host that is not paused.
     all_paused: bool,
 
-    // The live low-pass cutoff, shared with every source this manager has started and read on
-    // the audio thread. Turning the muffle on is one atomic store here, not a walk over the sinks
-    // — the filter is *inside* each source, which is the only place rodio lets it be live.
-    muffle: std::sync::Arc<MuffleControl>,
-    // The reverb every source reads, the same way: one store turns a cave on for every sound.
+    // Each live sound's own low-pass corner and reverb switch, read on the audio thread by the
+    // stages inside its source — the only place rodio lets a filter be live. Per sound because a
+    // dry bus has neither; written by `apply_mix` from the mixer like the volume.
+    sink_env: HashMap<u64, SinkEnvironment>,
+    // The reverb's shape every source reads: one store turns a cave on for every sound.
     reverb: std::sync::Arc<reverb::ReverbControl>,
 
     // Buses, master, environment, and one route per live sink. THE ONLY PLACE a volume or a
@@ -328,6 +403,12 @@ fn ear_distance(emitter: [f32; 3], left_ear: [f32; 3], right_ear: [f32; 3]) -> f
     (0..3).map(|i| (emitter[i] - centre[i]).powi(2)).sum::<f32>().sqrt()
 }
 
+/// A sound's source with its stages around it: the reverb, then the muffle, each reading this
+/// sound's own switch.
+fn wrap<I: rodio::Source>(input: I, reverb: &Arc<reverb::ReverbControl>, env: &SinkEnvironment) -> Muffle<reverb::ReverbStage<I>> {
+    Muffle::new(reverb::ReverbStage::new(input, Arc::clone(reverb), Arc::clone(&env.reverb_send)), Arc::clone(&env.muffle))
+}
+
 /// The length a sound's bytes decode to, if the format states it.
 fn decoded_duration(bytes: &Arc<[u8]>) -> Option<f32> {
     use rodio::Source;
@@ -372,41 +453,44 @@ impl AudioManager {
                 // the manager owns the device for its whole life — so the warning is noise.
                 device_sink.log_on_drop(false);
                 let config = device_sink.config();
-                let (channels, rate) = (config.channel_count(), config.sample_rate());
-                let equalizer = equalizer::EqualizerControl::new();
-                let compressor = compressor::CompressorControl::new();
-                let limiter = limiter::LimiterControl::new();
-                let (bus, master) = limiter::master_bus(
-                    channels,
-                    rate,
-                    Arc::clone(&equalizer),
-                    Arc::clone(&compressor),
-                    Arc::clone(&limiter),
-                );
+                let (mut manager, master) = Self::on_output(config.channel_count(), config.sample_rate());
                 device_sink.mixer().add(master);
+                manager._device_sink = Some(device_sink);
                 log::info!("Gizmo Audio: Ses cihazı başlatıldı! 3D Uzamsal (Spatial) Motor Aktif.");
-                Ok(Self {
-                    _device_sink: device_sink,
-                    bus,
-                    equalizer,
-                    compressor,
-                    limiter,
-                    sound_buffers: HashMap::new(),
-                    active_spatial_sinks: HashMap::new(),
-                    active_sinks: HashMap::new(),
-                    sink_sounds: HashMap::new(),
-                    next_sink_id: 1,
-                    all_paused: false,
-                    muffle: MuffleControl::new(),
-                    reverb: reverb::ReverbControl::new(),
-                    mixer: Mixer::new(),
-                })
+                Ok(manager)
             }
             Err(e) => {
                 log::error!("Gizmo Audio Başarısız (Cihaz bulunamadı): {}", e);
                 Err(AudioError::Backend(e.to_string()))
             }
         }
+    }
+
+    /// A manager whose mix comes out of the returned source instead of a device: what
+    /// [`new`](Self::new) hands the device, and what a test pulls samples from.
+    fn on_output(channels: rodio::ChannelCount, rate: rodio::SampleRate) -> (Self, limiter::MasterOut) {
+        let equalizer = equalizer::EqualizerControl::new();
+        let compressor = compressor::CompressorControl::new();
+        let limiter = limiter::LimiterControl::new();
+        let (bus, master) =
+            limiter::master_bus(channels, rate, Arc::clone(&equalizer), Arc::clone(&compressor), Arc::clone(&limiter));
+        let manager = Self {
+            _device_sink: None,
+            bus,
+            equalizer,
+            compressor,
+            limiter,
+            sound_buffers: HashMap::new(),
+            active_spatial_sinks: HashMap::new(),
+            active_sinks: HashMap::new(),
+            sink_sounds: HashMap::new(),
+            next_sink_id: 1,
+            all_paused: false,
+            sink_env: HashMap::new(),
+            reverb: reverb::ReverbControl::new(),
+            mixer: Mixer::new(),
+        };
+        (manager, master)
     }
 
     /// Goes to disk, reads the sound and stores it in RAM as a byte array
@@ -496,10 +580,8 @@ impl AudioManager {
     ///
     /// As [`play_looped`](Self::play_looped); `from` keeps playing if the new track cannot start.
     pub fn crossfade(&mut self, from: Option<u64>, name: &str, secs: f32) -> Result<u64, AudioError> {
-        let id = self.play_looped(name)?;
-        self.mixer.set_sink_bus(id, Mixer::MUSIC);
-        self.mixer.set_fade(id, 0.0);
-        self.apply_mix(id);
+        // Silent from its first sample: it reaches the device already on the music bus at fade 0.
+        let id = self.start(name, None, &PlayOptions::on_bus(Mixer::MUSIC).looped(true), 0.0)?;
         self.mixer.start_fade(id, 1.0, secs, false);
         if let Some(old) = from {
             self.fade_out(old, secs);
@@ -521,31 +603,25 @@ impl AudioManager {
         &mut self.mixer
     }
 
-    /// Moves a live sound to a mixer bus and re-prices it immediately.
+    /// Moves a live sound to a mixer bus and re-prices it immediately — its gain, and the
+    /// environment if one of the two buses is [dry](Mixer::set_bus_dry).
     ///
-    /// This is how a sound reaches a bus other than [`Mixer::DEFAULT_BUS`]:
-    ///
-    /// ```no_run
-    /// # use gizmo_audio::{AudioManager, Mixer};
-    /// # let mut audio = AudioManager::new().unwrap();
-    /// let id = audio.play_looped("theme")?;
-    /// audio.set_sink_bus(id, Mixer::MUSIC);   // now follows the player's music slider
-    /// # Ok::<(), gizmo_audio::AudioError>(())
-    /// ```
-    ///
-    /// Starting a sound *already* on its bus would need a second set of `play` entry points; the
-    /// trigger for adding them is a game that can hear the gap between these two calls — the sound
-    /// is priced at the default bus's gain for as long as it takes to reach the next line, which
-    /// is one mixer buffer at worst and inaudible unless that bus is muted.
+    /// To *start* a sound on a bus, use [`play_with`](Self::play_with): a sound started on the
+    /// default bus and moved here plays its first buffer at the default bus's gain, which is
+    /// audible when this bus is muted or turned down.
     pub fn set_sink_bus(&mut self, id: u64, bus: &str) {
         self.mixer.set_sink_bus(id, bus);
         self.apply_mix(id);
     }
 
-    /// Writes this sink's composed volume and speed to rodio. Every mutator ends here.
+    /// Writes this sink's composed volume, speed and environment to rodio. Every mutator ends here.
     fn apply_mix(&self, id: u64) {
         let volume = self.mixer.volume_for(id);
         let speed = self.mixer.speed_for(id);
+        if let Some(env) = self.sink_env.get(&id) {
+            env.muffle.set_cutoff_hz(self.mixer.cutoff_hz_for(id));
+            env.reverb_send.store(self.mixer.reverb_reaches(id), Ordering::Relaxed);
+        }
         if let Some(sink) = self.active_spatial_sinks.get(&id) {
             sink.set_volume(volume);
             sink.set_speed(speed);
@@ -559,23 +635,14 @@ impl AudioManager {
     /// to sounds that are already playing.
     fn apply_mix_to_every_sink(&mut self) {
         self.mixer.take_dirty(); // whatever asked for this, it is answered now
-        // One store, heard on the next buffer, by every sound at once — including the ones this
-        // manager will start later, since they are handed the same control.
-        self.muffle.set_cutoff_hz(self.mixer.environment_cutoff_hz());
-
-        for (id, sink) in &self.active_sinks {
-            sink.set_volume(self.mixer.volume_for(*id));
-            sink.set_speed(self.mixer.speed_for(*id));
-        }
-        for (id, sink) in &self.active_spatial_sinks {
-            sink.set_volume(self.mixer.volume_for(*id));
-            sink.set_speed(self.mixer.speed_for(*id));
+        for id in self.active_sinks.keys().chain(self.active_spatial_sinks.keys()) {
+            self.apply_mix(*id);
         }
     }
 
     // ── Su-altı ses boğma (underwater muffle) ────────────────────────────────
-    /// Turns the underwater "muffle" on or off: every sound is turned down and slowed slightly,
-    /// which stands in for a low-pass rodio's `Player` cannot do live.
+    /// Turns the underwater "muffle" on or off: every sound is turned down and low-passed, except
+    /// the ones on a [dry](Mixer::set_bus_dry) bus.
     ///
     /// Idempotent, and — since 2026-08-18 — actually *reversible*. It used to multiply each
     /// sink's volume by 0.4 and undo it with 2.5, which had two measured consequences on real
@@ -676,7 +743,7 @@ impl AudioManager {
     /// [`AudioError::Decode`] if the bytes cannot be decoded. Attaching the sound to the output
     /// device cannot fail here — the device was opened once, in [`AudioManager::new`].
     pub fn play(&mut self, name: &str) -> Result<u64, AudioError> {
-        self.play_internal(name, false)
+        self.play_with(name, &PlayOptions::default())
     }
 
     /// Plays a normal (Global/Stereo) sound in a loop
@@ -687,38 +754,93 @@ impl AudioManager {
     /// [`AudioError::Decode`] if the bytes cannot be decoded. Attaching the sound to the output
     /// device cannot fail here — the device was opened once, in [`AudioManager::new`].
     pub fn play_looped(&mut self, name: &str) -> Result<u64, AudioError> {
-        self.play_internal(name, true)
+        self.play_with(name, &PlayOptions::default().looped(true))
     }
 
-    fn play_internal(&mut self, name: &str, looped: bool) -> Result<u64, AudioError> {
+    /// Plays a normal (Global/Stereo) sound as `options` say: on its bus from the first sample,
+    /// looped or not.
+    ///
+    /// ```no_run
+    /// # use gizmo_audio::{AudioManager, Mixer, PlayOptions};
+    /// # let mut audio = AudioManager::new().unwrap();
+    /// let theme = audio.play_with("theme", &PlayOptions::on_bus(Mixer::MUSIC).looped(true))?;
+    /// # Ok::<(), gizmo_audio::AudioError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// As [`play`](Self::play).
+    pub fn play_with(&mut self, name: &str, options: &PlayOptions) -> Result<u64, AudioError> {
+        self.start(name, None, options, 1.0)
+    }
+
+    /// Starts a sound: a global one, or a spatial one at `(emitter, left ear, right ear)`, on
+    /// `options.bus` at `fade` — routed, priced and given its environment **before** it reaches the
+    /// device.
+    ///
+    /// The order is the point. A `Player` connected to the bus plays what is appended to it from
+    /// the next buffer the audio thread pulls, at the volume it has then. Until 2026-11-26 the
+    /// source was appended first and the volume written after, so a sound started underwater, on a
+    /// muted bus, or by a `crossfade` from silence could play its first buffer at full volume, dry.
+    fn start(
+        &mut self,
+        name: &str,
+        spatial: Option<([f32; 3], [f32; 3], [f32; 3])>,
+        options: &PlayOptions,
+        fade: f32,
+    ) -> Result<u64, AudioError> {
         let bytes = self.sound_buffers.get(name).ok_or_else(|| {
             log::error!("AudioManager: '{}' adlı ses bellekte yok!", name);
             AudioError::NotLoaded(name.to_string())
         })?;
         let decoder = decode(bytes).map_err(|e| AudioError::Decode(e.to_string()))?;
-        let sink = Player::connect_new(&self.bus);
-        // The muffle wraps the source rather than the player: a `Player` hands out no way to reach
-        // what it is playing, so a filter that must be switchable later has to be in the chain
-        // before `append` and read its own parameter afterwards.
-        if looped {
-            // Not `repeat_infinite`: its buffer cannot seek (see `looping`).
-            sink.append(Muffle::new(
-                reverb::ReverbStage::new(Looping::new(Arc::clone(bytes), decoder), Arc::clone(&self.reverb)),
-                Arc::clone(&self.muffle),
-            ));
-        } else {
-            sink.append(Muffle::new(reverb::ReverbStage::new(decoder, Arc::clone(&self.reverb)), Arc::clone(&self.muffle)));
-        }
         let id = self.next_sink_id;
         self.next_sink_id = self.next_sink_id.wrapping_add(1);
 
-        // Routed before it is priced, priced before it is returned: a sound that starts while the
-        // listener is underwater, or on a bus the player has turned down, is already at the right
-        // volume on its first buffer.
-        self.active_sinks.insert(id, sink);
+        self.mixer.route(id, &options.bus);
+        if fade != 1.0 {
+            self.mixer.set_fade(id, fade);
+        }
+        let volume = match spatial {
+            Some((emitter, left, right)) => spatial_gain(ear_distance(emitter, left, right), options.max_distance, options.volume),
+            None => options.volume,
+        };
+        self.mixer.set_sink_volume(id, volume);
+        self.mixer.set_sink_pitch(id, options.pitch);
+        let env = SinkEnvironment { muffle: MuffleControl::new(), reverb_send: Arc::new(AtomicBool::new(false)) };
+        env.muffle.set_cutoff_hz(self.mixer.cutoff_hz_for(id));
+        env.reverb_send.store(self.mixer.reverb_reaches(id), Ordering::Relaxed);
+        let (volume, speed) = (self.mixer.volume_for(id), self.mixer.speed_for(id));
+        let reverb = &self.reverb;
+        // The muffle and the reverb wrap the source rather than the player: a `Player` hands out no
+        // way to reach what it is playing, so a stage that must be switchable later has to be in
+        // the chain before `append` and read its own parameter afterwards. Priced first, appended
+        // last. Not `repeat_infinite` for a loop: its buffer cannot seek (see `looping`).
+        macro_rules! fill {
+            ($sink:expr) => {{
+                let sink = $sink;
+                sink.set_volume(volume);
+                sink.set_speed(speed);
+                if options.looped {
+                    sink.append(wrap(Looping::new(Arc::clone(bytes), decoder), reverb, &env));
+                } else {
+                    sink.append(wrap(decoder, reverb, &env));
+                }
+                sink
+            }};
+        }
+        match spatial {
+            Some((emitter, left, right)) => {
+                let sink = fill!(SpatialPlayer::connect_new(&self.bus, emitter, left, right));
+                self.active_spatial_sinks.insert(id, sink);
+            }
+            None => {
+                let sink = fill!(Player::connect_new(&self.bus));
+                self.active_sinks.insert(id, sink);
+            }
+        }
+        self.sink_env.insert(id, env);
         self.sink_sounds.insert(id, name.to_string());
-        self.mixer.route(id, Mixer::DEFAULT_BUS);
-        self.apply_mix(id);
         Ok(id)
     }
 
@@ -741,7 +863,7 @@ impl AudioManager {
         left_ear: [f32; 3],
         right_ear: [f32; 3],
     ) -> Result<u64, AudioError> {
-        self.play_3d_internal(name, emitter_pos, left_ear, right_ear, false)
+        self.play_3d_with(name, emitter_pos, left_ear, right_ear, &PlayOptions::default())
     }
 
     /// Plays a 3D Spatial sound in a loop
@@ -758,43 +880,24 @@ impl AudioManager {
         left_ear: [f32; 3],
         right_ear: [f32; 3],
     ) -> Result<u64, AudioError> {
-        self.play_3d_internal(name, emitter_pos, left_ear, right_ear, true)
+        self.play_3d_with(name, emitter_pos, left_ear, right_ear, &PlayOptions::default().looped(true))
     }
 
-    fn play_3d_internal(
+    /// Plays a 3D Spatial sound as `options` say: on its bus from the first sample, looped or
+    /// not. What an [`AudioSource`] with a [`bus`](AudioSource::bus) starts with.
+    ///
+    /// # Errors
+    ///
+    /// As [`play_3d`](Self::play_3d).
+    pub fn play_3d_with(
         &mut self,
         name: &str,
         emitter_pos: [f32; 3],
         left_ear: [f32; 3],
         right_ear: [f32; 3],
-        looped: bool,
+        options: &PlayOptions,
     ) -> Result<u64, AudioError> {
-        let bytes = self.sound_buffers.get(name).ok_or_else(|| {
-            log::error!("AudioManager: '{}' adlı 3D ses bellekte yok!", name);
-            AudioError::NotLoaded(name.to_string())
-        })?;
-        let decoder = decode(bytes).map_err(|e| AudioError::Decode(e.to_string()))?;
-        let sink =
-            SpatialPlayer::connect_new(&self.bus, emitter_pos, left_ear, right_ear);
-        if looped {
-            // Not `repeat_infinite`: its buffer cannot seek (see `looping`).
-            sink.append(Muffle::new(
-                reverb::ReverbStage::new(Looping::new(Arc::clone(bytes), decoder), Arc::clone(&self.reverb)),
-                Arc::clone(&self.muffle),
-            ));
-        } else {
-            sink.append(Muffle::new(reverb::ReverbStage::new(decoder, Arc::clone(&self.reverb)), Arc::clone(&self.muffle)));
-        }
-
-        let id = self.next_sink_id;
-        self.next_sink_id = self.next_sink_id.wrapping_add(1);
-
-        self.active_spatial_sinks.insert(id, sink);
-        self.sink_sounds.insert(id, name.to_string());
-        self.mixer.route(id, Mixer::DEFAULT_BUS);
-        self.mixer.set_sink_volume(id, spatial_gain(ear_distance(emitter_pos, left_ear, right_ear), DEFAULT_MAX_DISTANCE, 1.0));
-        self.apply_mix(id);
-        Ok(id)
+        self.start(name, Some((emitter_pos, left_ear, right_ear)), options, 1.0)
     }
 
     // ========== ECS SINK GÜNCELLEMELERİ ==========
@@ -923,6 +1026,7 @@ impl AudioManager {
             .collect();
         self.mixer.retain_routes(|id| live.contains(&id));
         self.sink_sounds.retain(|id, _| live.contains(id));
+        self.sink_env.retain(|id, _| live.contains(id));
     }
 
     /// Stops every live sound that was started from `name`, and reports how many it stopped.
@@ -1103,7 +1207,7 @@ mod tests {
             "and must NOT slow it: the muffle is a low-pass filter inside the source, not a \
              pitch shift — that stand-in was removed 2026-08-18"
         );
-        assert!(mixer.environment_cutoff_hz() > 0, "the corner is what carries the muffle now");
+        assert!(mixer.cutoff_hz_for(7) > 0, "the corner is what carries the muffle now");
 
         // Not asserted here: that `stop()` empties the player. Emptiness is decremented as the
         // *mixer pulls samples*, so with no device nothing ever drains — which is also why
@@ -1209,7 +1313,7 @@ mod tests {
 
         m.set_underwater(true);
         assert_eq!(spatial(&m, id), (0.4, 1.0), "the muffle turns it down and does not detune it");
-        assert!(m.muffle.cutoff_hz() > 0, "and the filter every source reads is engaged");
+        assert!(m.sink_env[&id].muffle.cutoff_hz() > 0, "and the filter its source reads is engaged");
 
         // One frame of `audio_spatial_system` for a live 3D source: attenuation, then Doppler.
         // This is the write that used to erase the muffle — for EVERY 3D sound, one frame after
@@ -1220,7 +1324,7 @@ mod tests {
 
         m.set_underwater(false);
         assert_eq!(spatial(&m, id), (1.0, 1.0), "surfacing is not a 2.5x amplifier");
-        assert_eq!(m.muffle.cutoff_hz(), 0, "and the filter goes back to bypass, not to 20 kHz");
+        assert_eq!(m.sink_env[&id].muffle.cutoff_hz(), 0, "and the filter goes back to bypass, not to 20 kHz");
 
         // The global path, with a game moving a volume slider while submerged.
         let g = m.play_looped("beep").expect("a registered WAV must play");
@@ -1454,5 +1558,135 @@ mod position_tests {
         assert!(g < 0.3, "eight voices at 0.6 sum near 4.8; the limiter's gain was {g}");
         audio.set_limiter(None);
         assert_eq!(audio.limiter(), None);
+    }
+}
+
+/// A manager on an output of its own, its mix pulled here: no device, so these run everywhere.
+#[cfg(test)]
+mod device_free_tests {
+    use super::{reverb, AudioManager, Mixer, PlayOptions};
+
+    const RATE: u32 = 8_000;
+
+    /// A manager whose mix this test pulls, mono at 8 kHz, with a second of a 2 kHz tone loaded
+    /// as `"tone"`: above the underwater corner, so the muffle changes it.
+    fn on_output() -> (AudioManager, crate::limiter::MasterOut) {
+        let (mut m, out) = AudioManager::on_output(
+            std::num::NonZero::new(1).unwrap(),
+            std::num::NonZero::new(RATE).unwrap(),
+        );
+        let tone: Vec<f32> = (0..RATE).map(|i| 0.5 * (i as f32 * 2.0 * std::f32::consts::PI * 2_000.0 / RATE as f32).sin()).collect();
+        m.load_samples("tone", &tone, RATE);
+        (m, out)
+    }
+
+    fn pull(out: &mut crate::limiter::MasterOut, n: usize) -> Vec<f32> {
+        (0..n).map(|_| out.next().unwrap_or(0.0)).collect()
+    }
+
+    fn energy(s: &[f32]) -> f32 {
+        s.iter().map(|x| x * x).sum()
+    }
+
+    /// A sound started on a muted bus is silent from its first sample. Until 2026-11-26 a sound
+    /// could only start on the default bus and be moved after (`play`, then `set_sink_bus`), and
+    /// the source reached the device before its volume was written.
+    #[test]
+    fn a_sound_started_on_a_muted_bus_is_silent_from_its_first_sample() {
+        let (mut m, mut out) = on_output();
+        m.mixer_mut().set_bus_muted(Mixer::MUSIC, true);
+        m.update();
+        let id = m.play_with("tone", &PlayOptions::on_bus(Mixer::MUSIC)).unwrap();
+        assert_eq!(m.mixer().sink_bus(id), Some(Mixer::MUSIC));
+        assert!(pull(&mut out, 2_000).iter().all(|&s| s == 0.0), "a muted bus let its first samples through");
+
+        let (mut m, mut out) = on_output();
+        m.play_with("tone", &PlayOptions::on_bus(Mixer::SFX)).unwrap();
+        assert!(energy(&pull(&mut out, 2_000)) > 1.0, "premise: the tone is heard");
+    }
+
+    /// A dry bus plays as it was mixed under water and in a cave: sample for sample what the same
+    /// sound plays with no environment at all, while the same sound on a bus in the world is
+    /// muffled. Until 2026-11-26 the environment reached every bus, a menu's music too.
+    #[test]
+    fn a_dry_bus_plays_as_mixed_under_water_and_in_a_cave() {
+        let (mut m, mut out) = on_output();
+        m.play_with("tone", &PlayOptions::on_bus(Mixer::MUSIC)).unwrap();
+        let reference = pull(&mut out, 4_000);
+
+        let submerged = |bus: &str| {
+            let (mut m, mut out) = on_output();
+            m.set_underwater(true);
+            m.set_reverb(Some(reverb::Reverb::cave()));
+            m.mixer_mut().set_bus_dry(Mixer::MUSIC, true);
+            m.update();
+            m.play_with("tone", &PlayOptions::on_bus(bus)).unwrap();
+            pull(&mut out, 4_000)
+        };
+        assert_eq!(submerged(Mixer::MUSIC), reference, "the dry bus heard the environment");
+        let in_the_world = submerged(Mixer::SFX);
+        assert!(
+            energy(&in_the_world) < 0.2 * energy(&reference),
+            "premise: a bus in the world is muffled ({} of {})",
+            energy(&in_the_world),
+            energy(&reference)
+        );
+    }
+
+    /// Setting a bus dry reaches the sounds already playing on it, out of the water and out of the
+    /// cave: the samples after are the unaffected sound's.
+    #[test]
+    fn a_bus_set_dry_mid_sound_leaves_the_environment_at_once() {
+        let (mut m, mut out) = on_output();
+        m.play_with("tone", &PlayOptions::on_bus(Mixer::MUSIC)).unwrap();
+        let reference = pull(&mut out, 2_000);
+
+        let (mut m, mut out) = on_output();
+        m.set_underwater(true);
+        m.set_reverb(Some(reverb::Reverb::cave()));
+        m.play_with("tone", &PlayOptions::on_bus(Mixer::MUSIC)).unwrap();
+        let muffled = pull(&mut out, 1_000);
+        assert!(energy(&muffled) < 0.2 * energy(&reference[..1_000]), "premise: it starts muffled");
+        m.mixer_mut().set_bus_dry(Mixer::MUSIC, true);
+        m.update();
+        // The filter is inside the source and is off from the next sample; the level is the
+        // player's, which rodio reads every 5 ms (40 samples here). Past that, it is the dry sound.
+        const PLAYER_CONTROL_PERIOD: usize = RATE as usize / 200;
+        let after = pull(&mut out, 1_000);
+        assert_eq!(after[PLAYER_CONTROL_PERIOD..], reference[1_000 + PLAYER_CONTROL_PERIOD..], "the bus left the water, its sound did not");
+    }
+
+    /// A crossfade's new track starts from silence: its first samples are nothing, and it is
+    /// heard once the fade has moved.
+    #[test]
+    fn a_crossfade_starts_its_track_from_silence() {
+        let (mut m, mut out) = on_output();
+        let id = m.crossfade(None, "tone", 1.0).unwrap();
+        assert_eq!(m.mixer().sink_bus(id), Some(Mixer::MUSIC));
+        assert!(pull(&mut out, 400).iter().all(|&s| s == 0.0), "the new track came in loud");
+        m.tick(0.5);
+        assert!(energy(&pull(&mut out, 400)) > 1.0, "and the fade brings it in");
+    }
+
+    /// A sound started at a volume plays at it from its first sample: the scene's `AudioSource`
+    /// volume used to be written after `play`, with the sound already on the device at unity.
+    #[test]
+    fn a_sound_plays_at_its_volume_from_its_first_sample() {
+        let (mut m, mut out) = on_output();
+        m.play_with("tone", &PlayOptions::default().volume(0.25)).unwrap();
+        let peak = pull(&mut out, 2_000).iter().fold(0.0f32, |p, s| p.max(s.abs()));
+        assert!(peak <= 0.125 + 1e-6 && peak > 0.1, "peak {peak}: the tone is 0.5 at unity");
+    }
+
+    /// A finished sound's environment goes with it, as its route does.
+    #[test]
+    fn a_dead_sinks_environment_is_collected() {
+        let (mut m, mut out) = on_output();
+        m.load_samples("blip", &[0.5; 80], RATE);
+        m.play("blip").unwrap();
+        assert_eq!(m.sink_env.len(), 1);
+        pull(&mut out, 400);
+        m.update();
+        assert_eq!((m.sink_env.len(), m.mixer().routed_sinks()), (0, 0));
     }
 }

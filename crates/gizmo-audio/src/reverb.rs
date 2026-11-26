@@ -12,7 +12,7 @@
 //! cave does not stop dead with its last sample.
 
 use rodio::{ChannelCount, Sample, SampleRate, Source};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -155,6 +155,9 @@ impl Channel {
 pub(crate) struct ReverbStage<I> {
     input: I,
     control: Arc<ReverbControl>,
+    /// This sound's own switch: whether the shared reverb reaches it (a sound on a dry bus is
+    /// outside the space, `Mixer::set_bus_dry`). Off reads as a reverb with no wet.
+    send: Arc<AtomicBool>,
     channels: Vec<Channel>,
     tuned_for: Option<(u32, u16)>,
     cursor: usize,
@@ -165,8 +168,8 @@ pub(crate) struct ReverbStage<I> {
 }
 
 impl<I: Source> ReverbStage<I> {
-    pub(crate) fn new(input: I, control: Arc<ReverbControl>) -> Self {
-        Self { input, control, channels: Vec::new(), tuned_for: None, cursor: 0, tail: None, frame_peak: 0.0, quiet_frames: 0 }
+    pub(crate) fn new(input: I, control: Arc<ReverbControl>, send: Arc<AtomicBool>) -> Self {
+        Self { input, control, send, channels: Vec::new(), tuned_for: None, cursor: 0, tail: None, frame_peak: 0.0, quiet_frames: 0 }
     }
 
     fn reset(&mut self) {
@@ -189,7 +192,7 @@ impl<I: Source> Iterator for ReverbStage<I> {
     type Item = Sample;
 
     fn next(&mut self) -> Option<Sample> {
-        let r = self.control.get();
+        let r = if self.send.load(Ordering::Relaxed) { self.control.get() } else { Reverb { room: 0.0, damping: 0.0, wet: 0.0 } };
         let input = if self.tail.is_some() { None } else { self.input.next() };
         let dry = match input {
             Some(s) => s,
@@ -303,7 +306,7 @@ mod tests {
     fn stage(samples: Vec<f32>, channels: u16, reverb: Option<Reverb>) -> ReverbStage<Signal> {
         let control = ReverbControl::new();
         control.set(reverb);
-        ReverbStage::new(Signal { samples: samples.into_iter(), rate: RATE, channels }, control)
+        ReverbStage::new(Signal { samples: samples.into_iter(), rate: RATE, channels }, control, Arc::new(AtomicBool::new(true)))
     }
 
     fn energy(s: &[f32]) -> f32 {
@@ -360,11 +363,27 @@ mod tests {
         let input: Vec<f32> = (0..4000).map(|i| (i as f32 * 0.05).sin()).collect();
         let control = ReverbControl::new();
         control.set(Some(Reverb::cave()));
-        let mut s = ReverbStage::new(Signal { samples: input.clone().into_iter(), rate: RATE, channels: 1 }, Arc::clone(&control));
+        let mut s = ReverbStage::new(Signal { samples: input.clone().into_iter(), rate: RATE, channels: 1 }, Arc::clone(&control), Arc::new(AtomicBool::new(true)));
         for _ in 0..2000 {
             s.next();
         }
         control.set(None);
         assert_eq!(s.next(), Some(input[2000]));
+    }
+
+    /// A sound the reverb does not reach (its bus is dry) comes through bit-exact while the space
+    /// is a cave, and is reached at once when its send is turned on.
+    #[test]
+    fn a_sound_whose_send_is_off_is_untouched_by_the_space() {
+        let input: Vec<f32> = (0..4000).map(|i| (i as f32 * 0.05).sin()).collect();
+        let control = ReverbControl::new();
+        control.set(Some(Reverb::cave()));
+        let send = Arc::new(AtomicBool::new(false));
+        let mut s = ReverbStage::new(Signal { samples: input.clone().into_iter(), rate: RATE, channels: 1 }, control, Arc::clone(&send));
+        let dry: Vec<f32> = (0..2000).map(|_| s.next().unwrap()).collect();
+        assert_eq!(dry, input[..2000], "off the send, the cave is not heard");
+        send.store(true, Ordering::Relaxed);
+        let wet: Vec<f32> = (0..2000).map(|_| s.next().unwrap()).collect();
+        assert_ne!(wet, input[2000..], "on it, it is");
     }
 }

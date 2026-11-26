@@ -1191,6 +1191,18 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A sound starts as it was asked, from its first sample.** A sound was appended to its player
+  first and had its volume, bus and environment written after, so its first buffer could be at full
+  volume, on the default bus, and dry under water. A scene's `AudioSource` was started at unity on
+  the default bus and then moved, and `crossfade` started its new track loud before setting its fade
+  to zero. Now `AudioManager::play_with` / `play_3d_with` take `PlayOptions` (bus, loop, volume,
+  pitch, reach), and the sound is routed and priced before it reaches the device. The scene's
+  sources and `crossfade` start that way.
+- **A bus can be outside the listener's environment** (`Mixer::set_bus_dry`): its sounds get no
+  underwater muffle (level or low-pass) and no reverb, so a menu's music stays as it was mixed while
+  the camera dives. Before this the muffle reached every bus. The muffle's corner and a reverb switch
+  are per sound for it. The tests pull the mix of a manager built without a device.
+
 - **A proptest test no longer goes red by chance.** proptest's float range sampler checks, in debug
   builds, how far its first split overshoots `low`, and it compared that overshoot with a step that
   is negative whenever `|low| < |high|`. In 10⁹ samples of `0.2f32..3.0` it panicked 71 times. That
