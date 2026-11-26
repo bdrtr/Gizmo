@@ -1191,6 +1191,15 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A proptest test no longer goes red by chance.** proptest's float range sampler checks, in debug
+  builds, how far its first split overshoots `low`, and it compared that overshoot with a step that
+  is negative whenever `|low| < |high|`. In 10⁹ samples of `0.2f32..3.0` it panicked 71 times. That
+  is rare per sample, but our tests have 37 such ranges, and a Windows run of PR #27 went red in
+  `box_box_collision_is_symmetric` with nothing wrong in the narrowphase. Reported upstream
+  (proptest-rs/proptest#683) and fixed there (#684). The workspace takes that fix through
+  `[patch.crates-io]`, pinned by rev on 1.12.0, until a release carries it; `deny.toml` allows that
+  one git source. Dev-dependency only.
+
 - **A shape cast does not go through a thin turned target.** It marched along its way in steps of half
   the thinner shape, by the two's world bounds — as thick for a turned plate as it is wide — and no
   shorter than a 512th of the sweep: a 2 cm plate swept face on at a 2 cm wall, both turned, went

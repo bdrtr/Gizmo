@@ -44,6 +44,16 @@ winit = "0.30"
 mimalloc = { version = "0.1", default-features = false }
 proptest = "1"
 
+# proptest's float range sampler panics in debug builds, about 7 times in 10^9 samples of a range
+# like `0.2..3.0` (|low| < |high|): a debug assertion compares the first split's overshoot below
+# `low` with the split's step, which is negative there. Every float range strategy in our tests
+# could turn a CI run red with nothing wrong in the code under test (a Windows run of PR #27,
+# 2026-11-26). Upstream: proptest-rs/proptest#683, fixed by #684. This pins that fix, on 1.12.0;
+# take this section out once a release carries it. Dev-dependency only, so no published crate
+# depends on it.
+[patch.crates-io]
+proptest = { git = "https://github.com/bdrtr/proptest", rev = "90b10263a00cba3240acf7d6a4e45862b11ae793" }
+
 # Dev derleme profili. Demo binary'leri wgpu/egui'nin TAMAMINI statik linkliyor ve
 # tam DWARF debug bilgisi her ~500MB binary'nin ~yarısıydı; ~40 demo × her yeniden-derlemenin
 # target/debug/deps'te biriken eski kopyası target/'ı 600G+'a şişirmişti (ve dev binary'lerinde
