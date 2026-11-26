@@ -42,6 +42,7 @@ pub mod limiter;
 mod bus;
 mod looping;
 mod mixer;
+mod playing;
 /// Reverb — [`Reverb`](reverb::Reverb) and the stage every sound is wrapped in.
 pub mod reverb;
 pub use mixer::{Mixer, SendError};
@@ -51,7 +52,7 @@ use filter::{Muffle, MuffleControl};
 use looping::{decode, Looping};
 
 use rodio::stream::DeviceSinkBuilder;
-use rodio::{MixerDeviceSink, Player, SpatialPlayer};
+use rodio::{MixerDeviceSink, Player};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
@@ -305,7 +306,7 @@ pub struct AudioManager {
     sound_buffers: HashMap<String, Arc<[u8]>>,
 
     // Aktif uzamsal/normal çalıcıları takip edip parametrelerini güncellemek için
-    active_spatial_sinks: HashMap<u64, SpatialPlayer>,
+    active_spatial_sinks: HashMap<u64, playing::SpatialSink>,
     active_sinks: HashMap<u64, Player>,
     // Which loaded sound each live sink was started from. A sink id is what the engine holds, but
     // a NAME is what a script has: `audio.stop("music")` cannot mean anything else.
@@ -889,27 +890,27 @@ impl AudioManager {
         // The muffle and the reverb wrap the source rather than the player: a `Player` hands out no
         // way to reach what it is playing, so a stage that must be switchable later has to be in
         // the chain before `append` and read its own parameter afterwards. Priced first, appended
-        // last. Not `repeat_infinite` for a loop: its buffer cannot seek (see `looping`).
-        macro_rules! fill {
-            ($sink:expr) => {{
-                let sink = $sink;
-                sink.set_volume(volume);
-                sink.set_speed(speed);
-                if options.looped {
-                    sink.append(wrap(Looping::new(Arc::clone(bytes), decoder), reverb, &env));
-                } else {
-                    sink.append(wrap(decoder, reverb, &env));
-                }
-                sink
-            }};
-        }
+        // before it is connected, connected last (`playing`). Not `repeat_infinite` for a loop: its
+        // buffer cannot seek (see `looping`).
+        let source: Box<dyn rodio::Source + Send> = if options.looped {
+            Box::new(wrap(Looping::new(Arc::clone(bytes), decoder), reverb, &env))
+        } else {
+            Box::new(wrap(decoder, reverb, &env))
+        };
+        let price = |player: &Player| {
+            player.set_volume(volume);
+            player.set_speed(speed);
+        };
         match spatial {
-            Some((emitter, left, right)) => {
-                let sink = fill!(SpatialPlayer::connect_new(&bus, emitter, left, right));
+            Some(at) => {
+                let sink = playing::SpatialSink::connect(&bus, at, price, source);
                 self.active_spatial_sinks.insert(id, sink);
             }
             None => {
-                let sink = fill!(Player::connect_new(&bus));
+                let sink = playing::connect(&bus, |player| {
+                    price(player);
+                    player.append(source);
+                });
                 self.active_sinks.insert(id, sink);
             }
         }
@@ -1838,6 +1839,36 @@ mod device_free_tests {
         let (mut m, _out) = on_output();
         m.set_bus_reverb(Mixer::MUSIC, Some(reverb::Reverb::cave()));
         m.bus_reverb(Mixer::MUSIC)
+    }
+
+    /// A sound plays from the first sample its player is pulled for, every sample of it, at its
+    /// own rate. rodio built a player's converter when it was connected, from its empty queue's
+    /// 48 kHz: this 400-sample sound came out 86 samples late and as 66 (2026-11-26).
+    #[test]
+    fn a_sound_plays_whole_and_at_its_rate_from_its_first_sample() {
+        let ramp: Vec<f32> = (0..400).map(|i| 0.1 + i as f32 * 1e-3).collect();
+        for spatial in [false, true] {
+            let (mut m, mut out) = on_output();
+            m.load_samples("ramp", &ramp, RATE);
+            if spatial {
+                m.play_3d_with("ramp", [0.0, 0.0, 0.5], [-0.1, 0.0, 0.0], [0.1, 0.0, 0.0], &PlayOptions::default()).unwrap();
+            } else {
+                m.play_with("ramp", &PlayOptions::default()).unwrap();
+            }
+            let heard = pull(&mut out, 1_000);
+            let (start, end) = (heard.iter().position(|&s| s != 0.0), heard.iter().rposition(|&s| s != 0.0));
+            // A spatial sound is stereo, and folding its frames onto this mono output can leave one
+            // sample of its last frame after it.
+            let last = if spatial { 399..=400 } else { 399..=399 };
+            assert!(start == Some(0) && end.is_some_and(|e| last.contains(&e)), "spatial {spatial}: the sound is heard over {start:?}..{end:?}");
+            if !spatial {
+                // 16-bit on the way through the WAV it was loaded as.
+                assert!(heard[..400].iter().zip(&ramp).all(|(h, r)| (h - r).abs() < 1e-4), "the sound is not itself");
+            } else {
+                let (ratio, asked) = (heard[398] / heard[0], ramp[398] / ramp[0]);
+                assert!((ratio / asked - 1.0).abs() < 1e-2, "spatial: the ramp is bent ({ratio}, not {asked})");
+            }
+        }
     }
 
     /// A finished sound's environment goes with it, as its route does.

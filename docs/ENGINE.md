@@ -205,11 +205,10 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    (`resting_on_surfaces.rs`), at the depth its deepest point reached (up to the slop). Box2D's way —
 >    every point sinks to the slop — was measured too: flat, but 5 mm lower everywhere, and every tower
 >    built at exact contact fell its slop at once and buckled (19 tests red).
-> 8. **A sound's first span plays at the wrong rate** when its rate is not 48 kHz: rodio converts a
->    player's queue from the rate of its empty start (48 kHz) until the queue's first span ends, so a
->    sound shorter than that span is resampled whole by the wrong ratio (8 kHz: 400 samples → 66).
->    Upstream behaviour (rodio 0.22.2 `queue` + `UniformSourceIterator`); the fix is either there or a
->    player built around the source rather than connected before it. Entry: "M7.5".
+> 8. ~~**A sound's first span plays at the wrong rate**~~ *Closed 2026-11-26, the same day:* a player
+>    is connected to its bus once its sound is in it and its queue is on the sound (`playing`), so the
+>    bus's converter is built for the sound's own rate; a spatial sound is a player with rodio's
+>    `Spatial` stage in front, since `SpatialPlayer` can only be built connected. Entry: "M7.5".
 >
 > **Closed in the same sweep, each where it stands:** the irradiance volume "connected to nothing"
 > (it is drawn); no default font (`bundled-font`); no EQ or compressor (`gizmo_audio::{equalizer,
@@ -1194,11 +1193,15 @@ state instead.
   (`PlayOptions::on_bus`): `set_sink_bus` moved a sound's *price* to another bus, but a sound summed
   on one node cannot be moved into another's sum, so it is gone rather than half true.
 
-  **Found on the way, open:** rodio builds a player's rate converter when the player is connected,
-  from its queue's empty start (`Empty`, 48 kHz), and the sound appended after is converted at that
-  rate for the queue's first span: a 400-sample sound at 8 kHz on an 8 kHz output came out as 66
-  samples, 86 samples late (measured 2026-11-26, rodio 0.22.2, the same before this change). On a
-  44.1 kHz device the first ~512 samples of every sound would play 9 % slow. See §3's list.
+  **Found on the way, and closed:** rodio builds a player's rate converter when the player is
+  connected, from its queue's empty start (`Empty`, 48 kHz), and the sound appended after was
+  converted at that rate for the queue's first span: a 400-sample sound at 8 kHz on an 8 kHz output
+  came out as 66 samples, 86 samples late (measured 2026-11-26, rodio 0.22.2; it predates the
+  buses). On a 44.1 kHz device the first ~512 samples of every sound would have played 9 % slow. A
+  player is now built apart, its sound appended and its queue moved onto it by taking the first
+  sample, and only then connected (`playing::connect`); a spatial sound is a `Player` with rodio's
+  `Spatial` stage in front, since `SpatialPlayer` can only be built connected
+  (`a_sound_plays_whole_and_at_its_rate_from_its_first_sample`).
 - ~~Optional: cross-platform determinism (as a feature — see §5), gizmo-net on WASM.~~ *Closed
   2026-11-24:* cross-platform bit-exactness is out of scope (§5), and networking is native-only by
   decision (STATUS).

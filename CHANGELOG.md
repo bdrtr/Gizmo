@@ -1220,6 +1220,14 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A sound plays whole, at its own rate, from its first sample.** rodio builds a player's rate
+  converter when the player is connected to its mixer, from what its queue holds then — its empty
+  start, which reads as 48 kHz — and the sound appended after was converted at that rate for the
+  queue's first span. A 400-sample sound at 8 kHz on an 8 kHz output played 86 samples late and as 66;
+  on a 44.1 kHz device the first ~512 samples of every sound would have played 9 % slow. A player is
+  now connected to its bus once its sound is in it and its queue is on the sound. Spatial sounds are a
+  player with rodio's `Spatial` stage in front, as `SpatialPlayer` built them, since that type can
+  only be made connected.
 - **A box let go off level rests flat.** Between zero and the solver's slop (5 mm) a contact had no
   bias and held what rested on it at whatever depth it was, so a body could come to rest on points at
   different depths and stay: a 10 cm box let go 0.006 rad off level fell asleep 2.2° over on every
