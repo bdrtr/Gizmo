@@ -137,3 +137,6 @@ allow-wildcard-paths = true
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# proptest with the float sampler fix (proptest-rs/proptest#684), pinned by rev in the root
+# `[patch.crates-io]` until a release carries it. Remove both together.
+allow-git = ["https://github.com/bdrtr/proptest"]
