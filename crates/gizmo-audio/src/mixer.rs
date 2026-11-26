@@ -23,7 +23,12 @@
 //! volume = route.volume × bus.gain × master.gain × environment      (0 if either is muted)
 //! speed  = route.pitch                                              (sanitised)
 //! cutoff = environment                                              (Hz, 0 = no filter)
+//! reverb = the manager's space                                      (on or off)
 //! ```
+//!
+//! The environment — the underwater level and cutoff, and the reverb — reaches a sound through its
+//! bus: a bus set [dry](Mixer::set_bus_dry) is outside the world the listener is in, so a menu's
+//! music stays as it was mixed while the camera is under water or in a cave.
 //!
 //! recomputed from those inputs every time any of them moves. Nothing accumulates, so nothing
 //! drifts, and the order the modifiers arrive in stops mattering.
@@ -39,16 +44,19 @@
 
 use std::collections::HashMap;
 
-/// A bus's gain and mute flag. Gains are clamped on write (see [`Mixer::set_bus_gain`]).
+/// A bus's gain, mute flag and whether the environment reaches it. Gains are clamped on write (see
+/// [`Mixer::set_bus_gain`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Bus {
     gain: f32,
     muted: bool,
+    /// Outside the listener's environment: no underwater muffle, no reverb.
+    dry: bool,
 }
 
 impl Default for Bus {
     fn default() -> Self {
-        Self { gain: 1.0, muted: false }
+        Self { gain: 1.0, muted: false, dry: false }
     }
 }
 
@@ -247,15 +255,28 @@ impl Mixer {
         self.buses.keys().map(String::as_str)
     }
 
+    /// Takes a bus out of the listener's environment, or puts it back: the sounds on a **dry** bus
+    /// get no underwater muffle (neither its level nor its low-pass) and no reverb, and keep their
+    /// gain, mute and fades. For what is not in the world the camera is in — a menu's music, the
+    /// interface's clicks, a narrator. Every bus is in it until it is set dry, and it applies to the
+    /// sounds already playing on it.
+    pub fn set_bus_dry(&mut self, bus: &str, dry: bool) {
+        self.bus_entry(bus).dry = dry;
+        self.dirty = true;
+    }
+
+    /// Whether a bus is outside the listener's environment. See [`Mixer::set_bus_dry`].
+    pub fn is_bus_dry(&self, bus: &str) -> bool {
+        self.buses.get(bus).copied().unwrap_or_default().dry
+    }
+
     fn bus_entry(&mut self, bus: &str) -> &mut Bus {
         self.buses.entry(bus.to_string()).or_default()
     }
 
     // ── environment ──────────────────────────────────────────────────────────
 
-    /// Turns the underwater muffle on or off. Applies to every bus, including music and UI — a
-    /// game that wants its menu music dry while the camera is submerged needs a per-bus opt-out,
-    /// which nothing has asked for yet.
+    /// Turns the underwater muffle on or off, for every bus but the [dry](Mixer::set_bus_dry) ones.
     pub fn set_underwater(&mut self, on: bool) {
         if on != self.underwater {
             self.underwater = on;
@@ -271,7 +292,8 @@ impl Mixer {
 
     // ── routes (one per live sink) ───────────────────────────────────────────
 
-    /// Registers a freshly started sink on `bus` at unity, replacing any route under that id.
+    /// Registers a sink on `bus` at unity, replacing any route under that id. The manager does it
+    /// before the sound reaches the device, so its first sample is priced.
     pub(crate) fn route(&mut self, id: u64, bus: &str) {
         self.routes
             .insert(id, Route { bus: bus.to_string(), volume: 1.0, pitch: 1.0, fade: 1.0 });
@@ -391,16 +413,27 @@ impl Mixer {
 
     // ── the composition ──────────────────────────────────────────────────────
 
+    /// The bus a route is on, or the default one's settings for a route on a bus never mentioned.
+    fn bus_of(&self, id: u64) -> Option<Bus> {
+        let route = self.routes.get(&id)?;
+        Some(self.buses.get(&route.bus).copied().unwrap_or_default())
+    }
+
+    /// Whether the listener is underwater as far as this sink is concerned: under water, and not on
+    /// a dry bus.
+    fn submerged(&self, bus: Bus) -> bool {
+        self.underwater && !bus.dry
+    }
+
     /// The volume to write to this sink: intent × fade × bus × master × environment.
     ///
     /// `0.0` for an id with no route — a sound the mixer cannot price is one it will not let
     /// through at an arbitrary volume.
     pub fn volume_for(&self, id: u64) -> f32 {
-        let Some(route) = self.routes.get(&id) else {
+        let (Some(route), Some(bus)) = (self.routes.get(&id), self.bus_of(id)) else {
             return 0.0;
         };
-        let bus = self.buses.get(&route.bus).copied().unwrap_or_default();
-        let environment = if self.underwater { UNDERWATER_VOLUME } else { 1.0 };
+        let environment = if self.submerged(bus) { UNDERWATER_VOLUME } else { 1.0 };
         route.volume * route.fade * bus.factor() * self.master.factor() * environment
     }
 
@@ -417,17 +450,21 @@ impl Mixer {
         crate::sanitize_playback_speed(route.pitch)
     }
 
-    /// The low-pass corner every live source should be filtering at, `0` for none.
+    /// The low-pass corner this sink's source should filter at, `0` for none.
     ///
-    /// The manager stores this into the shared control that each source reads; it is the one part
-    /// of the composition that does not travel per sink, because the filter lives inside the
-    /// source rather than on the player.
-    pub(crate) fn environment_cutoff_hz(&self) -> u32 {
-        if self.underwater {
-            UNDERWATER_CUTOFF_HZ
-        } else {
-            0
+    /// The manager stores it into the sink's own control, which the filter inside its source reads
+    /// on the audio thread: per sink, since a dry bus is not muffled. `0` for an id with no route.
+    pub fn cutoff_hz_for(&self, id: u64) -> u32 {
+        match self.bus_of(id) {
+            Some(bus) if self.submerged(bus) => UNDERWATER_CUTOFF_HZ,
+            _ => 0,
         }
+    }
+
+    /// Whether the manager's reverb reaches this sink: it does unless the sink is on a dry bus.
+    /// `false` for an id with no route.
+    pub fn reverb_reaches(&self, id: u64) -> bool {
+        self.bus_of(id).is_some_and(|bus| !bus.dry)
     }
 
     /// Whether anything has moved since this was last asked, clearing the flag.
@@ -502,7 +539,7 @@ mod tests {
             "the muffle must outlive the frames that restate the attenuation"
         );
         assert_eq!(
-            mixer.environment_cutoff_hz(),
+            mixer.cutoff_hz_for(1),
             UNDERWATER_CUTOFF_HZ,
             "and so must the filter corner, which is the other half of it"
         );
@@ -564,7 +601,7 @@ mod tests {
         mixer.set_sink_pitch(1, 0.0); // e.g. a scene-authored `AudioSource.pitch`
         mixer.set_underwater(true);
         assert!(mixer.speed_for(1) >= 0.01, "got {}", mixer.speed_for(1));
-        assert_eq!(mixer.environment_cutoff_hz(), UNDERWATER_CUTOFF_HZ);
+        assert_eq!(mixer.cutoff_hz_for(1), UNDERWATER_CUTOFF_HZ);
     }
 
     /// An id the mixer does not know is not a sound it will let through at full volume.
@@ -573,6 +610,43 @@ mod tests {
         let mixer = Mixer::new();
         assert_eq!(mixer.volume_for(404), 0.0);
         assert_eq!(mixer.speed_for(404), 1.0);
+        assert_eq!(mixer.cutoff_hz_for(404), 0);
+        assert!(!mixer.reverb_reaches(404));
+    }
+
+    /// A dry bus is outside the environment: under water its sounds keep their level and get no
+    /// low-pass, and the reverb does not reach them; its gain and mute still apply, and the other
+    /// buses are muffled as before. Until 2026-11-26 the muffle applied to every bus, a menu's
+    /// music too, with no way out.
+    #[test]
+    fn a_dry_bus_is_outside_the_environment() {
+        let mut mixer = Mixer::new();
+        mixer.route(1, Mixer::MUSIC);
+        mixer.route(2, Mixer::SFX);
+        mixer.set_bus_gain(Mixer::MUSIC, 0.5);
+        mixer.set_underwater(true);
+        mixer.take_dirty();
+
+        mixer.set_bus_dry(Mixer::MUSIC, true);
+        assert!(mixer.take_dirty(), "a sound already playing on the bus has to hear it");
+        assert!(mixer.is_bus_dry(Mixer::MUSIC) && !mixer.is_bus_dry(Mixer::SFX));
+        assert_eq!(mixer.volume_for(1), 0.5, "the bus's gain, and no underwater level");
+        assert_eq!(mixer.cutoff_hz_for(1), 0);
+        assert!(!mixer.reverb_reaches(1));
+        assert_eq!(mixer.volume_for(2), UNDERWATER_VOLUME, "the other buses are muffled as before");
+        assert_eq!(mixer.cutoff_hz_for(2), UNDERWATER_CUTOFF_HZ);
+        assert!(mixer.reverb_reaches(2));
+
+        mixer.set_bus_muted(Mixer::MUSIC, true);
+        assert_eq!(mixer.volume_for(1), 0.0, "dry is not deaf to its mute");
+        mixer.set_bus_muted(Mixer::MUSIC, false);
+
+        // Moved to a bus that is in the world, a sound is muffled there.
+        mixer.set_sink_bus(1, Mixer::SFX);
+        assert_eq!((mixer.volume_for(1), mixer.cutoff_hz_for(1)), (UNDERWATER_VOLUME, UNDERWATER_CUTOFF_HZ));
+        mixer.set_bus_dry(Mixer::MUSIC, false);
+        mixer.set_sink_bus(1, Mixer::MUSIC);
+        assert_eq!(mixer.cutoff_hz_for(1), UNDERWATER_CUTOFF_HZ, "and back in the world, so is the music");
     }
 
     /// One `Route` per sound ever played is a leak in anything that runs for an hour.

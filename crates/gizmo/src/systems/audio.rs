@@ -162,29 +162,22 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
 
         // Eğer ses henüz çalmıyorsa ve otomatik başlatılacaksa
         if should_autostart(&source) {
-            let sink_result = if source.loop_sound {
-                audio.play_3d_looped(
-                    &source.sound_name,
-                    [t.position.x, t.position.y, t.position.z],
-                    left_ear_arr,
-                    right_ear_arr,
-                )
-            } else {
-                audio.play_3d(
-                    &source.sound_name,
-                    [t.position.x, t.position.y, t.position.z],
-                    left_ear_arr,
-                    right_ear_arr,
-                )
-            };
+            // Started on the scene's mixer bus, so its first sample is priced by that bus — a
+            // muted one included — and not by the default bus it would be moved from.
+            let options = gizmo_audio::PlayOptions::on_bus(&source.bus)
+                .looped(source.loop_sound)
+                .volume(source.volume)
+                .pitch(source.pitch)
+                .max_distance(source.max_distance);
+            let sink_result = audio.play_3d_with(
+                &source.sound_name,
+                [t.position.x, t.position.y, t.position.z],
+                left_ear_arr,
+                right_ear_arr,
+                &options,
+            );
             let sink_id = match sink_result {
-                Ok(id) => {
-                    // The scene's choice of mixer bus, applied before the sound is a frame old.
-                    // Without this line a scene-authored `AudioSource::bus` would be a field the
-                    // engine reads back and never acts on.
-                    audio.set_sink_bus(id, &source.bus);
-                    Some(id)
-                }
+                Ok(id) => Some(id),
                 Err(e) => {
                     tracing::warn!("3D ses çalınamadı '{}': {}", source.sound_name, e);
                     None
