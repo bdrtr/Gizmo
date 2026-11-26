@@ -183,11 +183,12 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    sidecar behind and orphans the asset's identity.~~ *Closed 2026-11-26:* the browser renames and
 >    moves (`AssetManager::move_asset`, the studio rewriting the open world), and a file renamed
 >    outside it is recognised by the content its sidecar recorded. Entry: "Asset identity".
-> 3. **Audio routing: no sends/returns** (a reverb bus fed from other buses). Every bus is a gain
->    on the sounds routed to it, and the effects are either inside each source (muffle, reverb) or
->    on the whole mix (EQ, compressor, limiter); a send needs buses that sum their sounds and carry
->    effects of their own. *The per-bus opt-out from the environment (`Mixer::set_bus_dry`) and
->    starting a sound on its bus (`play_with`) closed 2026-11-26.* Entry: "M7.5".
+> 3. ~~**Audio routing: no sends/returns**~~ *Closed 2026-11-26:* every bus is a node that sums its
+>    sounds (a rodio mixer of its own), carries a reverb of its own (`AudioManager::set_bus_reverb`,
+>    `Reverb::with_dry(0.0)` for a return) and sends to another (`Mixer::set_send`, after its fader,
+>    a frame late; a send that would close a loop is refused, `SendError`). A sound's bus is the one it
+>    starts on: `set_sink_bus` is gone, since a sound summed on one bus cannot be moved to another's
+>    sum. Entry: "M7.5".
 > 4. **A shader graph has no texture of its own**: it samples the five maps the material's group
 >    binds, and a sixth needs a binding the web's four groups have no room for. Entry: "Shader Graph".
 > 5. **Friction holds velocity, not position**: no positional term in the tangent channel. What it
@@ -204,6 +205,11 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    (`resting_on_surfaces.rs`), at the depth its deepest point reached (up to the slop). Box2D's way —
 >    every point sinks to the slop — was measured too: flat, but 5 mm lower everywhere, and every tower
 >    built at exact contact fell its slop at once and buckled (19 tests red).
+> 8. **A sound's first span plays at the wrong rate** when its rate is not 48 kHz: rodio converts a
+>    player's queue from the rate of its empty start (48 kHz) until the queue's first span ends, so a
+>    sound shorter than that span is resampled whole by the wrong ratio (8 kHz: 400 samples → 66).
+>    Upstream behaviour (rodio 0.22.2 `queue` + `UniformSourceIterator`); the fix is either there or a
+>    player built around the source rather than connected before it. Entry: "M7.5".
 >
 > **Closed in the same sweep, each where it stands:** the irradiance volume "connected to nothing"
 > (it is drawn); no default font (`bundled-font`); no EQ or compressor (`gizmo_audio::{equalizer,
@@ -1174,9 +1180,25 @@ state instead.
   shared. The tests run without a device: the manager can be built on an output it does not hand
   to a device (`AudioManager::on_output`), and they pull the mix it makes.
 
-  **Still not done: sends/returns** (a reverb bus fed from other buses). It needs buses that sum
-  the sounds routed to them and carry effects of their own, where today a bus is a gain on each
-  sound. That is a separate piece of work.
+  **Closed 2026-11-26: sends and returns.** A bus was a gain on each sound routed to it: every sound
+  connected to the one master mixer, so there was no bus *sum* to put an effect on or to send.
+  Every bus is now a node (`gizmo_audio::bus`): a rodio mixer its sounds connect to, its sum
+  through its own reverb (`AudioManager::set_bus_reverb`) and on into the master. `Mixer::set_send`
+  copies a bus's output, after its fader and its effect, at a level into another bus, where it is
+  summed with that bus's sounds, goes through its effect and comes out under its gain: a reverb
+  return (`Reverb::with_dry(0.0)`, the dry sound being heard on its own bus) fed by the others. The
+  copy travels in a queue both ends pull a sample at a time and arrives a frame late; the return
+  reads whole frames, so a stereo send cannot slip a channel (tested with either end pulled first).
+  A send that would close a loop is refused (`SendError::Loop`, with the way it would come back):
+  its sound would return a frame later, for ever. A sound's bus is the one it starts on
+  (`PlayOptions::on_bus`): `set_sink_bus` moved a sound's *price* to another bus, but a sound summed
+  on one node cannot be moved into another's sum, so it is gone rather than half true.
+
+  **Found on the way, open:** rodio builds a player's rate converter when the player is connected,
+  from its queue's empty start (`Empty`, 48 kHz), and the sound appended after is converted at that
+  rate for the queue's first span: a 400-sample sound at 8 kHz on an 8 kHz output came out as 66
+  samples, 86 samples late (measured 2026-11-26, rodio 0.22.2, the same before this change). On a
+  44.1 kHz device the first ~512 samples of every sound would play 9 % slow. See §3's list.
 - ~~Optional: cross-platform determinism (as a feature — see §5), gizmo-net on WASM.~~ *Closed
   2026-11-24:* cross-platform bit-exactness is out of scope (§5), and networking is native-only by
   decision (STATUS).

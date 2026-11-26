@@ -50,6 +50,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Buses sum their sounds, carry a reverb and send to each other.** Every bus is a node of its own —
+  a mixer its sounds connect to — whose sum goes through its own reverb
+  (`AudioManager::set_bus_reverb`) and on to the master. `Mixer::set_send(from, to, level)` copies a
+  bus's output, after its fader and its effect, into another bus, where it is summed with that bus's
+  sounds and comes out under its gain: a reverb return fed by the others
+  (`Reverb::hall().with_dry(0.0)` — `Reverb::dry`, how much of the sound itself a reverb keeps, is
+  new). The copy arrives a frame late and keeps its channels. A send that would close a loop, or a bus
+  sending to itself, is refused (`SendError`); level `0` removes a send. `Mixer::sends`,
+  `Mixer::send_level`, `AudioManager::bus_reverb`.
+
 - **The editor renames and moves assets, and their identity goes with them.** The browser's tile
   menu renames (✏️; the extension, which is what the loader reads a file as, cannot change), and a
   tile dropped on a folder moves into it. `AssetManager::move_asset` moves the file or folder with
@@ -1140,6 +1150,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   material's layer.
 
 ### Removed
+
+- **`AudioManager::set_sink_bus` and `Mixer::set_sink_bus`.** A sound is summed on the bus it starts on
+  (`PlayOptions::on_bus`), and one bus's sum cannot be moved into another's; the calls moved only
+  the sound's price, which a bus effect or a send would no longer have followed.
 
 - **`gizmo::systems::render::record_forward_decals`, `DecalState::{forward_pipeline, depth_bgl,
   create_depth_bind_group}` and `decal_forward.wgsl`.** The forward decal pass was the editor's,

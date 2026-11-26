@@ -24,34 +24,44 @@ pub struct Reverb {
     pub room: f32,
     /// How much the walls soak up the highs, `0..=1`.
     pub damping: f32,
-    /// How much of the reverberated sound is added, `0..=1`. The dry sound is always kept.
+    /// How much of the reverberated sound is added, `0..=1`.
     pub wet: f32,
+    /// How much of the sound itself is kept, `0..=1`: `1` for a space a sound is in, `0` for a
+    /// return bus fed by sends (`Mixer::set_send`), whose sound is already heard on its own bus.
+    pub dry: f32,
 }
 
 impl Reverb {
     /// A small room: short, a little dull.
     #[must_use]
     pub fn room() -> Self {
-        Self { room: 0.5, damping: 0.5, wet: 0.25 }
+        Self { room: 0.5, damping: 0.5, wet: 0.25, dry: 1.0 }
     }
 
     /// A hall: long and bright.
     #[must_use]
     pub fn hall() -> Self {
-        Self { room: 0.85, damping: 0.25, wet: 0.35 }
+        Self { room: 0.85, damping: 0.25, wet: 0.35, dry: 1.0 }
     }
 
     /// A cave: long, dark and loud.
     #[must_use]
     pub fn cave() -> Self {
-        Self { room: 0.92, damping: 0.6, wet: 0.5 }
+        Self { room: 0.92, damping: 0.6, wet: 0.5, dry: 1.0 }
     }
 
     /// Any shape, clamped into range.
     #[must_use]
     pub fn new(room: f32, damping: f32, wet: f32) -> Self {
         let c = |v: f32| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
-        Self { room: c(room), damping: c(damping), wet: c(wet) }
+        Self { room: c(room), damping: c(damping), wet: c(wet), dry: 1.0 }
+    }
+
+    /// This shape keeping `dry` of the sound itself, clamped into range: `0` for a return bus.
+    #[must_use]
+    pub fn with_dry(mut self, dry: f32) -> Self {
+        self.dry = if dry.is_nan() { 0.0 } else { dry.clamp(0.0, 1.0) };
+        self
     }
 }
 
@@ -61,6 +71,7 @@ pub(crate) struct ReverbControl {
     room: AtomicU32,
     damping: AtomicU32,
     wet: AtomicU32,
+    dry: AtomicU32,
 }
 
 impl ReverbControl {
@@ -70,15 +81,16 @@ impl ReverbControl {
 
     /// Sets the shape, or `None` for off. Heard on the next buffer.
     pub(crate) fn set(&self, reverb: Option<Reverb>) {
-        let r = reverb.unwrap_or(Reverb { room: 0.0, damping: 0.0, wet: 0.0 });
+        let r = reverb.unwrap_or(Reverb { room: 0.0, damping: 0.0, wet: 0.0, dry: 1.0 });
         self.room.store(r.room.to_bits(), Ordering::Relaxed);
         self.damping.store(r.damping.to_bits(), Ordering::Relaxed);
         self.wet.store(r.wet.to_bits(), Ordering::Relaxed);
+        self.dry.store(r.dry.to_bits(), Ordering::Relaxed);
     }
 
     pub(crate) fn get(&self) -> Reverb {
         let f = |a: &AtomicU32| f32::from_bits(a.load(Ordering::Relaxed));
-        Reverb { room: f(&self.room), damping: f(&self.damping), wet: f(&self.wet) }
+        Reverb { room: f(&self.room), damping: f(&self.damping), wet: f(&self.wet), dry: f(&self.dry) }
     }
 }
 
@@ -192,7 +204,7 @@ impl<I: Source> Iterator for ReverbStage<I> {
     type Item = Sample;
 
     fn next(&mut self) -> Option<Sample> {
-        let r = if self.send.load(Ordering::Relaxed) { self.control.get() } else { Reverb { room: 0.0, damping: 0.0, wet: 0.0 } };
+        let r = if self.send.load(Ordering::Relaxed) { self.control.get() } else { Reverb { room: 0.0, damping: 0.0, wet: 0.0, dry: 1.0 } };
         let input = if self.tail.is_some() { None } else { self.input.next() };
         let dry = match input {
             Some(s) => s,
@@ -224,7 +236,7 @@ impl<I: Source> Iterator for ReverbStage<I> {
         let ch = self.cursor;
         let wet = self.channels[ch].process(dry, feedback, damp);
         self.cursor = (self.cursor + 1) % self.channels.len();
-        let out = dry + wet * r.wet * 3.0;
+        let out = dry * r.dry + wet * r.wet * 3.0;
         // Silence detection for the tail, a whole frame at a time.
         if self.tail.is_some() {
             self.frame_peak = self.frame_peak.max(out.abs());

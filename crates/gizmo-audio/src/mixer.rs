@@ -42,7 +42,7 @@
 //! The buses are the half a game ships: a music slider and an SFX slider are one gain each, applied
 //! to every sound routed there — including sounds that started before the player touched the slider.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// A bus's gain, mute flag and whether the environment reaches it. Gains are clamped on write (see
 /// [`Mixer::set_bus_gain`]).
@@ -105,6 +105,36 @@ pub(crate) struct FadeStep {
     pub(crate) stop: Vec<u64>,
 }
 
+/// Why [`Mixer::set_send`] refused a send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SendError {
+    /// A bus cannot send to itself.
+    ToItself(String),
+    /// The send would close a loop: `to` already reaches `from`, through the sends named in order.
+    Loop {
+        /// The bus the send was to leave.
+        from: String,
+        /// The bus it was to reach.
+        to: String,
+        /// The way `to` already gets back to `from`, both ends included.
+        through: Vec<String>,
+    },
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ToItself(bus) => write!(f, "bus '{bus}' cannot send to itself"),
+            Self::Loop { from, to, through } => {
+                write!(f, "a send from '{from}' to '{to}' would close a loop: {}", through.join(" -> "))
+            }
+        }
+    }
+}
+
+impl std::error::Error for SendError {}
+
 /// Volume multiplier while the listener is underwater. Water attenuates, so the level drops —
 /// but the *character* of underwater sound is the missing top end, and that is
 /// [`UNDERWATER_CUTOFF_HZ`]'s job, not this one's.
@@ -152,6 +182,8 @@ pub struct Mixer {
     underwater: bool,
     routes: HashMap<u64, Route>,
     fades: HashMap<u64, Fade>,
+    /// The sends between buses, `(from, to) → level`, in name order (`set_send`).
+    sends: BTreeMap<(String, String), f32>,
     /// Set by every mutator, cleared by [`Mixer::take_dirty`]. It exists because a game can reach
     /// the mixer directly (`mixer_mut()`), so the manager cannot know a gain moved unless it is
     /// told — and re-writing every sink's two atomics on every frame to avoid asking is a cost
@@ -190,6 +222,7 @@ impl Mixer {
             underwater: false,
             routes: HashMap::new(),
             fades: HashMap::new(),
+            sends: BTreeMap::new(),
             dirty: false,
         }
     }
@@ -270,6 +303,91 @@ impl Mixer {
         self.buses.get(bus).copied().unwrap_or_default().dry
     }
 
+    // ── sends ────────────────────────────────────────────────────────────────
+
+    /// Sends what bus `from` puts out — after its gain, its sounds' own and its effect — at `level`
+    /// into bus `to`, where it is summed with `to`'s sounds, goes through `to`'s effect and comes
+    /// out under `to`'s gain: a reverb bus fed by the others, say. `from` is still heard as it was;
+    /// the send is a copy. Level `0` removes the send. Clamped as a gain is ([`set_bus_gain`](Self::set_bus_gain)).
+    /// Heard from the next [`AudioManager::update`](crate::AudioManager::update), a frame of audio
+    /// late.
+    ///
+    /// ```
+    /// # use gizmo_audio::Mixer;
+    /// let mut mixer = Mixer::new();
+    /// mixer.set_send(Mixer::SFX, "hall", 0.4).unwrap();
+    /// mixer.set_send(Mixer::VOICE, "hall", 0.2).unwrap();
+    /// assert!(mixer.set_send("hall", Mixer::SFX, 0.1).is_err(), "it would come back to itself");
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`SendError::ToItself`] for `from == to`, and [`SendError::Loop`] for a send whose bus already
+    /// reaches `from`: its sound would come back a frame later, and again, for ever. Nothing changes
+    /// when it is refused.
+    pub fn set_send(&mut self, from: &str, to: &str, level: f32) -> Result<(), SendError> {
+        if from == to {
+            return Err(SendError::ToItself(from.to_string()));
+        }
+        let level = sanitize_gain(level);
+        let key = (from.to_string(), to.to_string());
+        if level == 0.0 {
+            if self.sends.remove(&key).is_some() {
+                self.dirty = true;
+            }
+            return Ok(());
+        }
+        if let Some(mut through) = self.way(to, from) {
+            through.insert(0, from.to_string());
+            return Err(SendError::Loop { from: from.to_string(), to: to.to_string(), through });
+        }
+        self.bus_entry(from);
+        self.bus_entry(to);
+        self.sends.insert(key, level);
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// The level bus `from` sends to bus `to` at, `0` for no send.
+    pub fn send_level(&self, from: &str, to: &str) -> f32 {
+        self.sends.get(&(from.to_string(), to.to_string())).copied().unwrap_or(0.0)
+    }
+
+    /// Every send, `(from, to, level)`, in name order.
+    pub fn sends(&self) -> impl Iterator<Item = (&str, &str, f32)> {
+        self.sends.iter().map(|((from, to), level)| (from.as_str(), to.as_str(), *level))
+    }
+
+    /// The buses the sends lead along from `from` to `to`, both ends included, if any do.
+    fn way(&self, from: &str, to: &str) -> Option<Vec<String>> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut stack = vec![vec![from.to_string()]];
+        while let Some(path) = stack.pop() {
+            let last = path.last()?.clone();
+            if last == to {
+                return Some(path);
+            }
+            if !seen.insert(last.clone()) {
+                continue;
+            }
+            for ((a, b), _) in self.sends.range((last.clone(), String::new())..) {
+                if *a != last {
+                    break;
+                }
+                let mut next = path.clone();
+                next.push(b.clone());
+                stack.push(next);
+            }
+        }
+        None
+    }
+
+    /// The factor a bus puts on what is sent into it: its gain, or nothing when muted. The sounds
+    /// sent carry their own bus's gain and the master already.
+    pub(crate) fn return_gain(&self, bus: &str) -> f32 {
+        self.buses.get(bus).copied().unwrap_or_default().factor()
+    }
+
     fn bus_entry(&mut self, bus: &str) -> &mut Bus {
         self.buses.entry(bus.to_string()).or_default()
     }
@@ -298,19 +416,6 @@ impl Mixer {
         self.routes
             .insert(id, Route { bus: bus.to_string(), volume: 1.0, pitch: 1.0, fade: 1.0 });
         self.buses.entry(bus.to_string()).or_default();
-    }
-
-    /// Moves a live sink to another bus, keeping the volume and pitch it was asked to play at.
-    /// Does nothing for a sink the mixer has never seen.
-    ///
-    /// Per-sink, so it does **not** raise the dirty flag: the manager re-prices this one sink on
-    /// the spot. The flag is for changes that reach sounds the caller is not holding — a bus gain,
-    /// the master, the environment.
-    pub fn set_sink_bus(&mut self, id: u64, bus: &str) {
-        if let Some(route) = self.routes.get_mut(&id) {
-            route.bus = bus.to_string();
-            self.buses.entry(bus.to_string()).or_default();
-        }
     }
 
     /// The bus a live sink is on, if the mixer knows it.
@@ -641,11 +746,11 @@ mod tests {
         assert_eq!(mixer.volume_for(1), 0.0, "dry is not deaf to its mute");
         mixer.set_bus_muted(Mixer::MUSIC, false);
 
-        // Moved to a bus that is in the world, a sound is muffled there.
-        mixer.set_sink_bus(1, Mixer::SFX);
+        // Routed to a bus that is in the world, a sound is muffled there.
+        mixer.route(1, Mixer::SFX);
         assert_eq!((mixer.volume_for(1), mixer.cutoff_hz_for(1)), (UNDERWATER_VOLUME, UNDERWATER_CUTOFF_HZ));
         mixer.set_bus_dry(Mixer::MUSIC, false);
-        mixer.set_sink_bus(1, Mixer::MUSIC);
+        mixer.route(1, Mixer::MUSIC);
         assert_eq!(mixer.cutoff_hz_for(1), UNDERWATER_CUTOFF_HZ, "and back in the world, so is the music");
     }
 
@@ -676,7 +781,6 @@ mod tests {
         mixer.route(1, Mixer::SFX);
         mixer.set_sink_volume(1, 0.5);
         mixer.set_sink_pitch(1, 1.2);
-        mixer.set_sink_bus(1, Mixer::UI);
         assert!(!mixer.take_dirty());
     }
 
@@ -737,4 +841,25 @@ mod tests {
         mixer.retain_routes(|_| false);
         assert!(!mixer.is_fading(2), "a dead sink takes its fade with it");
     }
+
+    /// A send that would come back to where it started is refused, and so is one to itself; a
+    /// level of zero takes a send away.
+    #[test]
+    fn a_send_that_closes_a_loop_is_refused() {
+        let mut mixer = Mixer::new();
+        mixer.set_send("a", "b", 0.5).unwrap();
+        mixer.set_send("b", "c", 0.5).unwrap();
+        assert_eq!(
+            mixer.set_send("c", "a", 0.5),
+            Err(SendError::Loop { from: "c".into(), to: "a".into(), through: vec!["c".into(), "a".into(), "b".into(), "c".into()] })
+        );
+        assert_eq!(mixer.set_send("a", "a", 0.5), Err(SendError::ToItself("a".into())));
+        assert_eq!(mixer.send_level("c", "a"), 0.0, "a refused send changes nothing");
+        mixer.set_send("a", "c", 0.25).unwrap();
+        assert_eq!(mixer.sends().collect::<Vec<_>>(), vec![("a", "b", 0.5), ("a", "c", 0.25), ("b", "c", 0.5)]);
+        mixer.set_send("b", "c", 0.0).unwrap();
+        assert_eq!(mixer.send_level("b", "c"), 0.0);
+        assert!(mixer.set_send("c", "b", 0.5).is_ok(), "with b → c gone, c → b closes nothing");
+    }
+
 }

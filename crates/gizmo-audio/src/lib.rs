@@ -39,11 +39,12 @@ pub mod compressor;
 pub mod equalizer;
 /// The master limiter — [`Limiter`](limiter::Limiter), on the summed output.
 pub mod limiter;
+mod bus;
 mod looping;
 mod mixer;
 /// Reverb — [`Reverb`](reverb::Reverb) and the stage every sound is wrapped in.
 pub mod reverb;
-pub use mixer::Mixer;
+pub use mixer::{Mixer, SendError};
 pub mod synth;
 
 use filter::{Muffle, MuffleControl};
@@ -322,6 +323,14 @@ pub struct AudioManager {
     // The reverb's shape every source reads: one store turns a cave on for every sound.
     reverb: std::sync::Arc<reverb::ReverbControl>,
 
+    // The format every bus node and the master mix at.
+    format: (rodio::ChannelCount, rodio::SampleRate),
+    // Each bus's node: the mixer its sounds are connected to, its effect, the sends it feeds
+    // (`bus`). Made the first time a sound starts on a bus or a send names it.
+    nodes: HashMap<String, bus::BusNode>,
+    // The live sends, `(from, to)`: what `Mixer::sends` says, built (`sync_routing`).
+    links: std::collections::BTreeMap<(String, String), Arc<bus::SendLink>>,
+
     // Buses, master, environment, and one route per live sink. THE ONLY PLACE a volume or a
     // speed is decided: everything below writes `mixer.volume_for(id)` / `mixer.speed_for(id)`
     // and nothing computes a level of its own. That is what stops two writers from fighting over
@@ -488,6 +497,9 @@ impl AudioManager {
             all_paused: false,
             sink_env: HashMap::new(),
             reverb: reverb::ReverbControl::new(),
+            format: (channels, rate),
+            nodes: HashMap::new(),
+            links: std::collections::BTreeMap::new(),
             mixer: Mixer::new(),
         };
         (manager, master)
@@ -595,23 +607,13 @@ impl AudioManager {
         &self.mixer
     }
 
-    /// The mixer, to turn a gain on. Changes are heard on the next [`AudioManager::update`],
-    /// which every frame calls; use [`AudioManager::set_sink_bus`] and the `set_*` methods here
-    /// when a change must be audible before then.
+    /// The mixer, to turn a gain on or set a send. Changes are heard on the next
+    /// [`AudioManager::update`], which every frame calls; use the `set_*` methods here when a change
+    /// must be audible before then. A sound's bus is the one it started on
+    /// ([`PlayOptions::on_bus`]): its sound is summed there.
     #[inline]
     pub fn mixer_mut(&mut self) -> &mut Mixer {
         &mut self.mixer
-    }
-
-    /// Moves a live sound to a mixer bus and re-prices it immediately — its gain, and the
-    /// environment if one of the two buses is [dry](Mixer::set_bus_dry).
-    ///
-    /// To *start* a sound on a bus, use [`play_with`](Self::play_with): a sound started on the
-    /// default bus and moved here plays its first buffer at the default bus's gain, which is
-    /// audible when this bus is muted or turned down.
-    pub fn set_sink_bus(&mut self, id: u64, bus: &str) {
-        self.mixer.set_sink_bus(id, bus);
-        self.apply_mix(id);
     }
 
     /// Writes this sink's composed volume, speed and environment to rodio. Every mutator ends here.
@@ -631,10 +633,76 @@ impl AudioManager {
         }
     }
 
+    /// The node of `bus`, made in the master if this is the first time it is asked for.
+    fn node(&mut self, bus: &str) -> &bus::BusNode {
+        let (channels, rate) = self.format;
+        let master = &self.bus;
+        self.nodes.entry(bus.to_string()).or_insert_with(|| bus::BusNode::new(channels, rate, master))
+    }
+
+    /// Builds what [`Mixer::sends`] says: a link for each send, fed by its from-bus's output and
+    /// read in its to-bus's mixer, at the send's level and the to-bus's gain; a link the mixer no
+    /// longer has is closed.
+    fn sync_routing(&mut self) {
+        let wanted: Vec<(String, String, f32)> = self.mixer.sends().map(|(a, b, l)| (a.to_string(), b.to_string(), l)).collect();
+        let mut changed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        self.links.retain(|(from, to), link| {
+            let keep = wanted.iter().any(|(a, b, _)| a == from && b == to);
+            if !keep {
+                link.close();
+                changed.insert(from.clone());
+            }
+            keep
+        });
+        for (from, to, level) in wanted {
+            self.node(&from);
+            let (channels, rate) = self.format;
+            if !self.links.contains_key(&(from.clone(), to.clone())) {
+                let link = bus::SendLink::new(channels);
+                self.node(&to).mixer.add(bus::SendReturn::new(Arc::clone(&link), channels, rate));
+                self.links.insert((from.clone(), to.clone()), link);
+                changed.insert(from.clone());
+            }
+            let link = &self.links[&(from.clone(), to.clone())];
+            link.set_level(level);
+            link.set_gain(self.mixer.return_gain(&to));
+        }
+        for from in changed {
+            let feeds: Vec<Arc<bus::SendLink>> = self.links.iter().filter(|((a, _), _)| *a == from).map(|(_, l)| Arc::clone(l)).collect();
+            if let Some(node) = self.nodes.get(&from) {
+                node.control.set_sends(feeds);
+            }
+        }
+    }
+
+    /// Puts a reverb on one bus's sum — its sounds and what other buses send into it — or `None`
+    /// to take it off (the default; off, the bus is bit-exact). A return bus, fed by sends
+    /// ([`Mixer::set_send`]) and heard beside the buses that feed it, wants
+    /// [`Reverb::with_dry`](reverb::Reverb::with_dry)`(0.0)`: their sound is heard already. Apart from
+    /// [`set_reverb`](Self::set_reverb), the space every sound is in; heard on the next buffer.
+    ///
+    /// ```no_run
+    /// # use gizmo_audio::{AudioManager, Mixer, reverb::Reverb};
+    /// # let mut audio = AudioManager::new().unwrap();
+    /// audio.set_bus_reverb("hall", Some(Reverb::hall().with_dry(0.0)));
+    /// audio.mixer_mut().set_send(Mixer::SFX, "hall", 0.5).unwrap();
+    /// audio.update();
+    /// ```
+    pub fn set_bus_reverb(&mut self, bus: &str, reverb: Option<reverb::Reverb>) {
+        self.node(bus).control.reverb.set(reverb.filter(|r| r.wet > 0.0));
+    }
+
+    /// The reverb on a bus's sum ([`set_bus_reverb`](Self::set_bus_reverb)), `None` for none.
+    #[must_use]
+    pub fn bus_reverb(&self, bus: &str) -> Option<reverb::Reverb> {
+        self.nodes.get(bus).map(|n| n.control.reverb.get()).filter(|r| r.wet > 0.0)
+    }
+
     /// Re-prices every live sink — what a master/bus/environment change means, since those apply
     /// to sounds that are already playing.
     fn apply_mix_to_every_sink(&mut self) {
         self.mixer.take_dirty(); // whatever asked for this, it is answered now
+        self.sync_routing();
         for id in self.active_sinks.keys().chain(self.active_spatial_sinks.keys()) {
             self.apply_mix(*id);
         }
@@ -789,6 +857,12 @@ impl AudioManager {
         options: &PlayOptions,
         fade: f32,
     ) -> Result<u64, AudioError> {
+        if !self.sound_buffers.contains_key(name) {
+            log::error!("AudioManager: '{}' adlı ses bellekte yok!", name);
+            return Err(AudioError::NotLoaded(name.to_string()));
+        }
+        // Connected to its bus's node, where it is summed with the bus's other sounds.
+        let bus = self.node(&options.bus).mixer.clone();
         let bytes = self.sound_buffers.get(name).ok_or_else(|| {
             log::error!("AudioManager: '{}' adlı ses bellekte yok!", name);
             AudioError::NotLoaded(name.to_string())
@@ -831,11 +905,11 @@ impl AudioManager {
         }
         match spatial {
             Some((emitter, left, right)) => {
-                let sink = fill!(SpatialPlayer::connect_new(&self.bus, emitter, left, right));
+                let sink = fill!(SpatialPlayer::connect_new(&bus, emitter, left, right));
                 self.active_spatial_sinks.insert(id, sink);
             }
             None => {
-                let sink = fill!(Player::connect_new(&self.bus));
+                let sink = fill!(Player::connect_new(&bus));
                 self.active_sinks.insert(id, sink);
             }
         }
@@ -1338,8 +1412,7 @@ mod tests {
         assert_eq!(global(&m, g), (0.22, 1.0), "and it comes back as the value it was given");
 
         // A bus gain applies to what is already playing, through `update`'s dirty check.
-        m.set_sink_bus(g, Mixer::MUSIC);
-        m.mixer_mut().set_bus_gain(Mixer::MUSIC, 0.5);
+        m.mixer_mut().set_bus_gain(Mixer::DEFAULT_BUS, 0.5);
         assert_eq!(global(&m, g), (0.22, 1.0), "a gain turned through mixer_mut waits for update");
         m.update();
         assert_eq!(global(&m, g), (0.11, 1.0), "and update is where it is heard");
@@ -1589,7 +1662,7 @@ mod device_free_tests {
     }
 
     /// A sound started on a muted bus is silent from its first sample. Until 2026-11-26 a sound
-    /// could only start on the default bus and be moved after (`play`, then `set_sink_bus`), and
+    /// could only start on the default bus and be moved after (`play`, then a bus change), and
     /// the source reached the device before its volume was written.
     #[test]
     fn a_sound_started_on_a_muted_bus_is_silent_from_its_first_sample() {
@@ -1676,6 +1749,95 @@ mod device_free_tests {
         m.play_with("tone", &PlayOptions::default().volume(0.25)).unwrap();
         let peak = pull(&mut out, 2_000).iter().fold(0.0f32, |p, s| p.max(s.abs()));
         assert!(peak <= 0.125 + 1e-6 && peak > 0.1, "peak {peak}: the tone is 0.5 at unity");
+    }
+
+    /// The output of `m` over `n` samples with a tone on the default bus, after `setup`.
+    fn with_tone(n: usize, setup: impl Fn(&mut AudioManager)) -> Vec<f32> {
+        let (mut m, mut out) = on_output();
+        setup(&mut m);
+        m.update();
+        m.play_with("tone", &PlayOptions::default()).unwrap();
+        pull(&mut out, n)
+    }
+
+    /// A send copies what a bus puts out into another, at its level and a frame late (one sample,
+    /// mono): the mix is the bus's sound plus half of it again, one sample on.
+    #[test]
+    fn a_send_copies_a_bus_into_another_a_frame_late() {
+        let reference = with_tone(800, |_| {});
+        let sent = with_tone(800, |m| m.mixer_mut().set_send(Mixer::DEFAULT_BUS, "copy", 0.5).unwrap());
+        let late = |lag: usize| (lag..800).all(|n| (sent[n] - reference[n] - 0.5 * reference[n - lag]).abs() < 1e-5);
+        assert!(late(1) || late(0), "the mix is not the bus plus half of it again: {:?} / {:?}", &sent[..6], &reference[..6]);
+    }
+
+    /// What is sent comes out under the to-bus's gain and mute, and under the from-bus's: a send is
+    /// after the fader.
+    #[test]
+    fn a_send_comes_out_under_both_buses_gains() {
+        let reference = with_tone(800, |_| {});
+        let returned_muted = with_tone(800, |m| {
+            m.mixer_mut().set_send(Mixer::DEFAULT_BUS, "copy", 0.5).unwrap();
+            m.mixer_mut().set_bus_muted("copy", true);
+        });
+        assert_eq!(returned_muted, reference, "a muted return bus let its send through");
+        let source_muted = with_tone(800, |m| {
+            m.mixer_mut().set_send(Mixer::DEFAULT_BUS, "copy", 0.5).unwrap();
+            m.mixer_mut().set_bus_muted(Mixer::DEFAULT_BUS, true);
+        });
+        assert!(source_muted.iter().all(|&s| s == 0.0), "a muted bus still sent its sound");
+    }
+
+    /// A return bus with a reverb that keeps none of the dry sound adds the space alone: the mix is
+    /// the dry sound plus a tail that rings on after it. A bus reverb with nothing sent to it, and a
+    /// send taken away, leave the mix as it was, sample for sample.
+    #[test]
+    fn a_reverb_return_adds_the_space_and_nothing_else() {
+        let blip = |m: &mut AudioManager, out: &mut crate::limiter::MasterOut| {
+            m.load_samples("blip", &[0.5; 2_000], RATE);
+            m.play_with("blip", &PlayOptions::default()).unwrap();
+            pull(out, 8_000)
+        };
+        let (mut m, mut out) = on_output();
+        let reference = blip(&mut m, &mut out);
+        let end = reference.iter().rposition(|&s| s != 0.0).expect("premise: the blip is heard");
+
+        let (mut m, mut out) = on_output();
+        m.set_bus_reverb("hall", Some(reverb::Reverb::hall().with_dry(0.0)));
+        m.update();
+        let alone = blip(&mut m, &mut out);
+        assert_eq!(alone, reference, "a return nobody sends to changed the mix");
+
+        m.mixer_mut().set_send(Mixer::DEFAULT_BUS, "hall", 1.0).unwrap();
+        m.update();
+        let sent = blip(&mut m, &mut out);
+        assert!(energy(&sent[end + 100..]) > 1e-3, "the hall did not ring on after the sound ({})", energy(&sent[end + 100..]));
+        // Freeverb's shortest comb is 200 samples at 8 kHz: until then the hall adds nothing, and what
+        // is heard is the bus's own sound, once.
+        assert_eq!(sent[..150], reference[..150], "the dry sound was not the bus's own, once");
+
+        m.mixer_mut().set_send(Mixer::DEFAULT_BUS, "hall", 0.0).unwrap();
+        m.update();
+        pull(&mut out, 40_000); // the tail rings down, to some millionths
+        let after = blip(&mut m, &mut out);
+        let off = after.iter().zip(&reference).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(off < 1e-4, "a send taken away still sent: {off} off");
+    }
+
+    /// A bus's reverb is on that bus's sum alone: a sound on another bus is untouched by it.
+    #[test]
+    fn a_bus_reverb_reaches_that_bus_alone() {
+        let reference = with_tone(2_000, |_| {});
+        let elsewhere = with_tone(2_000, |m| m.set_bus_reverb(Mixer::MUSIC, Some(reverb::Reverb::cave())));
+        assert_eq!(elsewhere, reference, "another bus's reverb reached the default bus");
+        let here = with_tone(2_000, |m| m.set_bus_reverb(Mixer::DEFAULT_BUS, Some(reverb::Reverb::cave())));
+        assert_ne!(here, reference, "premise: the bus's own reverb is heard");
+        assert_eq!(m_bus_reverb(), Some(reverb::Reverb::cave()));
+    }
+
+    fn m_bus_reverb() -> Option<reverb::Reverb> {
+        let (mut m, _out) = on_output();
+        m.set_bus_reverb(Mixer::MUSIC, Some(reverb::Reverb::cave()));
+        m.bus_reverb(Mixer::MUSIC)
     }
 
     /// A finished sound's environment goes with it, as its route does.
