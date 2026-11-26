@@ -110,9 +110,10 @@ proptest! {
         }
     }
 
-    /// Hangi şekil çifti / poz / rotasyon olursa olsun, bir temas dönüyorsa
-    /// alanları SONLU olmalı, normal birim uzunlukta, penetrasyon negatif değil.
-    /// NaN/Inf üreten dejenere yolları yakalar.
+    /// Whatever the pair of shapes, their poses and turns, a manifold's fields are finite, its
+    /// normals unit, its deepest point touching, and no point of it further in front of the other
+    /// shape than the speculative margin a patch carries a point about to touch out to (1 cm).
+    /// Catches the degenerate paths that make NaN or Inf.
     #[test]
     fn contacts_never_nan(
         kind_a in 0u8..3,
@@ -133,11 +134,15 @@ proptest! {
         let shape_a = mk(kind_a);
         let shape_b = mk(kind_b);
 
-        for c in NarrowPhase::test_collision_manifold(&shape_a, pos_a, rot_a, &shape_b, pos_b, rot_b) {
+        let manifold = NarrowPhase::test_collision_manifold(&shape_a, pos_a, rot_a, &shape_b, pos_b, rot_b);
+        if let Some(deepest) = manifold.iter().map(|c| c.penetration).reduce(f32::max) {
+            prop_assert!(deepest >= -1e-3, "a manifold with nothing touching: deepest {deepest}");
+        }
+        for c in manifold {
             prop_assert!(is_finite_vec(c.normal), "normal NaN/Inf: {:?}", c.normal);
             prop_assert!(is_finite_vec(c.point), "temas noktası NaN/Inf: {:?}", c.point);
             prop_assert!(c.penetration.is_finite(), "penetrasyon NaN/Inf: {}", c.penetration);
-            prop_assert!(c.penetration >= -1e-3, "penetrasyon belirgin negatif: {}", c.penetration);
+            prop_assert!(c.penetration >= -0.01 - 1e-4, "a point further out than the speculative margin: {}", c.penetration);
             let nlen = c.normal.length();
             prop_assert!((nlen - 1.0).abs() < 0.05, "normal birim değil: {nlen}");
         }

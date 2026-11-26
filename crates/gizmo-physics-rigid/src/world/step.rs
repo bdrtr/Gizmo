@@ -279,7 +279,7 @@ impl PhysicsWorld {
 
         // 3. Narrowphase — çarpışma tespiti ve olayları
         let t2 = Instant::now();
-        let (manifolds, ends, pending_triggers) = self.narrowphase_and_collision_step(dt);
+        let (manifolds, ends, pending_triggers, impacts) = self.narrowphase_and_collision_step(dt);
         self.metrics.narrowphase_ms += ms(t2);
         self.metrics.contact_count += manifolds.iter().map(|m| m.contacts.len()).sum::<usize>();
 
@@ -287,7 +287,7 @@ impl PhysicsWorld {
         let t3 = Instant::now();
         // What the bodies an impact sets going are looked at by afterwards; only a substep with a
         // fast body in it pays for it.
-        let before = any_fast.then(|| self.before_solve(&ends));
+        let before = any_fast.then(|| self.before_solve(&ends, &impacts));
         let bounces = self.constraint_solve_step(manifolds, ends, dt);
         self.metrics.solver_ms += ms(t3);
         // Triggers found by a speculative contact only, now that the substep's motion is known.

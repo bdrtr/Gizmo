@@ -1206,6 +1206,46 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A fast body that strikes off its centre lands as a rigid impact does.** A pair closing faster
+  than its size allows, whose contacts where it met did not pass through the moving body's centre,
+  took one speculative contact at that centre: it stopped the centre and turned nothing. At 60 Hz a
+  box dropped at 60 m/s on its corner came back straight up, without the 77 rad/s and the slide the
+  corner's impact gives it; a capsule landing end first did at every rate where the pair was fast.
+  Now such a body is held where it meets (`hold_set_going`) with the velocity it has, and the impact
+  is solved in the next substep on the points it has there. The box's first impact is the rigid one
+  to 1 % (`J = K⁻¹·(−v)` at the corner), the capsule's the same at 60, 240 and 960 Hz. A jointed body
+  is not held — a joint's body moves with what it is jointed to — and keeps the speculative contact.
+  `tests/turning_impacts.rs`.
+- **A body turning fast is followed along its turn.** What an impact set turning was looked at only
+  where the substep ended: a box turned 1.3 rad into the ground in one substep, and a rod turning
+  200 rad/s over a plate never touched it. A body whose turn sweeps its shape further than it may
+  travel (`spins_fast`) is now put in the broad phase as the ball it turns in, its pair's contacts are
+  taken where its turn first meets the other (`turning_contacts`), and the hold follows it along its
+  turn as well as its way, holding it turned as it was there (`held_turning`; position integration's
+  turn is `integrator::turn`). A fast pair with contacts, or one with a fast-turning body, is looked at
+  by the hold after the solve however its contacts were found. Of 400 spinning boxes and capsules shot
+  at a hill of a mesh and a height field, 6 ended inside it; none does.
+- **A touching patch carries the points about to touch.** A patch was what touched, to a tenth of a
+  millimetre, so a cylinder landing 0.001 rad off level was struck on one end alone and turned 3 rad/s.
+  Box clipping, a shape on a triangle's face, a box on a plane and a shape's feature on a plane now
+  keep the points within 1 cm in front of the other surface, at their separation as a negative depth
+  (`SPECULATIVE_MARGIN`), as Box2D's manifolds do. The manifold's deepest point still touches.
+- **A patch's four contacts span its corners.** The reduction to four started from the deepest point,
+  and on a flat patch, all one depth, that was the rounding's choice: of a box where six mesh triangles
+  meet, a point on a triangle's edge inside the face, and the box stood on three corners and the middle
+  of an edge. It starts from the farthest of the points as deep as the deepest, and of quadrilaterals as
+  large it keeps the one centred on the patch (a hexagon's rectangle, not its kite).
+- **A fast impact flat on a face is one contact, under the centre of mass** (`face_impact`), when the
+  points lie along one normal at one depth, close alike, and the other body does not move: the rigid
+  impact turns nothing, and the solve's sweep over the patch left 0.009–0.03 rad/s of its order.
+- **The contacts of a fast pair are where it meets this substep, or none.** A ball rolling fast on a
+  floor closes on it by gravity alone; its contact where the substep ended, brought back, was a third
+  of a metre ahead of it at 60 Hz. And every point that closes on the way is kept: looked at a slop
+  ahead, each closed by exactly the slop, and which survived was the rounding's.
+- **A held body is held a millimetre short of what it reached** (`HOLD_SKIN`). Held exactly on a mesh,
+  a ball shot onto a roof's ridge at 60 m/s touched it and overlapped it not at all, and the next
+  substep found nothing and let it through.
+
 - **A sound starts as it was asked, from its first sample.** A sound was appended to its player
   first and had its volume, bus and environment written after, so its first buffer could be at full
   volume, on the default bus, and dry under water. A scene's `AudioSource` was started at unity on

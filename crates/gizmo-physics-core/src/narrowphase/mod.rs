@@ -218,6 +218,10 @@ impl NarrowPhase {
     /// corner, with no reduction step; a box lying flat gives 4, one resting on a
     /// face-diagonal tilt can give more, and a fully submerged box gives all 8.
     /// Normal in each contact points from the box toward the plane (`-plane_n`).
+    ///
+    /// A box that touches the plane also has the corners of its half towards the plane that are
+    /// above it by no more than the speculative margin, at their separation as a negative depth:
+    /// a corner about to touch (`contacts::SPECULATIVE_MARGIN`).
     pub fn box_plane(
         bpos: Vec3,
         brot: Quat,
@@ -225,7 +229,9 @@ impl NarrowPhase {
         plane_n: Vec3,
         plane_d: f32,
     ) -> Vec<ContactPoint> {
-        box_corners(bpos, brot, half)
+        let corners = box_corners(bpos, brot, half);
+        let touches = corners.iter().any(|c| c.dot(plane_n) - plane_d < 0.0);
+        corners
             .iter()
             .filter_map(|&corner| {
                 let signed_dist = corner.dot(plane_n) - plane_d;
@@ -236,6 +242,9 @@ impl NarrowPhase {
                         -plane_n,
                         -signed_dist,
                     ))
+                } else if touches && signed_dist <= contacts::SPECULATIVE_MARGIN && (corner - bpos).dot(plane_n) < 0.0 {
+                    // About to touch, on the plane under it.
+                    Some(mk_contact(corner - plane_n * signed_dist, -plane_n, -signed_dist))
                 } else {
                     None
                 }

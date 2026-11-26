@@ -130,6 +130,22 @@ struct PairContacts {
     /// belongs on the worker that produced the contacts, not on the one thread that has to build
     /// the cache and the event list in order.
     warm: Option<u32>,
+    /// A fast pair's impact off its bodies' centres, solved where it touches: the hold looks at it
+    /// after the solve as at a pair the solve had no contact of (`Met::Impact`).
+    impact: bool,
+}
+
+/// What a fast pair takes where it meets (`PhysicsWorld::pair_contacts`).
+enum Met {
+    /// These contacts; none means the speculative contact at the centre.
+    Contacts(Vec<gizmo_physics_core::ContactPoint>),
+    /// These contacts, of an impact off a moving body's centre where the pair touches now. The
+    /// solve gives it its turn, and a substep's linear account of a turn that fast is no account of
+    /// where the rest of the body goes: the hold looks at the pair afterwards as at one the solve had
+    /// no contact of.
+    Impact(Vec<gizmo_physics_core::ContactPoint>),
+    /// No contact: the body is held where the two meet (`PhysicsWorld::held_to_impact`).
+    Held,
 }
 
 /// One island's solve, handed back from its worker for the sequential write-back
@@ -383,6 +399,16 @@ impl PhysicsWorld {
             } else {
                 base_aabb
             };
+            // A body turning fast for its size reaches, on the way, what neither its box now nor its
+            // box at the end holds: a rod turning 0.8 rad a substep stands upright between them. It
+            // is put in the tree as the ball it turns in, along its way.
+            let aabb = if rb.is_dynamic() && !rb.is_sleeping && spins_fast(vel.angular.length() * dt, collider) {
+                let (from, to) = (transform.position, transform.position + vel.linear * dt);
+                let reach = Vec3::splat(bounding_radius(collider));
+                aabb.merge(gizmo_math::Aabb::new(from.min(to) - reach, from.max(to) + reach))
+            } else {
+                aabb
+            };
             let bounds = (base_aabb, end_aabb.unwrap_or_else(|| at_end(base_aabb)));
 
             // Whether the tree already holds the box — most bodies on most substeps — is asked here,
@@ -398,7 +424,10 @@ impl PhysicsWorld {
             };
             // Fast enough to set another body going faster than the narrow phase will know of
             // (`hold_set_going`): a kinematic mover as much as a dynamic body.
-            let sets_going = fast || (rb.is_kinematic() && moves_fast(vel.linear.length() * dt, collider));
+            // A dynamic body turning fast for its size is looked at after the solve too.
+            let sets_going = fast
+                || (rb.is_kinematic() && moves_fast(vel.linear.length() * dt, collider))
+                || (rb.is_dynamic() && !rb.is_sleeping && spins_fast(vel.angular.length() * dt, collider));
             Some(Planned { settled: settled.then_some(pose), aabb, put, bounds, sets_going })
         };
         let plans: Vec<Option<Planned>> = if worth_parallel(&self.rigid_bodies) {
@@ -443,11 +472,13 @@ impl PhysicsWorld {
 
     /// Detect actual collisions (parallel narrowphase) and emit the collision and trigger events.
     ///
-    /// Returns the set of [`ContactManifold`]s to be fed into the solver.
+    /// Returns the set of [`ContactManifold`]s to be fed into the solver, their ends, the triggers to
+    /// confirm, and the pairs of fast impacts the hold is to look at after the solve (`Met::Impact`).
     #[tracing::instrument(skip_all, name = "narrowphase_collision")]
-    pub(crate) fn narrowphase_and_collision_step(&mut self, dt: f32) -> (Vec<ContactManifold>, Vec<ManifoldEnds>, Vec<PendingTrigger>) {
+    pub(crate) fn narrowphase_and_collision_step(&mut self, dt: f32) -> (Vec<ContactManifold>, Vec<ManifoldEnds>, Vec<PendingTrigger>, Vec<[u32; 2]>) {
         let candidates = self.spatial_hash.query_pairs();
         let disabled_joint_pairs = self.collision_disabled_joint_pairs();
+        let jointed = self.jointed_bodies();
 
         // Kapsam paralel bölümün TAMAMINI sarar, çift başına değil. Eskiden çift başınaydı:
         // kare başına ~7300 `Instant::now()` + paylaşılan tek atomiğe `fetch_add`, hem
@@ -465,7 +496,7 @@ impl PhysicsWorld {
         // order.
         let (dormant_pairs, mut narrowphase_results): (Vec<(BodyHandle, BodyHandle)>, Vec<PairContacts>) =
             if candidates.len() >= PARALLEL_MIN_PAIR_CHECKS {
-                let examine = |&pair: &(BodyHandle, BodyHandle)| self.examine_pair(pair, &disabled_joint_pairs, dt);
+                let examine = |&pair: &(BodyHandle, BodyHandle)| self.examine_pair(pair, (&disabled_joint_pairs, &jointed), dt);
                 let examined: Vec<Examined> = candidates.par_iter().filter_map(examine).collect();
                 let mut dormant = Vec::new();
                 let mut found = Vec::with_capacity(examined.len());
@@ -488,7 +519,7 @@ impl PhysicsWorld {
                     }
                 }
                 let test = |&(pair, (a, b)): &((BodyHandle, BodyHandle), (Option<usize>, Option<usize>))| {
-                    self.pair_contacts(pair, (a?, b?), &disabled_joint_pairs, dt)
+                    self.pair_contacts(pair, (a?, b?), (&disabled_joint_pairs, &jointed), dt)
                 };
                 let found = if worth_parallel_jobs(tested.len(), PARALLEL_MIN_PAIRS) {
                     tested.par_iter().filter_map(test).collect()
@@ -535,12 +566,17 @@ impl PhysicsWorld {
         // Each manifold's bodies' rows and cache slot, beside it (`ManifoldEnds`).
         let mut ends: Vec<ManifoldEnds> = Vec::with_capacity(narrowphase_results.len());
         let mut pending_triggers: Vec<PendingTrigger> = Vec::new();
+        // The pairs of `Met::Impact`, for the hold.
+        let mut impacts: Vec<[u32; 2]> = Vec::new();
         let _mani = crate::profile::Scope::new(&crate::profile::PHASES.manifold);
         for found in narrowphase_results {
             if found.is_trigger_a || found.is_trigger_b {
                 pending_triggers.extend(self.record_trigger(&found));
             } else {
                 let bodies = found.bodies;
+                if found.impact {
+                    impacts.push(bodies);
+                }
                 let (manifold, cache) = self.record_solid_contact(found);
                 ends.push(ManifoldEnds { bodies, cache });
                 manifolds.push(manifold);
@@ -578,7 +614,7 @@ impl PhysicsWorld {
             "narrowphase complete"
         );
 
-        (manifolds, ends, pending_triggers)
+        (manifolds, ends, pending_triggers, impacts)
     }
 
     /// One candidate pair, on whichever thread takes it: dormant — both bodies at rest, so it can
@@ -588,7 +624,7 @@ impl PhysicsWorld {
     fn examine_pair(
         &self,
         pair: (BodyHandle, BodyHandle),
-        disabled_joint_pairs: &FxHashSet<(u32, u32)>,
+        joints: (&FxHashSet<(u32, u32)>, &FxHashSet<u32>),
         dt: f32,
     ) -> Option<Examined> {
         // ── Dormant-çift atlama (geniş-sahne perf) ────────────────────────
@@ -604,7 +640,7 @@ impl PhysicsWorld {
         if self.pair_is_dormant((a, b)) {
             return Some(Examined::Dormant(pair));
         }
-        self.pair_contacts(pair, (a?, b?), disabled_joint_pairs, dt).map(Examined::Found)
+        self.pair_contacts(pair, (a?, b?), joints, dt).map(Examined::Found)
     }
 
     /// The rows of a pair's two bodies, `None` for one the world does not hold.
@@ -631,6 +667,11 @@ impl PhysicsWorld {
         !is_active(a) && !is_active(b)
     }
 
+    /// The ids of the bodies a joint holds.
+    fn jointed_bodies(&self) -> FxHashSet<u32> {
+        self.joints.iter().flat_map(|j| [j.entity_a.id(), j.entity_b.id()]).collect()
+    }
+
     fn collision_disabled_joint_pairs(&self) -> FxHashSet<(u32, u32)> {
         self
             .joints
@@ -651,7 +692,7 @@ impl PhysicsWorld {
         &self,
         (entity_a, entity_b): (BodyHandle, BodyHandle),
         (idx_a, idx_b): (usize, usize),
-        disabled_joint_pairs: &FxHashSet<(u32, u32)>,
+        (disabled_joint_pairs, jointed): (&FxHashSet<(u32, u32)>, &FxHashSet<u32>),
         dt: f32,
     ) -> Option<PairContacts> {
 
@@ -688,21 +729,35 @@ impl PhysicsWorld {
             transform_b.rotation,
         );
 
+        let (rb_a, rb_b) = (&self.rigid_bodies[idx_a], &self.rigid_bodies[idx_b]);
+        let (vel_a, vel_b) = (&self.velocities[idx_a], &self.velocities[idx_b]);
+        // A CCD body's, and a pair closing fast for its size (`closes_fast`), CCD or not.
+        let moving = |rb: &RigidBody| rb.is_dynamic() && !rb.is_sleeping;
+        let fast = (moving(rb_a) || moving(rb_b))
+            && closes_fast(
+                (vel_a.linear - vel_b.linear).length() * dt,
+                collider_a.shape.half_thickness(),
+                collider_b.shape.half_thickness(),
+            );
+        let solid = !collider_a.is_trigger && !collider_b.is_trigger;
+        // A fast pair touching now — held where it met in the last substep (`Met::Held`), or met
+        // there — is solved on every point of it within a slop of the other, as it is where it meets
+        // (`met_contacts`): the narrow phase answers what touches, and of a box landing tilted by
+        // 0.006 rad that is one edge, with the other 0.6 mm above the floor. Struck on the one edge
+        // alone it turned 25 rad/s, and at 60 Hz a 10 cm box dropped 20 cm on a mesh landed on its
+        // side (2026-11-26).
+        if fast && solid && !contacts.is_empty() {
+            if let Some(deepest) = contacts.iter().max_by(|x, y| x.penetration.total_cmp(&y.penetration)) {
+                let met = self.met_contacts((idx_a, idx_b), 0.0, deepest.normal, dt);
+                if let Some(face) = self.face_impact((idx_a, idx_b), &met) {
+                    contacts = vec![face];
+                } else if !met.is_empty() {
+                    contacts = met;
+                }
+            }
+        }
         // Speculative contacts for CCD bodies.
         if contacts.is_empty() {
-            let rb_a = &self.rigid_bodies[idx_a];
-            let rb_b = &self.rigid_bodies[idx_b];
-
-            let vel_a = &self.velocities[idx_a];
-            let vel_b = &self.velocities[idx_b];
-            // A CCD body's, and a pair closing fast for its size (`closes_fast`), CCD or not.
-            let moving = |rb: &RigidBody| rb.is_dynamic() && !rb.is_sleeping;
-            let fast = (moving(rb_a) || moving(rb_b))
-                && closes_fast(
-                    (vel_a.linear - vel_b.linear).length() * dt,
-                    collider_a.shape.half_thickness(),
-                    collider_b.shape.half_thickness(),
-                );
             // What this substep's motion can close although nothing touches yet: real points, with the
             // lever arms the contact will have (`near_contacts`). A pair closing faster than its size
             // allows could be past each other by the end of the substep, so it takes the swept
@@ -738,7 +793,7 @@ impl PhysicsWorld {
                     // turn: a 5 cm capsule at 923 m/s struck a wall end first, its point's limit was
                     // met by 9000 rad/s of spin, and its centre went on through (2026-11-25). Those
                     // keep the speculative contact, at the centre, which stops the centre.
-                    let met = if fast && !collider_a.is_trigger && !collider_b.is_trigger {
+                    let met = if fast && solid {
                         let met = self.met_contacts((idx_a, idx_b), gap, sc.normal, dt);
                         let through_centre = |c: &gizmo_physics_core::ContactPoint, i: usize| {
                             let (rb, t) = (&self.rigid_bodies[i], &self.transforms[i]);
@@ -748,18 +803,42 @@ impl PhysicsWorld {
                             let r = c.point - (t.position + t.rotation * rb.center_of_mass);
                             r.cross(c.normal).length() <= 1e-3 * r.length().max(1e-3)
                         };
-                        if met.iter().all(|c| through_centre(c, idx_a) && through_centre(c, idx_b)) { met } else { Vec::new() }
+                        if let Some(face) = self.face_impact((idx_a, idx_b), &met) {
+                            Met::Contacts(vec![face])
+                        } else if met.iter().all(|c| through_centre(c, idx_a) && through_centre(c, idx_b)) {
+                            Met::Contacts(met)
+                        } else if gap <= self.solver.slop && !met.is_empty() {
+                            // Touching now: the points are the impact's where the pair stands, with no
+                            // turn extrapolated over the substep.
+                            Met::Impact(met)
+                        } else if self.held_to_impact((idx_a, idx_b), jointed, dt) {
+                            Met::Held
+                        } else {
+                            Met::Contacts(Vec::new())
+                        }
                     } else {
-                        Vec::new()
+                        Met::Contacts(Vec::new())
                     };
-                    if met.is_empty() {
-                        contacts.push(sc);
-                    } else {
-                        contacts = met;
+                    match met {
+                        Met::Held => {}
+                        Met::Contacts(met) if met.is_empty() => contacts.push(sc),
+                        Met::Contacts(met) => contacts = met,
+                        Met::Impact(met) => contacts = met,
                     }
                 }
             }
         }
+
+        // A fast pair with contacts, or a pair with contacts and a body turning fast for its size: the
+        // solve's linear account of the substep is no account of where the rest of a body goes that
+        // travels or turns that far, so the hold looks at the pair afterwards (`Met::Impact`). Asked
+        // of the contacts as they are, however they were found: a box struck on its corner at 60 m/s
+        // and turning 80 rad/s at 240 Hz had its next contact from `near_contacts`, and the hold
+        // let its other corner end 12 cm in the ground (2026-11-26).
+        let spins = |rb: &RigidBody, v: &Velocity, c: &Collider| moving(rb) && spins_fast(v.angular.length() * dt, c);
+        let impact = solid
+            && !contacts.is_empty()
+            && (fast || spins(rb_a, vel_a, collider_a) || spins(rb_b, vel_b, collider_b));
 
         // One-way surfaces: drop the contacts a platform should not stop. Only
         // pairs with a one-way collider pay anything here.
@@ -841,6 +920,7 @@ impl PhysicsWorld {
             material_a: collider_a.material,
             material_b: collider_b.material,
             warm,
+            impact,
         })
     }
 
@@ -1883,6 +1963,7 @@ impl PhysicsWorld {
 /// it was solved: what `PhysicsWorld::hold_set_going` asks after it.
 pub(crate) struct BeforeSolve {
     positions: Vec<Vec3>,
+    rotations: Vec<gizmo_math::Quat>,
     solved: Vec<[u32; 2]>,
 }
 
@@ -1890,6 +1971,10 @@ pub(crate) struct BeforeSolve {
 /// the fast ones the solve had, and the pairs a joint keeps from colliding (by id).
 struct Look {
     starts: Vec<Vec3>,
+    /// Their rotations then.
+    turned_from: Vec<gizmo_math::Quat>,
+    /// The ids of the bodies a joint holds, which are not turned (`held_turning`).
+    jointed: FxHashSet<u32>,
     solved: FxHashSet<(u32, u32)>,
     disabled: FxHashSet<(u32, u32)>,
     dt: f32,
@@ -1897,10 +1982,12 @@ struct Look {
 
 impl PhysicsWorld {
     /// What [`hold_set_going`](Self::hold_set_going) will need of the substep about to be solved.
-    pub(crate) fn before_solve(&self, ends: &[ManifoldEnds]) -> BeforeSolve {
+    pub(crate) fn before_solve(&self, ends: &[ManifoldEnds], impacts: &[[u32; 2]]) -> BeforeSolve {
         BeforeSolve {
             positions: self.transforms.iter().map(|t| t.position).collect(),
-            solved: ends.iter().map(|e| e.bodies).collect(),
+            rotations: self.transforms.iter().map(|t| t.rotation).collect(),
+            // A fast impact's pair is looked at as one the solve had no contact of (`Met::Impact`).
+            solved: ends.iter().map(|e| e.bodies).filter(|b| !impacts.contains(b)).collect(),
         }
     }
 
@@ -1934,7 +2021,9 @@ impl PhysicsWorld {
             .filter(|&i| {
                 let rb = &self.rigid_bodies[i];
                 let moved = self.transforms[i].position - before.positions[i];
-                rb.is_dynamic() && !rb.is_sleeping && !self.colliders[i].is_trigger && moves_fast(moved.length(), &self.colliders[i])
+                let turned = crate::integrator::turn(rb, &self.velocities[i], dt).length();
+                let c = &self.colliders[i];
+                rb.is_dynamic() && !rb.is_sleeping && !c.is_trigger && (moves_fast(moved.length(), c) || spins_fast(turned, c))
             })
             .collect();
         if going.is_empty() {
@@ -1957,7 +2046,9 @@ impl PhysicsWorld {
                 .map(|(a, b)| pair(a, b))
                 .collect(),
             disabled: self.collision_disabled_joint_pairs(),
+            jointed: self.jointed_bodies(),
             starts: before.positions,
+            turned_from: before.rotations,
             dt,
         };
         let mut held = vec![false; n];
@@ -1983,8 +2074,9 @@ impl PhysicsWorld {
                     if looked.get(&(i, j)) == Some(&ends) {
                         continue;
                     }
-                    if let Some(at) = self.held_at(&look, i, j) {
+                    if let Some((at, rotation)) = self.held_at(&look, i, j) {
                         self.transforms[i].position = at;
+                        self.transforms[i].rotation = rotation;
                         // The cached matrix too, so the hold is visible to an end-of-frame snapshot.
                         self.transforms[i].update_local_matrix();
                         held[i] = true;
@@ -2012,7 +2104,12 @@ impl PhysicsWorld {
 
     /// The box a body's way covered this substep, from where it was to where it is.
     fn way_box(&self, look: &Look, i: usize) -> gizmo_math::Aabb {
-        let own = self.colliders[i].compute_aabb(Vec3::ZERO, self.transforms[i].rotation);
+        let own = if self.turns(look, i) {
+            // Every way it was turned on the way.
+            gizmo_math::Aabb::from_center_half_extents(Vec3::ZERO, Vec3::splat(bounding_radius(&self.colliders[i])))
+        } else {
+            self.colliders[i].compute_aabb(Vec3::ZERO, self.transforms[i].rotation)
+        };
         let (start, end) = (look.starts[i], self.transforms[i].position);
         gizmo_math::Aabb::new(Vec3::from(own.min) + start.min(end), Vec3::from(own.max) + start.max(end))
     }
@@ -2034,8 +2131,87 @@ impl PhysicsWorld {
         reached
     }
 
-    /// Where body `i` is held at `j`, or `None` when its way does not take it past.
-    fn held_at(&self, look: &Look, i: usize, j: usize) -> Option<Vec3> {
+    /// Whether body `i` turned this substep far enough for its shape's points to move more than the
+    /// solver lets a contact sink: then where it is held is asked of its turn too (`held_turning`).
+    fn turns(&self, look: &Look, i: usize) -> bool {
+        let turn = crate::integrator::turn(&self.rigid_bodies[i], &self.velocities[i], look.dt);
+        turn.length() * turn_reach(&self.colliders[i]) > self.solver.slop
+    }
+
+    /// Where body `i` is held at `j`, and turned to, or `None` when its way does not take it past.
+    fn held_at(&self, look: &Look, i: usize, j: usize) -> Option<(Vec3, gizmo_math::Quat)> {
+        let one_way = self.colliders[i].one_way.is_some() || self.colliders[j].one_way.is_some();
+        // A jointed body is moved, not turned: a turn the joint did not make opens it.
+        if !one_way && !look.jointed.contains(&self.entities[i].id()) && self.turns(look, i) {
+            return self.held_turning(look, i, j);
+        }
+        self.held_moving(look, i, j).map(|at| (at, self.transforms[i].rotation))
+    }
+
+    /// [`held_at`](Self::held_at) for a body that turned: followed along its way and its turn
+    /// together, as position integration took it, it is looked at for the first pose where it sinks
+    /// into `j` by more than the solver lets a contact sink (past what it already did, when it started
+    /// the substep in it), and held where it touched on the way there, turned as it was. Its velocity is left to it, as the moving
+    /// hold leaves it.
+    ///
+    /// A body's turn is no straight line: a box struck at a corner at 60 m/s turns 77 rad/s, 1.3 rad
+    /// in a substep at 60 Hz, and the moving hold — asking where the end pose meets `j` from where it
+    /// started, turned as it ends — let its other corner end 63 cm in the ground (2026-11-26). The
+    /// way is looked at in steps no longer than the pair's thickness allows (`closes_fast`'s share),
+    /// at most `MAX_SAMPLES`, and the first one in is halved down to the moment.
+    fn held_turning(&self, look: &Look, i: usize, j: usize) -> Option<(Vec3, gizmo_math::Quat)> {
+        const MAX_SAMPLES: f32 = 64.0;
+        const HALVINGS: u32 = 10;
+        let (ci, cj) = (&self.colliders[i], &self.colliders[j]);
+        let (a, b) = (self.entities[i].id(), self.entities[j].id());
+        if cj.is_trigger || !ci.collision_layer.can_collide_with(&cj.collision_layer) || look.disabled.contains(&(a.min(b), a.max(b))) {
+            return None;
+        }
+        let turn = crate::integrator::turn(&self.rigid_bodies[i], &self.velocities[i], look.dt);
+        let (from_i, to_i, turned_from) = (look.starts[i], self.transforms[i].position, look.turned_from[i]);
+        let (from_j, to_j, rotation_j) = (look.starts[j], self.transforms[j].position, self.transforms[j].rotation);
+        let pose = |s: f32| {
+            let rotation = (gizmo_math::Quat::from_scaled_axis(turn * s) * turned_from).normalize();
+            (from_i.lerp(to_i, s), rotation, from_j.lerp(to_j, s))
+        };
+        let depth = |s: f32| {
+            let (p, q, pj) = pose(s);
+            NarrowPhase::test_collision_manifold(&ci.shape, p, q, &cj.shape, pj, rotation_j)
+                .iter()
+                .map(|c| c.penetration)
+                .fold(f32::NEG_INFINITY, f32::max)
+        };
+        // Held where it touches as deep as it started, once it sinks a slop past that: held at the
+        // slop, it would rest that deep, which the solve leaves be.
+        let touching = depth(0.0).max(0.0);
+        let limit = touching + self.solver.slop;
+        let sweep = ((to_i - from_i) - (to_j - from_j)).length() + turn.length() * turn_reach(ci);
+        let step = FAST_SHARE * (ci.shape.half_thickness() + cj.shape.half_thickness());
+        let samples = (sweep / step.max(1e-4)).ceil().clamp(1.0, MAX_SAMPLES) as u32;
+        let mut out = 0.0;
+        for k in 1..=samples {
+            let s = k as f32 / samples as f32;
+            if depth(s) > limit {
+                let mut into = s;
+                for _ in 0..HALVINGS {
+                    let mid = 0.5 * (out + into);
+                    if depth(mid) > touching {
+                        into = mid;
+                    } else {
+                        out = mid;
+                    }
+                }
+                // A skin short of it, as the moving hold stops.
+                let (p, q, pj) = pose((out - HOLD_SKIN / sweep.max(1e-6)).max(0.0));
+                return Some((p + (to_j - pj), q));
+            }
+            out = s;
+        }
+        None
+    }
+
+    /// [`held_at`](Self::held_at) for a body that did not turn: where it is held, or `None`.
+    fn held_moving(&self, look: &Look, i: usize, j: usize) -> Option<Vec3> {
         const MAX_FACES: usize = 64;
         let moved = |k: usize| self.transforms[k].position - look.starts[k];
         // `i`'s way as `j` saw it: from where it was, by what it moved against `j`.
@@ -2064,8 +2240,8 @@ impl PhysicsWorld {
                 // It gets there, and no further.
                 break;
             }
-            // On to the face, and what is left of the way along it.
-            let met = gap.max(0.0) / into;
+            // On to the face, a skin short of it, and what is left of the way along it.
+            let met = (gap - HOLD_SKIN).max(0.0) / into;
             at += left * met;
             left *= 1.0 - met;
             left -= normal * left.dot(normal);
@@ -2113,6 +2289,13 @@ impl PhysicsWorld {
     }
 }
 
+/// How far short of what it reached a body is held (`PhysicsWorld::hold_set_going`): a millimetre,
+/// ten times the gap at which the path's look (`Gjk::conservative_advancement`) calls a pair
+/// touching. Held exactly on a mesh, a ball shot at 60 m/s onto a roof's ridge was touching it and
+/// overlapping it not at all, the next substep found it neither near nor in contact, and it went on
+/// through (2026-11-26).
+const HOLD_SKIN: f32 = 1e-3;
+
 /// The rate a joint is solved at, in hertz, whatever the world's: a world stepping coarser solves
 /// its free joints (`JointSolver::finish`) in as many steps of its substep as this takes. The rate
 /// every joint in the engine was tuned at; at 60 Hz a chain carrying 50 times a link's mass came
@@ -2137,6 +2320,31 @@ pub(crate) fn moves_fast(travel: f32, collider: &Collider) -> bool {
     travel > FAST_SHARE * collider.shape.half_thickness()
 }
 
+/// How far a point of a collider's shape moves when its body turns a radian about its origin: what
+/// a turn sweeps. A sphere turns in place, and a capsule's round sides do: its segment's ends are
+/// what moves.
+pub(crate) fn turn_reach(collider: &Collider) -> f32 {
+    use gizmo_physics_core::ColliderShape::{Capsule, Sphere};
+    match &collider.shape {
+        Sphere(_) => 0.0,
+        Capsule(c) => c.half_height,
+        _ => bounding_radius(collider),
+    }
+}
+
+/// The radius of the ball about a body's origin that holds its collider however it is turned.
+fn bounding_radius(collider: &Collider) -> f32 {
+    let b = collider.compute_aabb(Vec3::ZERO, gizmo_math::Quat::IDENTITY);
+    Vec3::from(b.min).abs().max(Vec3::from(b.max).abs()).length()
+}
+
+/// Whether a body turning `angle` radians this substep sweeps its shape's points as far as
+/// [`moves_fast`] lets it travel: then a discrete look at where it ends can miss what the turn took
+/// it through, as it can for a body travelling that far.
+pub(crate) fn spins_fast(angle: f32, collider: &Collider) -> bool {
+    angle * turn_reach(collider) > FAST_SHARE * collider.shape.half_thickness()
+}
+
 /// Whether two shapes, `thickness_a` and `thickness_b` their half thicknesses, close `travel`
 /// metres on each other this substep — far enough that discrete detection could see them only once
 /// they overlap by more than half of what lies between their centres, and push them out the wrong
@@ -2151,6 +2359,39 @@ pub(crate) fn closes_fast(travel: f32, thickness_a: f32, thickness_b: f32) -> bo
     travel > FAST_SHARE * (thickness_a + thickness_b)
 }
 
+
+/// Whether `q`, in the plane of `points` (normal `n`), lies in the patch they span: on the segment of
+/// two, in the triangle of three, in one of the four triangles of four (their hull, whatever their
+/// order), to a tenth of a millimetre.
+fn spans(points: &[gizmo_physics_core::ContactPoint], q: Vec3, n: Vec3) -> bool {
+    const ON: f32 = 1e-4;
+    let in_triangle = |a: Vec3, b: Vec3, c: Vec3| {
+        let side = |u: Vec3, v: Vec3| {
+            let edge = v - u;
+            let out = edge.cross(n).normalize_or_zero();
+            (q - u).dot(out)
+        };
+        let (s1, s2, s3) = (side(a, b), side(b, c), side(c, a));
+        (s1 <= ON && s2 <= ON && s3 <= ON) || (s1 >= -ON && s2 >= -ON && s3 >= -ON)
+    };
+    match points {
+        [a, b] => {
+            let (a, b) = (a.point, b.point);
+            let ab = b - a;
+            let s = ((q - a).dot(ab) / ab.length_squared().max(1e-12)).clamp(0.0, 1.0);
+            (a + ab * s).distance(q) <= ON
+        }
+        [a, b, c] => in_triangle(a.point, b.point, c.point),
+        [a, b, c, d] => {
+            let p = [a.point, b.point, c.point, d.point];
+            (0..4).any(|skip| {
+                let t: Vec<Vec3> = (0..4).filter(|&k| k != skip).map(|k| p[k]).collect();
+                in_triangle(t[0], t[1], t[2])
+            })
+        }
+        _ => false,
+    }
+}
 
 /// Where a body's velocity takes its pose in `dt`: the pose a pair is tested at for `near_contacts`.
 fn advanced(t: &Transform, v: &Velocity, dt: f32) -> (Vec3, gizmo_math::Quat) {
@@ -2175,6 +2416,9 @@ impl PhysicsWorld {
     /// the joints that held it; at 240 Hz a box dropped from 5 m came to rest 1.35 mm deep
     /// (2026-11-24). Now 2.7 mm and 0.05.
     fn near_contacts(&self, (idx_a, idx_b): (usize, usize), dt: f32) -> Vec<gizmo_physics_core::ContactPoint> {
+        if let Some(found) = self.turning_contacts((idx_a, idx_b), dt) {
+            return found;
+        }
         let ((pa, qa), (pb, qb)) = (self.pose_after(idx_a, dt), self.pose_after(idx_b, dt));
         // Bounds apart at the substep's end, with a centimetre to spare over every narrow-phase
         // tolerance (a millimetre at most): no point to find, and no full test to run. Most of a
@@ -2206,11 +2450,63 @@ impl PhysicsWorld {
                 let ((ma, mqa), (mb, mqb)) = (self.pose_after(idx_a, meets), self.pose_after(idx_b, meets));
                 let there = NarrowPhase::test_collision_manifold(shape_a, ma, mqa, shape_b, mb, mqb);
                 if !there.is_empty() {
-                    return self.brought_back((idx_a, idx_b), there, meets);
+                    return self.brought_back((idx_a, idx_b), there, meets, self.solver.slop);
                 }
             }
         }
-        self.brought_back((idx_a, idx_b), found, dt)
+        self.brought_back((idx_a, idx_b), found, dt, self.solver.slop)
+    }
+
+    /// [`near_contacts`](Self::near_contacts) for a pair with a body turning fast for its size
+    /// (`spins_fast`): where the substep's end has it says nothing of what the turn swept through on
+    /// the way. Its way is looked at in steps no longer than the pair's thickness allows (at most
+    /// `MAX_SAMPLES`), the first pose where the two sink into each other past a slop halved down to
+    /// the moment, and the contacts there brought back, every point that closes on the way. Empty
+    /// when the turn takes it past nothing; `None` for a pair with no fast turn in it.
+    ///
+    /// A rod turning 200 rad/s over a plate it reaches the edge of was held a skin short of the
+    /// plate after every substep (`held_turning`) and touched it in none: the end pose had turned
+    /// past it, and the rod turned for ever at 200 rad/s (2026-11-26).
+    fn turning_contacts(&self, (idx_a, idx_b): (usize, usize), dt: f32) -> Option<Vec<gizmo_physics_core::ContactPoint>> {
+        const MAX_SAMPLES: f32 = 64.0;
+        const HALVINGS: u32 = 10;
+        let turn = |i: usize| {
+            let r = &self.rigid_bodies[i];
+            let w = self.velocities[i].angular.length() * dt;
+            (r.is_dynamic() && !r.is_sleeping && spins_fast(w, &self.colliders[i])).then_some(w * turn_reach(&self.colliders[i]))
+        };
+        let (turn_a, turn_b) = (turn(idx_a), turn(idx_b));
+        if turn_a.is_none() && turn_b.is_none() {
+            return None;
+        }
+        let (shape_a, shape_b) = (&self.colliders[idx_a].shape, &self.colliders[idx_b].shape);
+        let depth = |after: f32| {
+            let ((pa, qa), (pb, qb)) = (self.pose_after(idx_a, after), self.pose_after(idx_b, after));
+            NarrowPhase::test_collision_manifold(shape_a, pa, qa, shape_b, pb, qb).iter().map(|c| c.penetration).fold(f32::NEG_INFINITY, f32::max)
+        };
+        let moved = |i: usize| self.pose_after(i, dt).0 - self.transforms[i].position;
+        let sweep = (moved(idx_a) - moved(idx_b)).length() + turn_a.unwrap_or(0.0) + turn_b.unwrap_or(0.0);
+        let step = FAST_SHARE * (shape_a.half_thickness() + shape_b.half_thickness());
+        let samples = (sweep / step.max(1e-4)).ceil().clamp(1.0, MAX_SAMPLES) as u32;
+        let slop = self.solver.slop;
+        let mut out = 0.0;
+        for k in 1..=samples {
+            let at = dt * k as f32 / samples as f32;
+            if depth(at) > slop {
+                let mut into = at;
+                for _ in 0..HALVINGS {
+                    let mid = 0.5 * (out + into);
+                    if depth(mid) > slop {
+                        into = mid;
+                    } else {
+                        out = mid;
+                    }
+                }
+                return Some(self.contacts_after((idx_a, idx_b), into));
+            }
+            out = at;
+        }
+        Some(Vec::new())
     }
 
     /// The contacts of a fast pair where it meets: `gap` apart now along `normal` (A to B), closing
@@ -2218,7 +2514,7 @@ impl PhysicsWorld {
     /// and brought back to now as `near_contacts` brings its points, they are the impact's real
     /// points, with its lever arms. Empty when the pair does not close along the normal, or the
     /// narrow phase finds nothing there (a body turning out of the way): the caller keeps the
-    /// speculative contact.
+    /// speculative contact. Empty too when the pair does not meet in this substep.
     ///
     /// A fast pair's contact was the speculative one alone, at the moving body's centre: its
     /// impact had no lever arm, and its friction took the slide out of a ball landing on a ramp
@@ -2233,17 +2529,103 @@ impl PhysicsWorld {
         if closing <= 1e-6 {
             return Vec::new();
         }
-        self.contacts_after((idx_a, idx_b), ((gap + self.solver.slop) / closing).min(dt))
+        // Not met this substep: a ball rolling fast on a floor closes on it by gravity's `g·dt`
+        // alone. Its contact where the substep ends, brought back, was a third of a metre ahead of
+        // it at 60 Hz, and lifted it off the floor (2026-11-26).
+        let meets = (gap + self.solver.slop) / closing;
+        if meets > dt {
+            return Vec::new();
+        }
+        self.contacts_after((idx_a, idx_b), meets)
     }
 
-    /// The pair's contacts at the poses its velocities take it to `after` from now, brought back.
+    /// A fast impact flat on a face, as one contact: where the moving body's centre of mass is over
+    /// the face. The impact's contacts (`met`) lie along one normal at one depth and close on it
+    /// alike, the other body does not move under them (static or kinematic), and the centre is over
+    /// the patch they span: then the rigid impact turns the body nothing, and its impulse is all
+    /// through that point. `None` otherwise.
+    ///
+    /// On the patch's points the solve gets there by sweeps, one point after another, and leaves a
+    /// little of the order behind: a cylinder landing lying flat on a floor at 3 m/s turned
+    /// 0.009 rad/s and a box 0.03, which a contact's slop then let grow into a tilt on the next
+    /// landing (2026-11-26). The one point has no order. Its friction acts on the face, where the
+    /// patch's would: a box landing flat while it slides is turned by it as by them.
+    fn face_impact(&self, (idx_a, idx_b): (usize, usize), met: &[gizmo_physics_core::ContactPoint]) -> Option<gizmo_physics_core::ContactPoint> {
+        if met.len() < 2 {
+            return None;
+        }
+        let (ra, rb) = (&self.rigid_bodies[idx_a], &self.rigid_bodies[idx_b]);
+        let moving = |r: &RigidBody| r.is_dynamic() && !r.is_sleeping;
+        let i = match (moving(ra), moving(rb)) {
+            (true, false) if !rb.is_dynamic() => idx_a,
+            (false, true) if !ra.is_dynamic() => idx_b,
+            _ => return None,
+        };
+        let n = met[0].normal;
+        if met.iter().any(|c| c.normal.dot(n) < 0.9999) {
+            return None;
+        }
+        let (shallowest, deepest) = met.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), c| (lo.min(c.penetration), hi.max(c.penetration)));
+        if deepest - shallowest > 1e-4 {
+            return None;
+        }
+        let velocity_at = |k: usize, p: Vec3| {
+            let (r, t, v) = (&self.rigid_bodies[k], &self.transforms[k], &self.velocities[k]);
+            if r.is_static() || r.is_sleeping { Vec3::ZERO } else { v.linear + v.angular.cross(p - (t.position + t.rotation * r.center_of_mass)) }
+        };
+        let closing: Vec<f32> = met.iter().map(|c| (velocity_at(idx_a, c.point) - velocity_at(idx_b, c.point)).dot(n)).collect();
+        let (slow, fast) = closing.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+        if fast - slow > 1e-3 * fast.abs().max(slow.abs()).max(1e-6) {
+            return None;
+        }
+        let (t, r) = (&self.transforms[i], &self.rigid_bodies[i]);
+        let centre = t.position + t.rotation * r.center_of_mass;
+        let over = centre - n * (centre - met[0].point).dot(n);
+        if !spans(met, over, n) {
+            return None;
+        }
+        let mut c = *met.iter().max_by(|x, y| x.penetration.total_cmp(&y.penetration))?;
+        c.point = over;
+        c.local_point_a = over - self.transforms[idx_a].position;
+        c.local_point_b = over - self.transforms[idx_b].position;
+        Some(c)
+    }
+
+    /// Whether a fast pair that meets off its moving bodies' centres is left to
+    /// [`hold_set_going`](Self::hold_set_going) — no contact this substep, the body held where it
+    /// meets the other with the velocity it has, and the impact solved in the next substep at the
+    /// points it has there. It can be when the hold will look at it: no kinematic body in the pair
+    /// (the hold moves dynamic bodies only), one dynamic body moving fast for its own size, and no
+    /// body a joint holds — the hold moves a body alone, after the solve, and a joint's is moved
+    /// with what it is jointed to or not at all: a falling chain whose fast links were held where
+    /// they met opened its joints 11 cm at 60 Hz (2026-11-26).
+    fn held_to_impact(&self, (idx_a, idx_b): (usize, usize), jointed: &FxHashSet<u32>, dt: f32) -> bool {
+        let (ra, rb) = (&self.rigid_bodies[idx_a], &self.rigid_bodies[idx_b]);
+        if ra.is_kinematic() || rb.is_kinematic() {
+            return false;
+        }
+        if !jointed.is_empty() && [idx_a, idx_b].iter().any(|&i| jointed.contains(&self.entities[i].id())) {
+            return false;
+        }
+        [idx_a, idx_b].into_iter().any(|i| {
+            let r = &self.rigid_bodies[i];
+            r.is_dynamic() && !r.is_sleeping && moves_fast(self.velocities[i].linear.length() * dt, &self.colliders[i])
+        })
+    }
+
+    /// The pair's contacts at the poses its velocities take it to `after` from now, brought back:
+    /// every point that closes on the way, the way being the impact's.
+    ///
+    /// Not only what closes by more than a slop, as `near_contacts` keeps: of a pair touching now,
+    /// looked at a slop ahead, every point closes by just the slop, and which of them passed was the
+    /// rounding's to say. A box landing flat kept one corner of four, and it turned 17 rad/s.
     fn contacts_after(&self, (idx_a, idx_b): (usize, usize), after: f32) -> Vec<gizmo_physics_core::ContactPoint> {
         let ((pa, qa), (pb, qb)) = (self.pose_after(idx_a, after), self.pose_after(idx_b, after));
         let found = NarrowPhase::test_collision_manifold(&self.colliders[idx_a].shape, pa, qa, &self.colliders[idx_b].shape, pb, qb);
         if found.is_empty() {
             return found;
         }
-        self.brought_back((idx_a, idx_b), found, after)
+        self.brought_back((idx_a, idx_b), found, after, 0.0)
     }
 
     /// A body's pose `after` from now, where its velocity takes it; a static or sleeping one's is
@@ -2269,12 +2651,13 @@ impl PhysicsWorld {
 
     /// The contacts `found` at the poses `after` from now, brought back to now: each point by its
     /// bodies' travel to there, its separation the share of that travel along its normal taken off
-    /// its depth there.
+    /// its depth there. Those that close by no more than `closing` on the way are left out.
     fn brought_back(
         &self,
         (idx_a, idx_b): (usize, usize),
         mut found: Vec<gizmo_physics_core::ContactPoint>,
         after: f32,
+        closing: f32,
     ) -> Vec<gizmo_physics_core::ContactPoint> {
         let (pa, pb) = (self.pose_after(idx_a, after).0, self.pose_after(idx_b, after).0);
         let (now_a, now_b) = (self.transforms[idx_a].position, self.transforms[idx_b].position);
@@ -2283,11 +2666,10 @@ impl PhysicsWorld {
         // going, which put the lever arm a share of the slide behind it and lifted a rolling ball.
         let (wa, wb) = (self.rigid_bodies[idx_a].inv_mass(), self.rigid_bodies[idx_b].inv_mass());
         let total = wa + wb;
-        // Only what closes by more than the solver lets a resting contact sink (`slop`): a body at
-        // rest or rolling on a surface touches it within that and is the narrow phase's as before;
-        // an impact would sink a substep's travel.
-        let slop = self.solver.slop;
-        found.retain(|c| (self.travel_of(idx_a, pa, c.point, after) - self.travel_of(idx_b, pb, c.point, after)).dot(c.normal) > slop);
+        // `near_contacts` keeps only what closes by more than the solver lets a resting contact sink
+        // (`slop`): a body at rest or rolling on a surface touches it within that and is the narrow
+        // phase's as before; an impact would sink a substep's travel.
+        found.retain(|c| (self.travel_of(idx_a, pa, c.point, after) - self.travel_of(idx_b, pb, c.point, after)).dot(c.normal) > closing);
         for c in &mut found {
             let (da, db) = (self.travel_of(idx_a, pa, c.point, after), self.travel_of(idx_b, pb, c.point, after));
             // The normal points from A to B: A moving along it deepens the contact.

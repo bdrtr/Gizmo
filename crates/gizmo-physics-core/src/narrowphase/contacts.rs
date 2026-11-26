@@ -51,6 +51,31 @@ pub(super) fn box_corners(pos: Vec3, rot: Quat, h: Vec3) -> [Vec3; 8] {
     SIGNS.map(|(sx, sy, sz)| pos + rot.mul_vec3(Vec3::new(sx * h.x, sy * h.y, sz * h.z)))
 }
 
+/// How far a point of a touching patch may be from the other surface and still be one of its
+/// contacts: in front of it, at its separation as a negative depth, which the solve lets close by
+/// that much in a substep — a speculative point, as Box2D's manifolds carry them out to their
+/// speculative distance.
+///
+/// A patch was what touched, to a tenth of a millimetre. A cylinder landing lying 0.001 rad off
+/// level had one end touching and the other 0.2 mm above the floor: struck on the one end alone,
+/// it turned 3 rad/s, came down on the other, and fell asleep 5 mm into the floor and tilted; a box
+/// let go 0.006 rad off level slept 2.2° over on every floor at 60 Hz (2026-11-26). The point that
+/// is about to touch is in the patch now, and the impact is the whole face's.
+pub(super) const SPECULATIVE_MARGIN: f32 = 0.01;
+
+/// A patch point's depth, from how far `behind` the other surface it is (negative in front of it):
+/// on it within `tolerance`, a speculative point out to [`SPECULATIVE_MARGIN`], and none past that.
+#[inline]
+pub(super) fn patch_depth(behind: f32, tolerance: f32) -> Option<f32> {
+    if behind >= -tolerance {
+        Some(behind.max(0.0))
+    } else if behind >= -SPECULATIVE_MARGIN {
+        Some(behind)
+    } else {
+        None
+    }
+}
+
 /// Build a `ContactPoint` with zeroed warm-start fields.
 #[inline]
 pub(super) fn mk_contact(point: Vec3, normal: Vec3, penetration: f32) -> ContactPoint {
@@ -78,6 +103,8 @@ pub(super) fn mk_contact(point: Vec3, normal: Vec3, penetration: f32) -> Contact
 /// landed and fell asleep 2° over (2026-11-25). The largest quadrilateral of a symmetric patch holds
 /// its centre.
 pub(super) fn select_4_contacts(mut contacts: Vec<ContactPoint>) -> Vec<ContactPoint> {
+    /// Depths this close are one depth: rounding, not a tilt.
+    const AS_DEEP: f32 = 1e-4;
     if contacts.len() <= 4 {
         return contacts;
     }
@@ -85,10 +112,22 @@ pub(super) fn select_4_contacts(mut contacts: Vec<ContactPoint>) -> Vec<ContactP
     let n = contacts.len();
     let at = |i: usize| contacts[i].point;
 
-    // Step 1 — deepest.
-    let i0 = (0..n)
-        .max_by(|&a, &b| contacts[a].penetration.total_cmp(&contacts[b].penetration))
-        .unwrap();
+    // Step 1 — deepest; of points as deep as it, the one farthest from the patch's middle. A flat
+    // patch is all one depth, and which point the rounding made deepest was where the quadrilateral
+    // started: of a box on a mesh where six triangles meet, the triangles' patches include points on
+    // their edges inside the box's face, one of them started it, and the box was held up on three
+    // corners and the middle of an edge — struck flat on the floor, it turned (2026-11-26). The
+    // farthest point of a patch is a corner of it.
+    let deepest = contacts.iter().map(|c| c.penetration).fold(f32::NEG_INFINITY, f32::max);
+    let middle = contacts.iter().map(|c| c.point).sum::<Vec3>() / n as f32;
+    let mut i0 = 0;
+    let mut farthest = f32::NEG_INFINITY;
+    for (i, c) in contacts.iter().enumerate() {
+        let out = (c.point - middle).length_squared();
+        if c.penetration >= deepest - AS_DEEP && out > farthest {
+            (i0, farthest) = (i, out);
+        }
+    }
     // The best of the points not yet chosen by `score`, the first of equals.
     let best = |chosen: &[usize], score: &dyn Fn(Vec3) -> f32| -> Option<usize> {
         let mut found: Option<(usize, f32)> = None;
@@ -123,7 +162,12 @@ pub(super) fn select_4_contacts(mut contacts: Vec<ContactPoint>) -> Vec<ContactP
                 let c = (p0 - p).cross(p1 - p2);
                 a.length_squared().max(b.length_squared()).max(c.length_squared())
             };
-            if let Some(i3) = best(&chosen, &area4) {
+            // Of quadrilaterals as large, the one centred nearest the patch's middle: a regular
+            // hexagon's largest four corners are a rectangle about its centre, or as large a kite
+            // to one side of it, and the first of equals was where the ties broke.
+            let largest = (0..n).filter(|i| !chosen.contains(i)).map(|i| area4(at(i))).fold(0.0f32, f32::max);
+            let centre = |p: Vec3| -((p0 + p1 + p2 + p) * 0.25 - middle).length_squared();
+            if let Some(i3) = best(&chosen, &|p| if area4(p) >= largest * (1.0 - 1e-4) { centre(p) } else { f32::NEG_INFINITY }) {
                 chosen.push(i3);
             }
         }
@@ -276,14 +320,15 @@ pub(super) fn clip_box_box(
         .filter_map(|&point| {
             let support_depth = ref_face_d - point.dot(normal);
             let face_depth = face_d - point.dot(face_normal);
-            // Inside the reference box (behind its face), and behind its support plane.
-            if support_depth < -DEPTH_TOLERANCE || face_depth < -DEPTH_TOLERANCE {
+            // Inside the reference box (behind its face), and behind its support plane — or in front
+            // of both by no more than the speculative margin, a point about to touch.
+            if support_depth < -SPECULATIVE_MARGIN || face_depth < -SPECULATIVE_MARGIN {
                 return None;
             }
             // The point's own depth: how far it travels along `normal` before it leaves the
             // reference box through that face — never more than the support plane's depth. For
             // boxes whose faces line up (every resting stack) the two are the same number.
-            let depth = (face_depth / along).min(support_depth).max(0.0);
+            let depth = patch_depth((face_depth / along).min(support_depth), DEPTH_TOLERANCE)?;
             Some(mk_contact(point, normal, depth))
         })
         .collect();
@@ -545,7 +590,8 @@ fn clip_to_reference(mut polygon: Vec<Vec3>, reference: &[Vec3], ref_n: Vec3, re
         .into_iter()
         .filter_map(|p| {
             let behind = ref_offset - p.dot(ref_n);
-            (behind >= -DEPTH_TOLERANCE).then(|| mk_contact(p, normal, (behind / along).max(0.0)))
+            let depth = patch_depth(behind, DEPTH_TOLERANCE)?;
+            Some(mk_contact(p, normal, depth / along))
         })
         .collect();
     // A side's crossing comes out twice when the incident feature is a line (two points): one
@@ -566,9 +612,12 @@ pub(super) fn feature_on_plane(shape: &ColliderShape, pos: Vec3, rot: Quat, norm
     let feature = support_feature(shape, pos, rot, -normal)?;
     let mut contacts = vec![deepest];
     for p in feature {
-        let depth = offset - p.dot(normal);
-        if depth > 0.0 && !contacts.iter().any(|c| c.point.distance_squared(p + normal * depth) < 1e-12) {
-            contacts.push(mk_contact(p + normal * depth, -normal, depth));
+        let behind = offset - p.dot(normal);
+        let Some(depth) = patch_depth(behind, 0.0) else { continue };
+        // On the plane: a point about to touch is put where it will.
+        let on = p + normal * behind;
+        if !contacts.iter().any(|c| c.point.distance_squared(on) < 1e-12) {
+            contacts.push(mk_contact(on, -normal, depth));
         }
     }
     Some(select_4_contacts(contacts))

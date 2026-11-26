@@ -197,6 +197,14 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    it moves (gilrs reads no initial state); the browser's pad is built and linted, never tried in a
 >    browser; rumble strengths never reached a device (gilrs reports no force feedback for the
 >    virtual pad). Entry: "Gamepad input".
+> 7. **A resting contact holds at any depth within its slop.** Between 0 and the solver's `slop`
+>    (5 mm) a contact has no bias and supports what rests on it, so a body can come to rest on points
+>    at different depths and stay: a 10 cm box let go 0.006 rad off level falls asleep 2.2° over on a
+>    box, a mesh and a height field at 60 Hz, 3–5 mm into the floor at one edge and on it at the
+>    other (up to 0.9° at 240 Hz). Box2D lets a contact shallower than its slop sink to it at `s/h`, which
+>    rests everything flat at the slop's depth — 5 mm lower than here, which every resting-height test
+>    and scene would see. Measured 2026-11-26 while landing fast impacts on their real points
+>    (`face_impact` keeps a flat landing from seeding the tilt); a choice of the solver's, open.
 >
 > **Closed in the same sweep, each where it stands:** the irradiance volume "connected to nothing"
 > (it is drawn); no default font (`bundled-font`); no EQ or compressor (`gizmo_audio::{equalizer,

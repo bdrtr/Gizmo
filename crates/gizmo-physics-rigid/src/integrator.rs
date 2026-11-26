@@ -182,6 +182,9 @@ impl Integrator {
 
     /// Integrate translation and rotation from the current velocity.
     ///
+    /// The turn is the velocity's `turn`: the hold after the solve follows a body along it
+    /// (`PhysicsWorld::hold_set_going`).
+    ///
     /// Rotation is updated with quaternion axis-angle integration, which
     /// remains accurate for large angular velocities without the drift that
     /// Euler-angle approaches suffer from.
@@ -197,16 +200,7 @@ impl Integrator {
             return Ok(());
         }
 
-        // Apply axis locks to a local copy — do not mutate the stored velocity here.
-        let mut masked = *vel;
-        rb.enforce_locks(&mut masked);
-        // The PRE-velocities too: Heun integrates `(pre + current) / 2`, and `pre_*` is copied
-        // from the solver's output before locks run, so a locked axis leaked half of the
-        // solver's velocity on it into the position — a body locked to the XY plane drifted off
-        // it by ~1e-3 per contact (measured, `tests/planar_xy.rs`).
-        let (pre_linear, pre_angular) = rb.mask_locked(masked.pre_linear, masked.pre_angular);
-        masked.pre_linear = pre_linear;
-        masked.pre_angular = pre_angular;
+        let masked = masked_velocity(rb, vel);
 
         // ── Translation ───────────────────────────────────────────────────
         // Heun's Method (Trapezoidal Rule) for position:
@@ -219,7 +213,7 @@ impl Integrator {
         // ── Rotation ──────────────────────────────────────────────────────
         // Only integrate when angular speed is non-negligible to avoid
         // normalising a near-zero quaternion. Heun's Method for rotation:
-        let avg_angular = (masked.pre_angular + masked.angular) * 0.5;
+        let avg_angular = average_angular(&masked);
         let ang_speed_sq = avg_angular.length_squared();
         if ang_speed_sq > 1e-8 {
             let delta_rot = Quat::from_scaled_axis(avg_angular * dt);
@@ -329,6 +323,34 @@ impl Integrator {
 // ======================================================================= //
 //  Tests                                                                   //
 // ======================================================================= //
+
+/// A body's velocity as position integration uses it: with its locked axes taken out.
+fn masked_velocity(rb: &RigidBody, vel: &Velocity) -> Velocity {
+    // Apply axis locks to a local copy — do not mutate the stored velocity here.
+    let mut masked = *vel;
+    rb.enforce_locks(&mut masked);
+    // The PRE-velocities too: Heun integrates `(pre + current) / 2`, and `pre_*` is copied
+    // from the solver's output before locks run, so a locked axis leaked half of the
+    // solver's velocity on it into the position — a body locked to the XY plane drifted off
+    // it by ~1e-3 per contact (measured, `tests/planar_xy.rs`).
+    let (pre_linear, pre_angular) = rb.mask_locked(masked.pre_linear, masked.pre_angular);
+    masked.pre_linear = pre_linear;
+    masked.pre_angular = pre_angular;
+    masked
+}
+
+/// The angular velocity Heun's method turns a body by: the mean of a masked velocity's two.
+fn average_angular(masked: &Velocity) -> Vec3 {
+    (masked.pre_angular + masked.angular) * 0.5
+}
+
+/// The turn position integration gives a body over `dt`, as a scaled axis: its rotation goes from
+/// `q` to `Quat::from_scaled_axis(turn) * q`. More than half a turn is kept whole, which the two
+/// rotations alone cannot say.
+pub(crate) fn turn(rb: &RigidBody, vel: &Velocity, dt: f32) -> Vec3 {
+    let avg = average_angular(&masked_velocity(rb, vel));
+    if avg.length_squared() > 1e-8 { avg * dt } else { Vec3::ZERO }
+}
 
 #[cfg(test)]
 #[allow(clippy::field_reassign_with_default)] // testlerde Default sonrası alan atama okunabilirlik için

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 884b061676d4594273e5a93fb17989dff9a5657854b293c506bf3b5e1c740079 # shrinks to kind_a = 1, kind_b = 1, pos_a = Vec3(2.0216248, -1.6816875, 1.5012962), rot_a = Quat(-0.8827914, 0.26102147, -0.30682653, 0.24167055), pos_b = Vec3(-2.7483835, -0.8168924, -2.6293302), rot_b = Quat(0.1777765, -0.54746425, -0.5021159, 0.64541304), s = 2.3169699
