@@ -695,3 +695,61 @@ fn a_step_of_whole_substeps_runs_exactly_that_many_at_every_rate() {
         }
     }
 }
+
+/// A pile settling, awake, for two worlds that differ only in what their contacts carry.
+fn resting_pile() -> PhysicsWorld {
+    use gizmo_physics_core::{Collider, Transform};
+    let mut w = PhysicsWorld::new();
+    w.add_body(BodyHandle::from_id(0), RigidBody::new_static(), Transform::new(Vec3::new(0.0, -1.0, 0.0)), Velocity::default(), Collider::box_collider(Vec3::new(20.0, 1.0, 20.0)));
+    for i in 1..=3u32 {
+        let col = Collider::box_collider(Vec3::splat(0.5));
+        let mut rb = RigidBody::new(1.0, true);
+        rb.update_inertia_from_collider(&col);
+        w.add_body(BodyHandle::from_id(i), rb, Transform::new(Vec3::new(0.1 * i as f32, i as f32 - 0.5, 0.0)), Velocity::default(), col);
+    }
+    w
+}
+
+/// The contacts' warm-start impulses are state: the next step starts its solve from them. Two
+/// worlds alike in every pose, velocity and body but one with the contacts its pile had and one
+/// with none stepped apart, and until 2026-11-26 `state_hash` called them the same.
+#[test]
+fn the_contacts_a_solve_leaves_are_in_the_state_hash() {
+    let mut settled = resting_pile();
+    for _ in 0..10 {
+        settled.step(1.0 / 60.0).unwrap();
+    }
+    assert!(settled.rigid_bodies.iter().all(|b| !b.is_dynamic() || !b.is_sleeping), "premise: the pile slept, and a sleeping body is not solved");
+    let mut fresh = resting_pile();
+    fresh.transforms.clone_from(&settled.transforms);
+    fresh.velocities.clone_from(&settled.velocities);
+    fresh.rigid_bodies.clone_from(&settled.rigid_bodies);
+    fresh.accumulator = settled.accumulator;
+    assert!(settled.contact_cache.keys().count() > 0 && fresh.contact_cache.keys().count() == 0, "premise: no contacts");
+    assert_ne!(settled.state_hash(), fresh.state_hash(), "two worlds whose contacts differ hashed alike");
+
+    // Why it matters: the two step apart.
+    let (mut a, mut b) = (settled, fresh);
+    a.step(1.0 / 60.0).unwrap();
+    b.step(1.0 / 60.0).unwrap();
+    assert_ne!(
+        a.transforms.iter().map(|t| t.position.to_array()).collect::<Vec<_>>(),
+        b.transforms.iter().map(|t| t.position.to_array()).collect::<Vec<_>>(),
+        "premise: the contacts did not change the next step"
+    );
+
+    // One impulse is enough, and so is a pair's slot: the same pairs in other slots hash alike.
+    let mut w = resting_pile();
+    for _ in 0..10 {
+        w.step(1.0 / 60.0).unwrap();
+    }
+    let base = w.state_hash();
+    let pair = *w.contact_cache.keys().next().unwrap();
+    let entry = w.contact_cache.remove(&pair).unwrap();
+    w.contact_cache.insert((BodyHandle::from_id(98), BodyHandle::from_id(99)), CachedPair { is_trigger: false, manifold: None, seen: false, touched: false });
+    w.contact_cache.insert(pair, entry);
+    w.contact_cache.remove(&(BodyHandle::from_id(98), BodyHandle::from_id(99)));
+    assert_eq!(w.state_hash(), base, "the slot a pair is in counted as state");
+    w.contact_cache.get_mut(&pair).unwrap().manifold.as_mut().unwrap().contacts[0].normal_impulse += 0.5;
+    assert_ne!(w.state_hash(), base, "a warm-start impulse is in no state hash");
+}

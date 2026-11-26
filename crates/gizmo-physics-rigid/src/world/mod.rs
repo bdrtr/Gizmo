@@ -879,6 +879,40 @@ impl ContactCache {
     pub(crate) fn keys(&self) -> impl Iterator<Item = &(BodyHandle, BodyHandle)> {
         self.slot_of.keys()
     }
+
+    /// What the next step reads from the cache, for `PhysicsWorld::state_hash`: each pair's
+    /// contacts as the last solve left them (their warm-start impulses, whether they slid) and
+    /// whether it has touched, walked in the pairs' order so that two caches holding the same pairs
+    /// in other slots hash alike.
+    pub(crate) fn hash_into(&self, h: &mut impl std::hash::Hasher) {
+        let mut pairs: Vec<_> = self.slot_of.iter().collect();
+        pairs.sort_unstable_by_key(|((a, b), _)| (a.id(), b.id()));
+        h.write_usize(pairs.len());
+        for ((a, b), &slot) in pairs {
+            // `seen` is false between steps, so it is not in here.
+            let CachedPair { is_trigger, manifold, seen: _, touched } = &self.slots[slot as usize];
+            h.write_u32(a.id());
+            h.write_u32(b.id());
+            h.write_u8(*is_trigger as u8 | (*touched as u8) << 1 | (manifold.is_some() as u8) << 2);
+            let Some(m) = manifold else { continue };
+            h.write_u32(m.lifetime);
+            for bits in [m.friction, m.static_friction, m.restitution, m.rolling_friction] {
+                h.write_u32(bits.to_bits());
+            }
+            h.write_usize(m.contacts.len());
+            for c in &m.contacts {
+                let gizmo_physics_core::collision::ContactPoint { point, normal, penetration, local_point_a, local_point_b, normal_impulse, tangent_impulse, sliding } = c;
+                for v in [point, normal, local_point_a, local_point_b, tangent_impulse] {
+                    for bits in v.to_array() {
+                        h.write_u32(bits.to_bits());
+                    }
+                }
+                h.write_u32(penetration.to_bits());
+                h.write_u32(normal_impulse.to_bits());
+                h.write_u8(*sliding as u8);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
