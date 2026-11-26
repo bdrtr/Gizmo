@@ -649,3 +649,24 @@ fn a_capsule_over_a_box_edge_keeps_its_touching_contact() {
     let deepest = contacts.iter().map(|c| c.penetration).fold(f32::NEG_INFINITY, f32::max);
     assert!(deepest >= 0.0, "the deepest of {} contacts is {deepest}", contacts.len());
 }
+
+/// A coin on a coin touches along a patch of the lower one's top, not at one point: clipped to the
+/// round end (`round_face`), whichever way either is turned about its axis. EPA's one point, in the
+/// middle of the overlap, was all the pair had, and the upper coin tipped on it (2026-11-26).
+#[test]
+fn a_coin_on_a_coin_touches_along_a_patch_whatever_their_turn() {
+    use crate::components::CylinderShape;
+    let coin = ColliderShape::Cylinder(CylinderShape { radius: 0.012, half_height: 0.0015 });
+    for (offset, yaw) in [(0.0f32, 0.0f32), (0.004, 0.3), (0.008, 1.1), (0.015, 2.0)] {
+        let upper = Vec3::new(offset, 0.003 - 1e-4, 0.0);
+        let contacts = NarrowPhase::test_collision_manifold(&coin, upper, Quat::from_rotation_y(yaw), &coin, Vec3::ZERO, Quat::from_rotation_y(-yaw));
+        assert!(contacts.len() >= 3, "offset {offset}, yaw {yaw}: {} points", contacts.len());
+        // The points span the upper coin's centre over the lower one: a patch it can rest on.
+        let (lo, hi) = contacts.iter().fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.point.x), hi.max(c.point.x)));
+        let centre = upper.x.min(0.012);
+        assert!(lo < centre && centre < hi, "offset {offset}, yaw {yaw}: points span x {lo}..{hi}");
+        for c in &contacts {
+            assert!(c.normal.y.abs() > 0.99, "offset {offset}, yaw {yaw}: normal {:?}", c.normal);
+        }
+    }
+}

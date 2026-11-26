@@ -1243,6 +1243,15 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A coin lies on a coin along a patch, and a stack of them stands.** Two round shapes had no
+  face between them: the narrow phase clipped a patch only to a box's or a hull's face, and two
+  cylinders (or a cylinder and a cone or a capsule) touched at EPA's one point, in the middle of
+  their overlap. A coin stacked on another tipped on it: of twenty stacks of five 3 mm coins at
+  240 Hz none stood, the top coin ending at half its height. A cylinder's or a cone's flat end is
+  now a reference face too (eight points of its rim), and the other's feature is clipped to it;
+  nineteen of the twenty stand. The lens two discs overlap in, worked out exactly, was tried as
+  the patch and stood five. What is left is the solver's: at 60 Hz the stacks still sink into each
+  other under their own weight, and none of them sleeps (`docs/ENGINE.md` §3).
 - **A body thinner than the slop rests on what it lands on, not in it.** The solver's slop (5 mm)
   is how deep a contact rests without being pushed out, and a 2 mm coin spun onto the floor met it
   2 mm deep in one substep, rested there as within the slop, and fell asleep wholly inside the

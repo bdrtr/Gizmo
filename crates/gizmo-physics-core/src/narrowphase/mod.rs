@@ -262,11 +262,14 @@ impl NarrowPhase {
     }
 
     /// Whether a pair's contact is a patch clipped from the faces (`clip_polyhedra`): a box or a hull
-    /// against a hull, or against a cylinder, a cone or a capsule, which can lie along its face.
+    /// against a hull, or against a cylinder, a cone or a capsule, which can lie along its face; and
+    /// two of those round shapes, one of which can lie on the other's flat end (a cylinder's or a
+    /// cone's — two capsules have none, and keep EPA's point).
     fn clips_faces(a: &ColliderShape, b: &ColliderShape) -> bool {
         let polyhedron = |s: &ColliderShape| matches!(s, ColliderShape::Box(_) | ColliderShape::ConvexHull(_));
         let lies = |s: &ColliderShape| polyhedron(s) || matches!(s, ColliderShape::Cylinder(_) | ColliderShape::Cone(_) | ColliderShape::Capsule(_));
-        (polyhedron(a) || polyhedron(b)) && lies(a) && lies(b)
+        let flat_end = |s: &ColliderShape| matches!(s, ColliderShape::Cylinder(_) | ColliderShape::Cone(_));
+        (polyhedron(a) || polyhedron(b) || flat_end(a) || flat_end(b)) && lies(a) && lies(b)
     }
 
     /// Generic shape–plane using a GJK support point.  Returns at most one

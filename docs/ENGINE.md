@@ -251,6 +251,15 @@ the first write (Unity's material instance — a hidden un-sharing).
 >    it denied (the approach along the held contact's normal, as `kinematic_ccd_step` does for a
 >    kinematic body), measured against the hill and CCD tests the hold exists for.
 >
+> 12. **A stack of light, thin bodies sinks into itself under its own weight, and never sleeps.**
+>    Five 3 mm coins (5 g) stacked stand at 240 Hz since their faces touch along a patch
+>    (`round_face`, 2026-11-26), but each layer is 0.4–0.6 mm into the next, more down the stack,
+>    and the top coin a few degrees over; at 60 Hz all twenty stacks of `coin_stacks.rs`'s seeds sink
+>    to under half their height; and of the twenty not one falls asleep, its coins rocking at the
+>    sleep threshold. A soft contact sags with its load, and the lowest of a stack carries every coin
+>    above it on one coin's effective mass. Found writing a coin pusher (`para itme`) — its 300 coins
+>    on a table, 1.7 mm into it under the pile. The fix is in the solve, not the contacts.
+>
 > **Closed in the same sweep, each where it stands:** the irradiance volume "connected to nothing"
 > (it is drawn); no default font (`bundled-font`); no EQ or compressor (`gizmo_audio::{equalizer,
 > compressor}`); the scene-fidelity `OPEN` list (empty); Phase 7's one-line list (superseded by
