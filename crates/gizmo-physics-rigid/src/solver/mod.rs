@@ -1588,6 +1588,32 @@ pub struct SolveStats {
     pub iterations: usize,
 }
 
+/// The depth a manifold's points may sink to and no further unpushed: its deepest point's, within
+/// the slop. Between zero and the slop a contact has no bias and holds what rests on it at whatever
+/// depth it is, so a body could rest on points at different depths and stay: a 10 cm box let go
+/// 0.006 rad off level fell asleep 2.2° over on every floor at 60 Hz, one edge 3 mm in and the
+/// other on the floor (2026-11-26). A point shallower than its manifold's deepest — a speculative
+/// one too, in front of the other shape: a box's corner on a plane a hundredth of a millimetre up
+/// held it 2.6° over — closes on it now at `(level - depth) / dt`, as a speculative contact closes
+/// its gap, and only gravity's push
+/// takes it there: the body comes down flat at the depth it already rests at. A manifold all at
+/// one depth — a stack built at exact contact — is not moved.
+///
+/// Box2D lets every point sink to the slop (`s = separation + slop`); that rests everything flat
+/// too, but 5 mm lower, and every tower built at exact contact here fell its slop at once and
+/// buckled (measured the same day: 19 tests red). And a point sinks only when it is more than
+/// [`LEVEL_NOISE`] shallower than the deepest: a stack's points differ by microns from substep to
+/// substep, each sank in turn to the others' depth, and a 2×12×2 crate block rocked itself over
+/// in three seconds.
+pub(super) fn resting_level(contacts: &[gizmo_physics_core::ContactPoint], slop: f32) -> f32 {
+    contacts.iter().map(|c| c.penetration).fold(0.0f32, f32::max).min(slop)
+}
+
+/// How much shallower than its manifold's deepest a point must be to sink to it
+/// ([`resting_level`]): half a millimetre, a tilt of 0.005 rad across a 10 cm face. At a millimetre
+/// a 10 cm box still slept 1.1° over; with none, a crate block toppled.
+pub(super) const LEVEL_NOISE: f32 = 5e-4;
+
 #[cfg(test)]
 mod support_order_tests {
     use super::*;

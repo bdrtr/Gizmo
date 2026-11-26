@@ -92,6 +92,7 @@ struct Slot {
     it2_a: V3,
     it2_b: V3,
     pen0: F,
+    level: F,
     vn0: F,
     restitution: F,
     k_t1: F,
@@ -194,6 +195,7 @@ impl WideBlock {
                 s.it2_a.set(lane, r.it2_a);
                 s.it2_b.set(lane, r.it2_b);
                 s.pen0[lane] = r.pen0;
+                s.level[lane] = r.level;
                 s.vn0[lane] = r.vn0;
                 s.restitution[lane] = r.restitution;
                 s.k_t1[lane] = r.k_t1;
@@ -324,7 +326,10 @@ impl WideBlock {
             } else {
                 zero
             };
-            let bias = F::select(tvn.cmpgt(zero), zero, F::select(penetration.cmplt(zero), penetration * F::splat(inv_dt), soft));
+            // A point shallower than its manifold's deepest may sink to it (`super::resting_level`).
+            let gap_or_soft = F::select(penetration.cmplt(zero), penetration * F::splat(inv_dt), soft);
+            let sinks = penetration.cmplt(s.level - F::splat(super::LEVEL_NOISE));
+            let bias = F::select(tvn.cmpgt(zero), zero, F::select(sinks, (penetration - s.level) * F::splat(inv_dt), gap_or_soft));
             rhs[k] = tvn + bias - vn;
             acc[k] = s.acc_n;
         }

@@ -48,6 +48,9 @@ pub(super) struct Prepared {
     rolling: f32,
     restitution: f32,
     pen0: f32,
+    /// The depth the manifold's deepest point starts the substep at, within the slop: a shallower
+    /// point of it may sink to it (`resting_level`).
+    level: f32,
     vn0: f32,
     mid: usize,
     cid: usize,
@@ -85,6 +88,7 @@ pub(super) struct RowView {
     pub(super) it2_a: Vec3,
     pub(super) it2_b: Vec3,
     pub(super) pen0: f32,
+    pub(super) level: f32,
     pub(super) vn0: f32,
     pub(super) restitution: f32,
     pub(super) k_t1: f32,
@@ -117,6 +121,7 @@ impl Prepared {
             it2_a: j.it2_a.into(),
             it2_b: j.it2_b.into(),
             pen0: self.pen0,
+            level: self.level,
             vn0: self.vn0,
             restitution: self.restitution,
             k_t1: self.k_t1,
@@ -322,7 +327,7 @@ impl ConstraintSolver {
             dt
         };
 
-        let mut prepared = Self::prepare_contacts(manifolds, pairs, &vn0_off, &vn0);
+        let mut prepared = Self::prepare_contacts(manifolds, pairs, &vn0_off, &vn0, self.slop);
         let block_groups = if self.block_solver { self.block_groups(&prepared) } else { Vec::new() };
 
         // ── Whole-chain DIRECT solve setup ──
@@ -594,6 +599,7 @@ impl ConstraintSolver {
         pairs: &[Option<super::ContactPair>],
         vn0_off: &[usize],
         vn0: &[f32],
+        slop: f32,
     ) -> Vec<Prepared> {
         // ── Per-contact SABİT precompute (hoist) ──
         // sweep'ler arası DEĞİŞMEYEN her şeyi (idx / inv_m / inv_i / com→r / normal / k_n /
@@ -617,6 +623,7 @@ impl ConstraintSolver {
             let restitution = manifolds[mid].restitution;
             let rolling = manifolds[mid].rolling_friction;
             let n_contacts = manifolds[mid].contacts.len();
+            let level = super::resting_level(&manifolds[mid].contacts, slop);
             for cid in 0..n_contacts {
                 let ct = manifolds[mid].contacts[cid];
                 let normal = ct.normal;
@@ -672,6 +679,7 @@ impl ConstraintSolver {
                     rolling,
                     restitution,
                     pen0: ct.penetration,
+                    level,
                     vn0: vn0[vn0_off[mid] + cid],
                     mid,
                     cid,
@@ -969,6 +977,9 @@ impl ConstraintSolver {
             // restitution in a pass of its own, without the separation).
             let (bias, m_scale, i_scale) = if target_vn > 0.0 {
                 (0.0, 1.0, 0.0)
+            } else if penetration < p.level - super::LEVEL_NOISE {
+                // Shallower than its manifold's deepest, a speculative point too: it may sink to it.
+                ((penetration - p.level) * inv_dt, 1.0, 0.0)
             } else if penetration < 0.0 {
                 (penetration * inv_dt, 1.0, 0.0)
             } else if use_bias && penetration > self.slop {
@@ -1151,6 +1162,8 @@ impl ConstraintSolver {
             };
             let bias = if tvn > 0.0 {
                 0.0
+            } else if penetration < p.level - super::LEVEL_NOISE {
+                (penetration - p.level) * inv_dt
             } else if penetration < 0.0 {
                 penetration * inv_dt
             } else if use_bias && penetration > self.slop {
@@ -1273,6 +1286,8 @@ impl ConstraintSolver {
             // A bounce is the whole target (see `tgs_sweep_prepared`).
             let bias = if tvn > 0.0 {
                 0.0
+            } else if penetration < p.level - super::LEVEL_NOISE {
+                (penetration - p.level) * inv_dt
             } else if penetration < 0.0 {
                 penetration * inv_dt
             } else if use_bias && penetration > self.slop {

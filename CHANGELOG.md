@@ -1206,6 +1206,15 @@ asking the compiler, and by reading the list of public items the workspace never
 
 ### Fixed
 
+- **A box let go off level rests flat.** Between zero and the solver's slop (5 mm) a contact had no
+  bias and held what rested on it at whatever depth it was, so a body could come to rest on points at
+  different depths and stay: a 10 cm box let go 0.006 rad off level fell asleep 2.2° over on every
+  floor at 60 Hz, one edge 3–5 mm into the floor and the other on it. In the TGS solve a point more
+  than half a millimetre shallower than its manifold's deepest — a speculative one too — may now sink
+  to it (`resting_level`), and gravity alone takes it there: the box comes down flat at the depth it
+  already rests at, and a manifold all at one depth (a stack built at exact contact) is not moved.
+  Letting every point sink to the slop, as Box2D does, rests everything flat 5 mm lower, and toppled
+  every tower built at exact contact here. `a_box_let_go_off_level_rests_flat`.
 - **A fast body that strikes off its centre lands as a rigid impact does.** A pair closing faster
   than its size allows, whose contacts where it met did not pass through the moving body's centre,
   took one speculative contact at that centre: it stopped the centre and turned nothing. At 60 Hz a

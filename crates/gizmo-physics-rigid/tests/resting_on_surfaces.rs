@@ -204,3 +204,42 @@ fn the_four_contacts_kept_of_a_hexagon_hold_its_centre() {
     let centre = contacts.iter().map(|c| c.point).sum::<Vec3>() / 4.0;
     assert!(Vec3::new(centre.x - at.x, 0.0, centre.z - at.z).length() < 1e-3, "the four contacts are centred on {centre:?}, the hull on {at:?}");
 }
+
+/// A box let go a little off level comes to rest flat, on every floor at both rates. Between zero and
+/// the slop a contact held at whatever depth it was, so a 10 cm box let go 0.006 rad off level fell
+/// asleep 2.2° over at 60 Hz, one edge 3 mm in the floor and the other on it (2026-11-26). Now a
+/// point shallower than its manifold's deepest may sink to it (`resting_level`).
+#[test]
+fn a_box_let_go_off_level_rests_flat() {
+    let floors: [(&str, Collider, Vec3); 4] = [
+        ("plane", Collider::plane(Vec3::Y, 0.0), Vec3::ZERO),
+        ("mesh", mesh_floor(), Vec3::ZERO),
+        ("heightfield", terrain_floor(), Vec3::new(-10.0, 0.0, -10.0)),
+        ("box", Collider::box_collider(Vec3::new(10.0, 0.5, 10.0)), Vec3::new(0.0, -0.5, 0.0)),
+    ];
+    for (floor_name, floor, floor_at) in &floors {
+        for hz in [60, 240] {
+            for (drop, tilt) in [(0.1f32, 0.006f32), (0.1, 0.03), (0.02, 0.03)] {
+                let turn = Quat::from_rotation_z(tilt) * Quat::from_rotation_x(tilt * 0.3);
+                let mut w = PhysicsWorld::new().with_substep_rate(hz).unwrap();
+                w.add_body(BodyHandle::from_id(1), RigidBody::new_static(), Transform::new(*floor_at), Velocity::default(), floor.clone());
+                let shape = Collider::box_collider(Vec3::splat(0.05));
+                let mut rb = RigidBody::new(1.0, true);
+                rb.update_inertia_from_collider(&shape);
+                let mut at = Transform::new(Vec3::new(0.3, 0.05 + drop, 0.2));
+                at.rotation = turn;
+                w.add_body(BodyHandle::from_id(2), rb, at, Velocity::default(), shape);
+                for _ in 0..600 {
+                    w.step(1.0 / 60.0).unwrap();
+                }
+                let i = *w.entity_index_map.get(&2).unwrap();
+                let t = &w.transforms[i];
+                let tilted = (t.rotation * Vec3::Y).angle_between(Vec3::Y);
+                let at = format!("{floor_name} at {hz} Hz, dropped {drop} m turned {tilt} rad");
+                assert!(tilted < 0.006, "{at}: rests tilted {tilted} rad");
+                assert!((t.position.y - 0.05).abs() < 0.006, "{at}: rests at y = {}", t.position.y);
+                assert!(w.rigid_bodies[i].is_sleeping, "{at}: still moving after 10 s");
+            }
+        }
+    }
+}
