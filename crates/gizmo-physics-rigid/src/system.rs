@@ -1332,6 +1332,7 @@ fn shatter_entity(
         let mut rb = RigidBody::new(chunk.volume * per_volume.unwrap_or(collider.material.density), true);
         rb.update_inertia_from_collider(&chunk_collider);
         keep_locks(&mut rb, body);
+        let new_vel = locked_velocity(&rb, new_vel);
         commands
             .spawn()
             .insert(rb)
@@ -1362,6 +1363,17 @@ fn keep_locks(piece: &mut RigidBody, broken: Option<&RigidBody>) {
     piece.lock_rotation_x = b.lock_rotation_x;
     piece.lock_rotation_y = b.lock_rotation_y;
     piece.lock_rotation_z = b.lock_rotation_z;
+}
+
+/// A piece's velocity with its locked axes taken out. Its outward kick, and a part's `v + ω×r` from a
+/// body whose `ω` still holds what the solve gave it about a locked axis, have components across a
+/// plane the piece is locked in; the next substep's integration would take them out, but a piece
+/// spawned at the end of a step ended it moving out of its plane — 1.8 mm/s on macOS's arm64, where
+/// the lander broke on the last frame (`fracture_in_play`, CI, 2026-11-26).
+fn locked_velocity(piece: &RigidBody, mut v: Velocity) -> Velocity {
+    (v.linear, v.angular) = piece.mask_locked(v.linear, v.angular);
+    (v.pre_linear, v.pre_angular) = piece.mask_locked(v.pre_linear, v.pre_angular);
+    v
 }
 
 /// What a shattered body held besides its own shape: the parts of its compound — each descendant
@@ -1438,6 +1450,7 @@ fn let_go(
         let mut rb = RigidBody::new(mass.max(1e-3), true);
         rb.update_inertia_from_collider(&part);
         keep_locks(&mut rb, broken);
+        let moving = locked_velocity(&rb, moving);
         commands
             .entity(child)
             .remove::<Parent>()

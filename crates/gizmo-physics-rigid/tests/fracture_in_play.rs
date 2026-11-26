@@ -235,6 +235,42 @@ fn a_planar_bodys_pieces_stay_in_its_plane() {
     assert!(seen > 1, "the debris and the leg were looked at: {seen}");
 }
 
+/// The pieces are in the plane the moment they exist: at the end of the very step the body broke in,
+/// no piece moves across it. Their outward kick was given before their locks could act, and a piece
+/// spawned on a step's last frame ended it moving out of its plane until the next step — on macOS's
+/// arm64 the lander broke on the test's last frame (CI, 2026-11-26).
+#[test]
+fn a_planar_bodys_pieces_move_in_its_plane_from_the_step_they_are_made() {
+    use gizmo_core::component::{Children, Parent};
+    let mut world = world_with_floor();
+    let lander = world.spawn();
+    world.add_component(lander, Transform::new(Vec3::new(0.0, 3.0, 0.0)));
+    world.add_component(lander, RigidBody::new(10.0, true).planar_xy());
+    world.add_component(lander, Velocity::new(Vec3::new(1.0, -15.0, 0.0)));
+    world.add_component(lander, Collider::box_collider(Vec3::new(1.0, 0.4, 0.5)));
+    world.add_component(lander, fragile());
+    let leg = world.spawn();
+    world.add_component(leg, Transform::new(Vec3::new(0.8, -0.8, 0.0)));
+    world.add_component(leg, Collider::box_collider(Vec3::new(0.1, 0.4, 0.1)));
+    world.add_component(leg, Parent(lander));
+    world.add_component(lander, Children(vec![leg]));
+    for _ in 0..180 {
+        if step(&mut world).is_empty() {
+            continue;
+        }
+        let pieces = world.query::<(gizmo_core::entity::Entity, &Debris, &Velocity)>();
+        let mut seen = 0;
+        for (e, _, v) in pieces.iter() {
+            seen += 1;
+            assert_eq!(v.linear.z, 0.0, "{e:?} is made moving across the plane: {:?}", v.linear);
+            assert_eq!((v.angular.x, v.angular.y), (0.0, 0.0), "{e:?} is made turning out of the plane: {:?}", v.angular);
+        }
+        assert!(seen > 1, "the break made pieces: {seen}");
+        return;
+    }
+    panic!("the lander never broke");
+}
+
 /// A blast's break lets go of the parts too: the explosion path shatters through the same helper.
 #[test]
 fn a_blast_lets_go_of_a_bodys_parts() {
